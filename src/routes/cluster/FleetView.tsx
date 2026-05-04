@@ -4,9 +4,14 @@ import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   ArchiveRestore,
+  Bot,
   ChevronDown,
   CircleDot,
+  Cloud,
   Cpu,
+  Database,
+  Gauge,
+  Layers3,
   MemoryStick,
   Plus,
   RefreshCw,
@@ -18,6 +23,20 @@ import {
 } from "lucide-react";
 import { k8s, type ContextInfo, type DeletedContextSummary, type FleetCard } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card as UiCard, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  DataTableShell,
+} from "@/components/ui/data-table";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { LumenPage, PageHeader, PanelHeading, SectionPanel } from "@/components/lumen/page";
+import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
 
 function pct(n: number | null): string {
   if (n === null) return "—";
@@ -158,6 +177,305 @@ function entryRiskScore(entry: FleetEntry): number {
   return 7;
 }
 
+function average(values: Array<number | null | undefined>): number | null {
+  const usable = values.filter((value): value is number => typeof value === "number");
+  if (usable.length === 0) return null;
+  return usable.reduce((sum, value) => sum + value, 0) / usable.length;
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(value);
+}
+
+function MetricTile({
+  icon,
+  label,
+  value,
+  sub,
+  tone = "info",
+  trend = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  sub: React.ReactNode;
+  tone?: "good" | "warn" | "bad" | "info";
+  trend?: boolean;
+}) {
+  const mappedTone: MetricTone =
+    tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "info";
+  return (
+    <MetricCard
+      icon={icon}
+      label={label}
+      value={value}
+      helper={sub}
+      tone={mappedTone}
+      trend={trend}
+    />
+  );
+}
+
+function CapacityBar({ value }: { value: number | null }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-elevated">
+        <div
+          className={cn("h-full rounded-full", heatBand(value))}
+          style={{ width: `${value === null ? 0 : Math.min(100, Math.max(0, value))}%` }}
+        />
+      </div>
+      <span className="w-9 text-right text-[11px] text-text-secondary tabular-nums">{pct(value)}</span>
+    </div>
+  );
+}
+
+function ClusterHealthTable({ cards }: { cards: FleetCard[] }) {
+  const rows = cards.slice(0, 8);
+  if (rows.length === 0) {
+    return (
+      <UiCard className="p-6 text-sm text-text-secondary shadow-none">
+        Connect clusters to populate live health, capacity, and workload data.
+      </UiCard>
+    );
+  }
+  return (
+    <UiCard className="overflow-hidden shadow-none">
+      <CardHeader>
+        <div>
+          <CardTitle>Cluster Health</CardTitle>
+          <p className="text-xs text-text-muted">Live view from connected kube contexts</p>
+        </div>
+        <span className="text-[11px] text-accent-primary">View all</span>
+      </CardHeader>
+      <DataTableShell className="rounded-none border-0">
+        <DataTable className="min-w-full text-xs">
+          <DataTableHeader>
+            <DataTableRow>
+              <DataTableHead className="px-4">Cluster</DataTableHead>
+              <DataTableHead>Provider / Region</DataTableHead>
+              <DataTableHead>K8s</DataTableHead>
+              <DataTableHead>Nodes</DataTableHead>
+              <DataTableHead>Pods</DataTableHead>
+              <DataTableHead>CPU</DataTableHead>
+              <DataTableHead>Memory</DataTableHead>
+              <DataTableHead className="px-4">Status</DataTableHead>
+            </DataTableRow>
+          </DataTableHeader>
+          <DataTableBody>
+            {rows.map((card) => {
+              const failed = card.health.pods_failed;
+              const pending = card.health.pods_pending;
+              const tone = !card.reachable
+                ? "bad"
+                : failed > 0
+                  ? "bad"
+                  : pending > 0 || card.node_ready < card.node_count
+                    ? "warn"
+                    : "good";
+              const status = !card.reachable
+                ? "Unreachable"
+                : failed > 0
+                  ? "Unhealthy"
+                  : pending > 0 || card.node_ready < card.node_count
+                    ? "Degraded"
+                    : "Healthy";
+              return (
+                <DataTableRow
+                  key={card.context.name}
+                >
+                  <DataTableCell className="px-4">
+                    <div className="flex min-w-[150px] items-center gap-2">
+                      <span
+                        className={cn(
+                          "size-2 rounded-full",
+                          tone === "good" && "bg-emerald-400",
+                          tone === "warn" && "bg-amber-400",
+                          tone === "bad" && "bg-rose-400",
+                        )}
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-text-primary">
+                          {card.context.name}
+                        </div>
+                        <div className="truncate text-[11px] text-text-muted">
+                          {card.context.namespace ?? "all namespaces"}
+                        </div>
+                      </div>
+                    </div>
+                  </DataTableCell>
+                  <DataTableCell>
+                    <span className="block max-w-[220px] truncate">{card.context.cluster}</span>
+                  </DataTableCell>
+                  <DataTableCell className="tabular-nums">
+                    {card.server_version ?? "—"}
+                  </DataTableCell>
+                  <DataTableCell className="tabular-nums">
+                    {card.node_ready}/{card.node_count}
+                  </DataTableCell>
+                  <DataTableCell className="tabular-nums">
+                    {card.health.pods_ready}/{card.health.pods_total}
+                  </DataTableCell>
+                  <DataTableCell>
+                    <CapacityBar value={card.cpu_percent} />
+                  </DataTableCell>
+                  <DataTableCell>
+                    <CapacityBar value={card.mem_percent} />
+                  </DataTableCell>
+                  <DataTableCell className="px-4">
+                    <StatusBadge status={status} />
+                  </DataTableCell>
+                </DataTableRow>
+              );
+            })}
+          </DataTableBody>
+        </DataTable>
+      </DataTableShell>
+    </UiCard>
+  );
+}
+
+function PressurePanel({ cards }: { cards: FleetCard[] }) {
+  const top = [...cards]
+    .filter((card) => card.reachable)
+    .sort(
+      (a, b) =>
+        Math.max(b.cpu_percent ?? 0, b.mem_percent ?? 0) -
+        Math.max(a.cpu_percent ?? 0, a.mem_percent ?? 0),
+    )
+    .slice(0, 5);
+  return (
+    <UiCard className="p-4 shadow-none">
+      <PanelHeading
+        title="Top Pressure"
+        meta={<Gauge className="size-4 text-accent-primary" aria-hidden="true" />}
+      />
+      <div className="mt-4 space-y-3">
+        {top.length === 0 ? (
+          <p className="text-xs text-text-muted">No connected clusters yet.</p>
+        ) : (
+          top.map((card) => {
+            const pressure = Math.max(card.cpu_percent ?? 0, card.mem_percent ?? 0);
+            return (
+              <div key={card.context.name} className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3 text-[12px]">
+                  <span className="truncate text-text-primary">{card.context.name}</span>
+                  <span className="text-text-secondary tabular-nums">{Math.round(pressure)}%</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-elevated">
+                  <div
+                    className={cn("h-full rounded-full", heatBand(pressure))}
+                    style={{ width: `${Math.min(100, Math.max(0, pressure))}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </UiCard>
+  );
+}
+
+function AlertPanel({ cards }: { cards: FleetCard[] }) {
+  const alerts = cards
+    .flatMap((card) => {
+      const items: Array<{ id: string; title: string; meta: string; tone: "bad" | "warn" }> = [];
+      if (!card.reachable) {
+        items.push({
+          id: `${card.context.name}:unreachable`,
+          title: "Cluster unreachable",
+          meta: card.context.name,
+          tone: "bad",
+        });
+      }
+      if (card.health.pods_failed > 0) {
+        items.push({
+          id: `${card.context.name}:failed-pods`,
+          title: `${card.health.pods_failed} failed pod${card.health.pods_failed === 1 ? "" : "s"}`,
+          meta: card.context.name,
+          tone: "bad",
+        });
+      }
+      if (card.health.pods_pending > 0) {
+        items.push({
+          id: `${card.context.name}:pending-pods`,
+          title: `${card.health.pods_pending} pending pod${card.health.pods_pending === 1 ? "" : "s"}`,
+          meta: card.context.name,
+          tone: "warn",
+        });
+      }
+      if ((card.cpu_percent ?? 0) >= 85 || (card.mem_percent ?? 0) >= 85) {
+        items.push({
+          id: `${card.context.name}:capacity`,
+          title: "Capacity pressure",
+          meta: card.context.name,
+          tone: "warn",
+        });
+      }
+      return items;
+    })
+    .slice(0, 5);
+  return (
+    <UiCard className="p-4 shadow-none">
+      <PanelHeading
+        title="Recent Signals"
+        meta={<ShieldAlert className="size-4 text-warning" aria-hidden="true" />}
+      />
+      <div className="mt-4 space-y-2">
+        {alerts.length === 0 ? (
+          <p className="text-xs text-text-muted">No active signals from connected clusters.</p>
+        ) : (
+          alerts.map((alert) => (
+            <div
+              key={alert.id}
+              className="flex items-start gap-2 rounded-control border border-border-subtle bg-elevated/60 p-2.5"
+            >
+              <AlertTriangle
+                className={cn(
+                  "mt-0.5 size-3.5 shrink-0",
+                  alert.tone === "bad" ? "text-rose-300" : "text-amber-300",
+                )}
+                aria-hidden="true"
+              />
+              <div className="min-w-0">
+                <div className="truncate text-xs font-medium text-text-primary">
+                  {alert.title}
+                </div>
+                <div className="truncate text-[11px] text-text-muted">{alert.meta}</div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </UiCard>
+  );
+}
+
+function FleetErrorState({ error }: { error: unknown }) {
+  const message = errorMessage(error);
+  const isDesktopRuntimeMissing =
+    message.includes("invoke") || message.includes("__TAURI_INTERNALS__");
+  return (
+    <div className="rounded-panel border border-danger/30 bg-[var(--status-error-soft)] p-4">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
+        <div className="min-w-0">
+          <h3 className="text-[13px] font-semibold text-danger">
+            Unable to load cluster contexts
+          </h3>
+          <p className="mt-1 text-[12px] leading-5 text-danger/80">
+            {isDesktopRuntimeMissing
+              ? "This view needs the Tauri desktop runtime to read local kubeconfig data."
+              : message}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HeatBar({ value, label, icon }: { value: number | null; label: string; icon: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
@@ -255,7 +573,7 @@ function Card({
     return (
       <article
         data-testid="fleet-card"
-        className="text-left flex flex-col gap-3 p-4 rounded-lg border transition-all min-h-[214px] justify-between bg-term-panel border-term-border-soft"
+        className="flex min-h-[214px] flex-col justify-between gap-3 rounded-panel border border-border-default bg-surface p-4 text-left transition-colors hover:border-accent-primary/35 hover:bg-elevated"
       >
         <div className="flex items-start gap-3">
           <div className="size-2 rounded-full mt-1.5 shrink-0 bg-term-subtle" />
@@ -276,7 +594,7 @@ function Card({
           </div>
         </div>
 
-        <div className="rounded border border-term-border-soft bg-term-bg/40 p-3">
+        <div className="rounded-control border border-border-default bg-elevated p-3">
           <div className="text-[10px] uppercase tracking-wider text-term-subtle">status</div>
           <div className="mt-1 text-[13px] text-term-fg">
             {connecting ? "connecting..." : "not connected"}
@@ -328,9 +646,9 @@ function Card({
     <article
       data-testid="fleet-card"
       className={cn(
-        "text-left group relative flex flex-col gap-3 p-4 rounded-lg border transition-all min-h-[214px] justify-between",
-        "bg-term-panel hover:bg-term-panel-2 border-term-border-soft",
-        "hover:border-term-green/60",
+        "text-left group relative flex flex-col gap-3 p-4 rounded-panel border transition-colors min-h-[214px] justify-between",
+        "border-border-default bg-surface",
+        "hover:border-accent-primary/35 hover:bg-elevated",
         unreachable && "opacity-75 hover:border-term-border-soft",
       )}
     >
@@ -356,7 +674,7 @@ function Card({
               {card.context.name}
             </button>
             {isProd && (
-              <span className="px-1.5 py-0.5 text-[10px] rounded bg-term-red/20 text-term-red border border-term-red/40 font-semibold uppercase tracking-wide">
+          <span className="rounded border border-danger/40 bg-[var(--status-error-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger">
                 prod
               </span>
             )}
@@ -436,9 +754,9 @@ function Card({
                 aria-label={`triage ${context.name}`}
                 className={cn(
                   "term-btn !min-h-[30px] !py-1 !px-4 !text-[12px]",
-                  "border-term-green/50 bg-term-green/15 text-term-green",
-                  "hover:border-term-green hover:bg-term-green/20 hover:text-term-fg",
-                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-term-green/60",
+                  "border-violet-400/40 bg-violet-500/15 text-violet-100",
+                  "hover:border-violet-300/70 hover:bg-violet-500/25 hover:text-white",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/60",
                 )}
               >
                 triage
@@ -512,7 +830,7 @@ function ClusterLabels({
       {labels.map((label) => (
         <span
           key={label}
-          className="inline-flex items-center gap-1 rounded border border-term-border-soft bg-term-bg/40 px-1.5 py-0.5 text-[10px] text-term-muted"
+          className="inline-flex items-center gap-1 rounded border border-border-default bg-elevated px-1.5 py-0.5 text-[10px] text-text-secondary"
         >
           <Tag className="size-2.5" aria-hidden="true" />
           {label}
@@ -526,7 +844,7 @@ function ClusterLabels({
           </button>
         </span>
       ))}
-      <div className="inline-flex items-center gap-1 rounded border border-term-border-soft bg-term-bg/40 px-1.5 py-0.5">
+      <div className="inline-flex items-center gap-1 rounded border border-border-default bg-elevated px-1.5 py-0.5">
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -603,6 +921,16 @@ export function FleetView() {
 
   const cards = sorted.flatMap((entry) => (entry.card ? [entry.card] : []));
   const reach = cards.filter((c) => c.reachable);
+  const totalNodes = reach.reduce((sum, card) => sum + card.node_count, 0);
+  const readyNodes = reach.reduce((sum, card) => sum + card.node_ready, 0);
+  const totalPods = reach.reduce((sum, card) => sum + card.health.pods_total, 0);
+  const unhealthyPods = reach.reduce(
+    (sum, card) => sum + card.health.pods_failed + card.health.pods_pending,
+    0,
+  );
+  const totalWorkloads = reach.reduce((sum, card) => sum + card.workload_count, 0);
+  const avgCpu = average(reach.map((card) => card.cpu_percent));
+  const avgMem = average(reach.map((card) => card.mem_percent));
   const riskTotals = useMemo(
     () => ({
       connected: cards.length,
@@ -723,118 +1051,174 @@ export function FleetView() {
   }
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 bg-term-bg/95 backdrop-blur border-b border-term-border-soft">
-        <div className="flex items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="mds-heading text-[20px] text-term-fg">fleet</h1>
-            <p className="text-[12px] text-term-muted">
-              {sorted.length} context{sorted.length === 1 ? "" : "s"} ·{" "}
-              {cards.length} connected
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
+    <LumenPage className="gap-5">
+      <PageHeader
+        eyebrow="Global dashboard"
+        title="Multi-cluster overview"
+        icon={<Cloud className="size-3.5" aria-hidden="true" />}
+        description={
+          <>
+            {sorted.length} context{sorted.length === 1 ? "" : "s"} discovered · {cards.length}{" "}
+            connected · {reach.length} reporting live data
+          </>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="hidden min-w-[260px] items-center gap-2 rounded-control border border-border-default bg-elevated px-3 py-2 text-xs text-text-muted md:flex">
+              <Database className="size-3.5" aria-hidden="true" />
+              <span className="truncate">Local kubeconfig · no cloud account required</span>
+            </div>
+            <Button
               onClick={rescan}
-              className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
               disabled={isFetching}
               title="Scan local kubeconfig contexts and restore removed clusters."
             >
               <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
-              rescan
-            </button>
+              Rescan
+            </Button>
           </div>
-        </div>
-        {sorted.length > 0 && (
-          <div className="grid grid-cols-5 gap-0 border-t border-term-border-soft">
-            <Stat
-              icon={<Server className="size-3.5" />}
-              label="connected"
-              value={riskTotals.connected}
-              tone={riskTotals.connected > 0 ? "good" : undefined}
-            />
-            <Stat
-              icon={<CircleDot className="size-3.5" />}
-              label="offline"
-              value={riskTotals.disconnected}
-            />
-            <Stat
-              icon={<AlertTriangle className="size-3.5" />}
-              label="unreachable"
-              value={riskTotals.unreachable}
-              tone={riskTotals.unreachable > 0 ? "bad" : undefined}
-            />
-            <Stat
-              icon={<ShieldAlert className="size-3.5" />}
-              label="prod alerts"
-              value={riskTotals.prodAlerts}
-              tone={riskTotals.prodAlerts > 0 ? "bad" : undefined}
-            />
-            <Stat
-              icon={<Cpu className="size-3.5" />}
-              label="pressure"
-              value={riskTotals.pressure}
-              tone={riskTotals.pressure > 0 ? "bad" : undefined}
-            />
-          </div>
-        )}
-      </div>
+        }
+      />
 
-      <div className="p-6">
-        {error ? (
-          <div className="rounded-lg border border-term-red/40 bg-term-red/10 p-4 text-[13px] text-term-red">
-            {(error as Error).message}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <MetricTile
+              icon={<Cloud className="size-3.5" />}
+              label="Clusters"
+              value={formatNumber(sorted.length)}
+              sub={
+                <span>
+                  {riskTotals.unreachable === 0 ? "All reachable" : `${riskTotals.unreachable} unreachable`}
+                </span>
+              }
+              tone={riskTotals.unreachable > 0 ? "bad" : "good"}
+            />
+            <MetricTile
+              icon={<Server className="size-3.5" />}
+              label="Nodes"
+              value={cards.length ? formatNumber(totalNodes) : "—"}
+              sub={
+                <span>
+                  {cards.length ? `${readyNodes}/${totalNodes} ready` : "Connect to scan"}
+                </span>
+              }
+              tone={readyNodes < totalNodes ? "warn" : "good"}
+            />
+            <MetricTile
+              icon={<CircleDot className="size-3.5" />}
+              label="Pods"
+              value={cards.length ? formatNumber(totalPods) : "—"}
+              sub={
+                <span>
+                  {cards.length ? `${unhealthyPods} unhealthy` : "Waiting for data"}
+                </span>
+              }
+              tone={unhealthyPods > 0 ? "bad" : "good"}
+            />
+            <MetricTile
+              icon={<Layers3 className="size-3.5" />}
+              label="Workloads"
+              value={cards.length ? formatNumber(totalWorkloads) : "—"}
+              sub={<span>{cards.length ? "Across namespaces" : "Connect clusters"}</span>}
+              tone="info"
+            />
+            <MetricTile
+              icon={<Cpu className="size-3.5" />}
+              label="CPU Usage"
+              value={avgCpu === null ? "—" : `${Math.round(avgCpu)}%`}
+              sub={<span>{avgCpu === null ? "Metrics unavailable" : "Fleet average"}</span>}
+              tone={avgCpu !== null && avgCpu >= 85 ? "warn" : "info"}
+              trend={avgCpu !== null}
+            />
+            <MetricTile
+              icon={<MemoryStick className="size-3.5" />}
+              label="Memory"
+              value={avgMem === null ? "—" : `${Math.round(avgMem)}%`}
+              sub={<span>{avgMem === null ? "Metrics unavailable" : "Fleet average"}</span>}
+              tone={avgMem !== null && avgMem >= 85 ? "warn" : "info"}
+              trend={avgMem !== null}
+            />
           </div>
-        ) : isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-[200px] rounded-lg border border-term-border-soft bg-term-panel animate-pulse"
-              />
-            ))}
+
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <ClusterHealthTable cards={cards} />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-1">
+              <PressurePanel cards={cards} />
+              <AlertPanel cards={cards} />
+            </div>
           </div>
-        ) : (
-          <>
-            {sorted.length === 0 ? (
-              <div className="text-[13px] text-term-muted">no active contexts in kubeconfig.</div>
-            ) : (
-              <div data-testid="fleet-card-grid" className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {sorted.map((entry) => (
-                  <Card
-                    key={entry.context.name}
-                    entry={entry}
-                    labels={labelsByContext[entry.context.name] ?? []}
-                    onOpen={() => nav(`/cluster/${encodeURIComponent(entry.context.name)}/workloads`)}
-                    onConnect={() => connectContext(entry.context.name)}
-                    onDisconnect={() => disconnectContext(entry.context.name)}
-                    onDelete={() => {
-                      setDeleteError(null);
-                      setDeleteTarget(entry.context);
-                    }}
-                    onAddLabel={(label) => addLabel(entry.context.name, label)}
-                    onRemoveLabel={(label) => removeLabel(entry.context.name, label)}
+
+          <SectionPanel>
+            <PanelHeading
+              eyebrow="Operations"
+              title="Cluster workflow cards"
+              icon={<Bot className="size-3.5" aria-hidden="true" />}
+              meta={
+                <div className="flex items-center gap-3">
+                <span>{riskTotals.disconnected} offline</span>
+                  <span className="h-3 w-px bg-border-default" aria-hidden="true" />
+                <span>{riskTotals.pressure} under pressure</span>
+              </div>
+              }
+            />
+            {error ? (
+              <FleetErrorState error={error} />
+            ) : isLoading ? (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-[200px] animate-pulse rounded-panel border border-border-default bg-surface"
                   />
                 ))}
               </div>
+            ) : (
+              <>
+                {sorted.length === 0 ? (
+                  <div className="text-sm text-text-secondary">
+                    no active contexts in kubeconfig.
+                  </div>
+                ) : (
+                  <div
+                    data-testid="fleet-card-grid"
+                    className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+                  >
+                    {sorted.map((entry) => (
+                      <Card
+                        key={entry.context.name}
+                        entry={entry}
+                        labels={labelsByContext[entry.context.name] ?? []}
+                        onOpen={() =>
+                          nav(`/cluster/${encodeURIComponent(entry.context.name)}/workloads`)
+                        }
+                        onConnect={() => connectContext(entry.context.name)}
+                        onDisconnect={() => disconnectContext(entry.context.name)}
+                        onDelete={() => {
+                          setDeleteError(null);
+                          setDeleteTarget(entry.context);
+                        }}
+                        onAddLabel={(label) => addLabel(entry.context.name, label)}
+                        onRemoveLabel={(label) => removeLabel(entry.context.name, label)}
+                      />
+                    ))}
+                  </div>
+                )}
+                <TrashSection
+                  contexts={deletedContexts}
+                  busy={isTrashFetching || restoreBusy}
+                  open={trashOpen}
+                  onOpenChange={setTrashOpen}
+                  onRestore={(context) => {
+                    setRestoreError(null);
+                    if (context.has_conflict) {
+                      setRestoreTarget(context);
+                    } else {
+                      void restoreContext(context.name);
+                    }
+                  }}
+                />
+              </>
             )}
-            <TrashSection
-              contexts={deletedContexts}
-              busy={isTrashFetching || restoreBusy}
-              open={trashOpen}
-              onOpenChange={setTrashOpen}
-              onRestore={(context) => {
-                setRestoreError(null);
-                if (context.has_conflict) {
-                  setRestoreTarget(context);
-                } else {
-                  void restoreContext(context.name);
-                }
-              }}
-            />
-          </>
-        )}
-      </div>
+          </SectionPanel>
       {deleteTarget && (
         <DeleteContextDialog
           context={deleteTarget}
@@ -853,7 +1237,7 @@ export function FleetView() {
           onRestore={() => void restoreContext(restoreTarget.name, true)}
         />
       )}
-    </div>
+    </LumenPage>
   );
 }
 
@@ -895,7 +1279,7 @@ function TrashSection({
         {contexts.map((context) => (
           <article
             key={context.name}
-            className="rounded-lg border border-term-border-soft bg-term-panel/60 p-3"
+            className="rounded-panel border border-border-default bg-surface p-3"
           >
             <div className="flex items-start gap-2">
               <div className="size-2 rounded-full mt-1.5 bg-term-muted shrink-0" />
@@ -959,7 +1343,7 @@ function DeleteContextDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-context-title"
-        className="w-full max-w-[420px] rounded-lg border border-term-border bg-term-panel shadow-2xl"
+        className="w-full max-w-[420px] rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
       >
         <div className="p-4 border-b border-term-border-soft">
           <h2 id="delete-context-title" className="text-[15px] font-semibold text-term-fg">
@@ -1026,7 +1410,7 @@ function RestoreContextDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="restore-context-title"
-        className="w-full max-w-[440px] rounded-lg border border-term-border bg-term-panel shadow-2xl"
+        className="w-full max-w-[440px] rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
       >
         <div className="p-4 border-b border-term-border-soft">
           <h2 id="restore-context-title" className="text-[15px] font-semibold text-term-fg">
@@ -1069,37 +1453,6 @@ function RestoreContextDialog({
             </button>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function Stat({
-  icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-  tone?: "good" | "bad";
-}) {
-  return (
-    <div className="flex items-center gap-2 px-6 py-2.5 border-r border-term-border-soft last:border-r-0">
-      <span className="text-term-subtle">{icon}</span>
-      <div className="flex flex-col">
-        <span className="text-[10px] uppercase tracking-wider text-term-subtle">{label}</span>
-        <span
-          className={cn(
-            "text-[14px] font-semibold tabular-nums",
-            tone === "good" && "text-emerald-400",
-            tone === "bad" && "text-term-red",
-            !tone && "text-term-fg",
-          )}
-        >
-          {value}
-        </span>
       </div>
     </div>
   );

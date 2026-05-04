@@ -1,8 +1,18 @@
 import { memo, useMemo, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Box, RefreshCw, Search } from "lucide-react";
-import { k8s, type Health, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
+import {
+  Activity,
+  AlertTriangle,
+  Box,
+  CheckCircle2,
+  Filter,
+  Layers3,
+  RefreshCw,
+  Search,
+  Server,
+} from "lucide-react";
+import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
 import { YamlModal } from "@/components/YamlModal";
@@ -10,6 +20,20 @@ import { PinButton } from "@/components/PinButton";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import { useRecentResources } from "@/hooks/useRecentResources";
 import { RESOURCE_KIND_BY_SLUG, listResourceDefinitions, resourceKindLabel } from "@/lib/k8s/resourceRegistry";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  DataTableShell,
+} from "@/components/ui/data-table";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { LumenPage, PageHeader, SectionPanel, ToolbarSurface } from "@/components/lumen/page";
+import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
 
 // ─── URL slug ↔ WorkloadKind ──────────────────────────────────────────────
 
@@ -49,31 +73,23 @@ function formatBytes(n: number): string {
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
 }
 
-function healthDot(h: Health): string {
-  switch (h) {
-    case "healthy":
-      return "bg-emerald-400";
-    case "degraded":
-      return "bg-amber-400";
-    case "failed":
-      return "bg-term-red";
-    default:
-      return "bg-term-subtle";
-  }
-}
-
 function statusColor(phase: string | undefined): string {
   switch (phase) {
     case "Running":
     case "Succeeded":
-      return "text-emerald-400";
+      return "text-success";
     case "Pending":
-      return "text-amber-400";
+      return "text-warning";
     case "Failed":
-      return "text-term-red";
+      return "text-danger";
     default:
-      return "text-term-muted";
+      return "text-text-secondary";
   }
+}
+
+function formatCpu(milli: number): string {
+  if (milli >= 1000) return `${(milli / 1000).toFixed(milli >= 10_000 ? 0 : 2)}`;
+  return `${Math.round(milli)}m`;
 }
 
 export type QuickFilter = "unhealthy" | "restarts" | "pending" | "failed";
@@ -244,6 +260,74 @@ function qosClass(qos: string | undefined): string {
   }
 }
 
+function ExplorerMetric({
+  icon,
+  label,
+  value,
+  sub,
+  tone = "muted",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  sub: React.ReactNode;
+  tone?: "good" | "warn" | "bad" | "info" | "muted";
+}) {
+  const mappedTone: MetricTone =
+    tone === "good"
+      ? "success"
+      : tone === "warn"
+        ? "warning"
+        : tone === "bad"
+          ? "error"
+          : tone === "muted"
+            ? "muted"
+            : "info";
+  return (
+    <MetricCard icon={icon} label={label} value={value} helper={sub} tone={mappedTone} />
+  );
+}
+
+function ResourceKindNav({
+  activeKind,
+  onSelect,
+}: {
+  activeKind: WorkloadKind | null;
+  onSelect: (kind: WorkloadKind | null) => void;
+}) {
+  const navKinds: Array<{ kind: WorkloadKind | null; label: string }> = [
+    { kind: null, label: "All" },
+    { kind: "pod", label: "Pods" },
+    { kind: "deployment", label: "Deployments" },
+    { kind: "statefulset", label: "StatefulSets" },
+    { kind: "daemonset", label: "DaemonSets" },
+    { kind: "job", label: "Jobs" },
+    { kind: "cronjob", label: "CronJobs" },
+  ];
+  return (
+    <ToolbarSurface className="flex items-center gap-1 overflow-x-auto">
+      {navKinds.map((item) => {
+        const active = activeKind === item.kind;
+        return (
+          <button
+            type="button"
+            key={item.label}
+            onClick={() => onSelect(item.kind)}
+            className={cn(
+              "whitespace-nowrap rounded px-2.5 py-1.5 text-[12px] font-medium transition",
+              active
+                ? "bg-accent-primary-soft text-text-primary"
+                : "text-text-secondary hover:bg-hover hover:text-text-primary",
+            )}
+          >
+            {item.label}
+          </button>
+        );
+      })}
+    </ToolbarSurface>
+  );
+}
+
 // ─── Generic row (non-pod kinds) ──────────────────────────────────────────
 
 const Row = memo(function Row({
@@ -254,33 +338,30 @@ const Row = memo(function Row({
   onClick: (w: WorkloadSummary) => void;
 }) {
   return (
-    <tr
-      className="border-b border-term-border-soft hover:bg-term-panel-2 cursor-pointer"
+    <DataTableRow
+      className="cursor-pointer"
       onClick={() => onClick(w)}
     >
-      <td className={cn("w-1 p-0", severityBg(w))} aria-hidden="true" />
-      <td className="px-3 py-2.5">
-        <span className="text-[13px] text-term-fg font-medium">{w.name}</span>
-      </td>
-      <td className="px-3 py-2.5 text-[11px] text-term-muted font-mono">{w.namespace}</td>
-      <td className="px-3 py-2.5">
-        <span className="px-1.5 py-0.5 rounded bg-term-panel-2 border border-term-border-soft text-[10px] text-term-muted lowercase">
+      <DataTableCell className={cn("w-1 p-0", severityBg(w))} aria-hidden="true" />
+      <DataTableCell className="px-4">
+        <span className="text-[13px] font-medium text-text-primary">{w.name}</span>
+      </DataTableCell>
+      <DataTableCell mono className="text-[11px]">{w.namespace}</DataTableCell>
+      <DataTableCell>
+        <span className="rounded border border-border-default bg-elevated px-1.5 py-0.5 text-[10px] lowercase text-text-secondary">
           {w.kind}
         </span>
-      </td>
-      <td className="px-3 py-2.5 text-[11px] text-term-muted font-mono tabular-nums">
+      </DataTableCell>
+      <DataTableCell mono className="text-[11px] tabular-nums">
         {w.ready || "—"}
-      </td>
-      <td className="px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <span className={cn("size-2 rounded-full", healthDot(w.health))} />
-          <span className="text-[11px] text-term-muted capitalize">{w.health}</span>
-        </div>
-      </td>
-      <td className="px-3 py-2.5 text-[11px] text-term-muted tabular-nums">
+      </DataTableCell>
+      <DataTableCell>
+        <StatusBadge status={w.health} />
+      </DataTableCell>
+      <DataTableCell className="text-[11px] tabular-nums">
         {formatAge(w.age_seconds)}
-      </td>
-    </tr>
+      </DataTableCell>
+    </DataTableRow>
   );
 });
 
@@ -297,41 +378,42 @@ const PodRow = memo(function PodRow({
   const total = w.container_count ?? 0;
   const restarts = w.restart_count ?? 0;
   return (
-    <tr
-      className="border-b border-term-border-soft hover:bg-term-panel-2 cursor-pointer"
+    <DataTableRow
+      className="cursor-pointer"
       onClick={() => onClick(w)}
     >
-      <td className={cn("w-1 p-0", severityBg(w))} aria-hidden="true" />
-      <td className="px-3 py-2 max-w-[260px]">
-        <span className="text-[13px] text-term-fg font-medium font-mono truncate block">
+      <DataTableCell className={cn("w-1 p-0", severityBg(w))} aria-hidden="true" />
+      <DataTableCell className="max-w-[260px] px-4">
+        <span className="block truncate font-mono text-[13px] font-medium text-text-primary">
           {w.name}
         </span>
-      </td>
-      <td className="px-3 py-2 text-[11px] text-term-muted font-mono">{w.namespace}</td>
-      <td className="px-3 py-2">
+      </DataTableCell>
+      <DataTableCell mono className="text-[11px]">{w.namespace}</DataTableCell>
+      <DataTableCell>
         <ContainerChiclets ready={ready} total={total} />
-      </td>
-      <td className="px-3 py-2 text-[11px] text-term-muted font-mono tabular-nums">
-        {w.cpu_milli !== undefined ? (w.cpu_milli / 1000).toFixed(3) : "—"}
-      </td>
-      <td className="px-3 py-2 text-[11px] text-term-muted font-mono tabular-nums">
+      </DataTableCell>
+      <DataTableCell mono className="text-[11px] tabular-nums">
+        {w.cpu_milli !== undefined ? formatCpu(w.cpu_milli) : "—"}
+      </DataTableCell>
+      <DataTableCell mono className="text-[11px] tabular-nums">
         {w.mem_bytes !== undefined ? formatBytes(w.mem_bytes) : "—"}
-      </td>
-      <td
+      </DataTableCell>
+      <DataTableCell
+        mono
         className={cn(
-          "px-3 py-2 text-[11px] font-mono tabular-nums",
-          restarts > 0 ? "text-amber-400" : "text-term-muted",
+          "text-[11px] tabular-nums",
+          restarts > 0 ? "text-warning" : "text-text-secondary",
         )}
       >
         {restarts}
-      </td>
-      <td className="px-3 py-2 text-[11px] text-term-muted font-mono truncate max-w-[160px]">
+      </DataTableCell>
+      <DataTableCell mono className="max-w-[160px] truncate text-[11px]">
         {w.controlled_by ? `${w.controlled_by.kind} ${w.controlled_by.name}` : "—"}
-      </td>
-      <td className="px-3 py-2 text-[11px] text-term-muted font-mono truncate max-w-[200px]">
+      </DataTableCell>
+      <DataTableCell mono className="max-w-[200px] truncate text-[11px]">
         {w.node_name ?? "—"}
-      </td>
-      <td className="px-3 py-2">
+      </DataTableCell>
+      <DataTableCell>
         {w.qos_class ? (
           <span
             className={cn(
@@ -344,14 +426,14 @@ const PodRow = memo(function PodRow({
         ) : (
           <span className="text-[10px] text-term-subtle">—</span>
         )}
-      </td>
-      <td className={cn("px-3 py-2 text-[11px]", statusColor(w.pod_phase))}>
+      </DataTableCell>
+      <DataTableCell className={cn("text-[11px]", statusColor(w.pod_phase))}>
         {w.pod_phase ?? "—"}
-      </td>
-      <td className="px-3 py-2 text-[11px] text-term-muted tabular-nums">
+      </DataTableCell>
+      <DataTableCell className="text-[11px] tabular-nums">
         {formatAge(w.age_seconds)}
-      </td>
-    </tr>
+      </DataTableCell>
+    </DataTableRow>
   );
 });
 
@@ -396,28 +478,28 @@ const QUICK_FILTERS: Array<{ id: QuickFilter; label: string }> = [
 function SkeletonRows({ isPodView }: { isPodView: boolean }) {
   const columns = isPodView ? 12 : 7;
   return (
-    <div className="rounded-lg border border-term-border-soft overflow-hidden">
-      <table className={cn("w-full", isPodView && "min-w-[1100px]")}>
-        <thead>
-          <tr className="bg-term-panel">
+    <DataTableShell>
+      <DataTable className={cn(isPodView && "min-w-[1100px]")}>
+        <DataTableHeader>
+          <DataTableRow>
             {Array.from({ length: columns }).map((_, i) => (
               <Th key={i}>{i === 0 ? "" : " "}</Th>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </DataTableRow>
+        </DataTableHeader>
+        <DataTableBody>
           {Array.from({ length: 8 }).map((_, row) => (
-            <tr key={row} className="border-b border-term-border-soft">
+            <DataTableRow key={row}>
               {Array.from({ length: columns }).map((_, col) => (
-                <td key={col} className="px-3 py-2.5">
-                  <div className="h-3 rounded bg-term-panel-2 animate-pulse" />
-                </td>
+                <DataTableCell key={col}>
+                  <div className="h-3 animate-pulse rounded bg-elevated" />
+                </DataTableCell>
               ))}
-            </tr>
+            </DataTableRow>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </DataTableBody>
+      </DataTable>
+    </DataTableShell>
   );
 }
 
@@ -425,6 +507,7 @@ function SkeletonRows({ isPodView }: { isPodView: boolean }) {
 
 export function WorkloadsView() {
   const { ctx = "", kind: kindSlug } = useParams();
+  const navigate = useNavigate();
   const context = decodeURIComponent(ctx);
 
   const filterKind: WorkloadKind | null = kindSlug
@@ -515,6 +598,20 @@ export function WorkloadsView() {
   }, [items, search, quickFilters]);
 
   const hasFilters = search.trim().length > 0 || quickFilters.size > 0;
+  const explorerStats = useMemo(() => {
+    const pods = items.filter((w) => w.kind === "pod");
+    const failed = items.filter((w) => w.health === "failed" || w.pod_phase === "Failed").length;
+    const degraded = items.filter(
+      (w) =>
+        w.health === "degraded" ||
+        w.pod_phase === "Pending" ||
+        (w.restart_count ?? 0) > 0,
+    ).length;
+    const restarts = items.reduce((sum, w) => sum + (w.restart_count ?? 0), 0);
+    const nodes = new Set(items.flatMap((w) => (w.node_name ? [w.node_name] : []))).size;
+    const namespacesSeen = new Set(items.map((w) => w.namespace)).size;
+    return { pods: pods.length, failed, degraded, restarts, nodes, namespacesSeen };
+  }, [items]);
 
   function toggleQuickFilter(filter: QuickFilter) {
     setQuickFilters((prev) => {
@@ -528,6 +625,16 @@ export function WorkloadsView() {
   function clearFilters() {
     setSearch("");
     setQuickFilters(new Set());
+  }
+
+  function selectKind(kind: WorkloadKind | null) {
+    const base = `/cluster/${encodeURIComponent(context)}/workloads`;
+    if (!kind) {
+      navigate(base);
+      return;
+    }
+    const definition = listResourceDefinitions().find((item) => item.kind === kind);
+    navigate(`${base}/${definition?.slug ?? kind}`);
   }
 
   const refetchAll = () => queries.forEach((q) => q.refetch());
@@ -572,158 +679,218 @@ export function WorkloadsView() {
   const nsLabel = namespace || "all namespaces";
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 bg-term-bg/95 backdrop-blur border-b border-term-border-soft flex flex-wrap items-center justify-between px-6 py-4 gap-3">
-        <div className="min-w-0">
-          <h1 className="mds-heading text-[20px] text-term-fg flex items-center gap-2">
-            <Box className="size-5" /> {title}
-          </h1>
-          <p className="text-[12px] text-term-muted truncate">
+    <LumenPage>
+      <PageHeader
+        eyebrow="Resource explorer"
+        title={title}
+        icon={<Box className="size-3.5" aria-hidden="true" />}
+        description={
+          <>
             {context} · {nsLabel} · {filteredItems.length} item
             {filteredItems.length === 1 ? "" : "s"}
             {hasFilters && ` · filtered from ${items.length}`}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-term-subtle pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={
-                isPodView
-                  ? "search · status:running ns:dev restarts:>0"
-                  : `search ${title}…`
-              }
-              className="bg-term-panel border border-term-border-soft rounded text-[12px] text-term-fg pl-7 pr-2 py-1.5 min-h-[32px] w-[220px] outline-none hover:border-term-border focus:border-term-green placeholder:text-term-subtle"
+          </>
+        }
+        actions={
+          <>
+            <ResourceKindNav activeKind={filterKind} onSelect={selectKind} />
+            <div className="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-muted" />
+                <Input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={isPodView ? "status:running ns:dev restarts:>0" : `search ${title}...`}
+                  className="w-[280px] pl-8 text-xs"
+                />
+              </div>
+              <select
+                value={namespace}
+                onChange={(e) => setNamespace(e.target.value)}
+                className="h-9 rounded-control border border-border-default bg-elevated px-3 py-2 text-xs text-text-primary outline-none transition hover:bg-hover focus-visible:ring-2 focus-visible:ring-primary/45"
+              >
+                <option value="">all namespaces</option>
+                {namespaces.map((ns) => (
+                  <option key={ns} value={ns}>
+                    {ns}
+                  </option>
+                ))}
+              </select>
+              <Button onClick={refetchAll} disabled={isFetching}>
+                <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
+                refresh
+              </Button>
+            </div>
+          </>
+        }
+      />
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <ExplorerMetric
+              icon={<Layers3 className="size-3.5" />}
+              label="Resources"
+              value={items.length}
+              sub={<span>{filteredItems.length} visible</span>}
+              tone="info"
+            />
+            <ExplorerMetric
+              icon={<Activity className="size-3.5" />}
+              label="Pods"
+              value={explorerStats.pods}
+              sub={<span>{isPodView ? "Current view" : "Across workloads"}</span>}
+              tone="info"
+            />
+            <ExplorerMetric
+              icon={<CheckCircle2 className="size-3.5" />}
+              label="Healthy"
+              value={items.filter((w) => w.health === "healthy").length}
+              sub={<span>{explorerStats.namespacesSeen} namespaces</span>}
+              tone="good"
+            />
+            <ExplorerMetric
+              icon={<AlertTriangle className="size-3.5" />}
+              label="At Risk"
+              value={explorerStats.failed + explorerStats.degraded}
+              sub={<span>{explorerStats.failed} failed</span>}
+              tone={explorerStats.failed > 0 ? "bad" : explorerStats.degraded > 0 ? "warn" : "good"}
+            />
+            <ExplorerMetric
+              icon={<RefreshCw className="size-3.5" />}
+              label="Restarts"
+              value={explorerStats.restarts}
+              sub={<span>{explorerStats.restarts > 0 ? "Needs review" : "No restarts"}</span>}
+              tone={explorerStats.restarts > 0 ? "warn" : "good"}
+            />
+            <ExplorerMetric
+              icon={<Server className="size-3.5" />}
+              label="Nodes"
+              value={explorerStats.nodes || "—"}
+              sub={<span>{explorerStats.nodes ? "Hosting results" : "No node data"}</span>}
+              tone="muted"
             />
           </div>
-          <select
-            value={namespace}
-            onChange={(e) => setNamespace(e.target.value)}
-            className="bg-term-panel border border-term-border-soft rounded text-[12px] text-term-fg px-2 py-1.5 min-h-[32px] outline-none hover:border-term-border focus:border-term-green"
-          >
-            <option value="">all namespaces</option>
-            {namespaces.map((ns) => (
-              <option key={ns} value={ns}>
-                {ns}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={refetchAll}
-            className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
-            disabled={isFetching}
-          >
-            <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} /> refresh
-          </button>
-          <div className="flex items-center gap-1">
-            {QUICK_FILTERS.map((filter) => {
-              const active = quickFilters.has(filter.id);
-              return (
-                <button
-                  key={filter.id}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => toggleQuickFilter(filter.id)}
-                  className={cn(
-                    "h-8 px-2 rounded border text-[11px] transition-colors",
-                    active
-                      ? "bg-term-green/10 text-term-green border-term-green/40"
-                      : "text-term-muted border-term-border-soft hover:text-term-fg hover:bg-term-panel-2",
-                  )}
-                >
-                  {filter.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
 
-      <div className="p-6">
-        {firstError ? (
-          <div className="rounded-lg border border-term-red/40 bg-term-red/10 p-4 text-[13px] text-term-red flex items-center justify-between gap-4">
-            <span className="truncate">{firstError.message}</span>
-            <button
-              onClick={refetchAll}
-              className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px]"
-            >
-              <RefreshCw className="size-3" /> retry
-            </button>
-          </div>
-        ) : isLoading ? (
-          <SkeletonRows isPodView={isPodView} />
-        ) : filteredItems.length === 0 ? (
-          <div className="rounded-lg border border-term-border-soft bg-term-panel p-4 text-[13px] text-term-muted flex items-center justify-between gap-4">
-            <span>
-              {hasFilters
-                ? `no matches in ${nsLabel}`
-                : `no ${filterKind ? resourceKindLabel(filterKind).toLowerCase() : "workloads"} in ${nsLabel}`}
-            </span>
-            {hasFilters && (
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px]"
-              >
-                clear filters
-              </button>
+          <SectionPanel>
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-text-muted">
+                <Filter className="size-3.5" aria-hidden="true" />
+                Filters
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {QUICK_FILTERS.map((filter) => {
+                  const active = quickFilters.has(filter.id);
+                  return (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => toggleQuickFilter(filter.id)}
+                      className={cn(
+                        "h-8 rounded-control border px-2.5 text-[11px] font-medium transition-colors",
+                        active
+                          ? "border-accent-primary/50 bg-accent-primary-soft text-text-primary"
+                          : "border-border-default text-text-secondary hover:bg-hover hover:text-text-primary",
+                      )}
+                    >
+                      {filter.label}
+                    </button>
+                  );
+                })}
+                {hasFilters && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="h-8 rounded-control border border-border-default px-2.5 text-[11px] font-medium text-text-secondary transition hover:bg-hover hover:text-text-primary"
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+            </div>
+            {firstError ? (
+              <div className="flex items-center justify-between gap-4 rounded-panel border border-danger/30 bg-[var(--status-error-soft)] p-4 text-sm text-danger">
+                <span className="truncate">{firstError.message}</span>
+                <Button
+                  onClick={refetchAll}
+                  variant="destructive"
+                  size="sm"
+                >
+                  <RefreshCw className="size-3" /> retry
+                </Button>
+              </div>
+            ) : isLoading ? (
+              <SkeletonRows isPodView={isPodView} />
+            ) : filteredItems.length === 0 ? (
+              <div className="flex items-center justify-between gap-4 rounded-panel border border-border-default bg-surface p-4 text-sm text-text-secondary">
+                <span>
+                  {hasFilters
+                    ? `no matches in ${nsLabel}`
+                    : `no ${filterKind ? resourceKindLabel(filterKind).toLowerCase() : "workloads"} in ${nsLabel}`}
+                </span>
+                {hasFilters && (
+                  <Button
+                    type="button"
+                    onClick={clearFilters}
+                    variant="outline"
+                    size="sm"
+                  >
+                    clear filters
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <DataTableShell>
+                <DataTable className={cn(isPodView && "min-w-[1100px]")}>
+                  <DataTableHeader>
+                    {isPodView ? (
+                      <DataTableRow>
+                        <Th />
+                        <Th>name</Th>
+                        <Th>namespace</Th>
+                        <Th>containers</Th>
+                        <Th>cpu</Th>
+                        <Th>memory</Th>
+                        <Th>restarts</Th>
+                        <Th>controlled by</Th>
+                        <Th>node</Th>
+                        <Th>qos</Th>
+                        <Th>status</Th>
+                        <Th>age</Th>
+                      </DataTableRow>
+                    ) : (
+                      <DataTableRow>
+                        <Th />
+                        <Th>name</Th>
+                        <Th>namespace</Th>
+                        <Th>kind</Th>
+                        <Th>ready</Th>
+                        <Th>health</Th>
+                        <Th>age</Th>
+                      </DataTableRow>
+                    )}
+                  </DataTableHeader>
+                  <DataTableBody>
+                    {filteredItems.map((w) =>
+                      isPodView || w.kind === "pod" ? (
+                        <PodRow
+                          key={`${w.kind}/${w.namespace}/${w.name}`}
+                          w={w}
+                          onClick={openResource}
+                        />
+                      ) : (
+                        <Row
+                          key={`${w.kind}/${w.namespace}/${w.name}`}
+                          w={w}
+                          onClick={openResource}
+                        />
+                      ),
+                    )}
+                  </DataTableBody>
+                </DataTable>
+              </DataTableShell>
             )}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-term-border-soft overflow-auto">
-            <table className={cn("w-full", isPodView && "min-w-[1100px]")}>
-              <thead>
-                {isPodView ? (
-                  <tr className="bg-term-panel">
-                    <Th />
-                    <Th>name</Th>
-                    <Th>namespace</Th>
-                    <Th>containers</Th>
-                    <Th>cpu</Th>
-                    <Th>memory</Th>
-                    <Th>restarts</Th>
-                    <Th>controlled by</Th>
-                    <Th>node</Th>
-                    <Th>qos</Th>
-                    <Th>status</Th>
-                    <Th>age</Th>
-                  </tr>
-                ) : (
-                  <tr className="bg-term-panel">
-                    <Th />
-                    <Th>name</Th>
-                    <Th>namespace</Th>
-                    <Th>kind</Th>
-                    <Th>ready</Th>
-                    <Th>health</Th>
-                    <Th>age</Th>
-                  </tr>
-                )}
-              </thead>
-              <tbody>
-                {filteredItems.map((w) =>
-                  isPodView || w.kind === "pod" ? (
-                    <PodRow
-                      key={`${w.kind}/${w.namespace}/${w.name}`}
-                      w={w}
-                      onClick={openResource}
-                    />
-                  ) : (
-                    <Row
-                      key={`${w.kind}/${w.namespace}/${w.name}`}
-                      w={w}
-                      onClick={openResource}
-                    />
-                  ),
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+          </SectionPanel>
 
       {/* Pod detail drawer (Lumen-distinct: side-docked, severity strip,
           chiclets, hotkeys L/S/D/Y/Esc). */}
@@ -765,14 +932,14 @@ export function WorkloadsView() {
           }
         />
       )}
-    </div>
+    </LumenPage>
   );
 }
 
 function Th({ children }: { children?: React.ReactNode }) {
   return (
-    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle whitespace-nowrap">
+    <DataTableHead className="whitespace-nowrap text-[10px]">
       {children}
-    </th>
+    </DataTableHead>
   );
 }

@@ -62,6 +62,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 - Do not commit kubeconfig files, tokens, cluster secrets, screenshots with sensitive data, or generated local planning artifacts.
 - For mutating Kubernetes actions, include RBAC preflight behavior, clear confirmation UX, and server-side dry-run where the API supports it.
 - For lists, logs, events, and graph-heavy UI, consider large-cluster performance from the start.
+- For UI changes, follow `docs/DESIGN.md` and reuse the shared primitives in `src/components/ui` and `src/components/lumen` before adding route-local styles.
 - Keep user-facing copy neutral and useful. Avoid exposing implementation details unless they help resolve the issue.
 
 ## Pull Request Checklist
