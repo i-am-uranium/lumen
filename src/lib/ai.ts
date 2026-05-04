@@ -7,6 +7,8 @@ export type AiProviderStatus = {
   available: boolean;
   path: string | null;
   command_preview: string;
+  models: string[];
+  default_model: string;
 };
 
 export type AiRunResult = {
@@ -19,6 +21,6 @@ export type AiRunResult = {
 
 export const ai = {
   detectProviders: () => invoke<AiProviderStatus[]>("detect_ai_providers"),
-  runPrompt: (provider: string, prompt: string) =>
-    invoke<AiRunResult>("run_ai_prompt", { request: { provider, prompt } }),
+  runPrompt: (provider: string, prompt: string, model?: string) =>
+    invoke<AiRunResult>("run_ai_prompt", { request: { provider, prompt, model } }),
 };

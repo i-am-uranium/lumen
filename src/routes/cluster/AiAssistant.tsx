@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   Bot,
@@ -104,8 +104,10 @@ export function AiAssistant() {
   );
   const [notes, setNotes] = useState(focusText);
   const [provider, setProvider] = useState<"codex" | "claude">("codex");
+  const [model, setModel] = useState("");
   const [approved, setApproved] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
+  const [promptEdited, setPromptEdited] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<AiRunResult | null>(null);
 
@@ -131,11 +133,15 @@ export function AiAssistant() {
     [ctx, workloads, notes],
   );
   const redacted = useMemo(() => redactForAi(contextPack), [contextPack]);
-  const prompt = useMemo(
+  const basePrompt = useMemo(
     () => buildPrompt(task, question, redacted.text),
     [task, question, redacted.text],
   );
+  const [promptDraft, setPromptDraft] = useState(basePrompt);
   const selectedProvider = providers.data?.find((p) => p.id === provider);
+  const selectedModel = selectedProvider?.models.includes(model)
+    ? model
+    : (selectedProvider?.default_model ?? selectedProvider?.models[0] ?? "");
   const loadingContext = workloadQueries.some((q) => q.isLoading);
   const selectedTask = TASKS.find((t) => t.id === task)!;
   const unhealthyCount = workloads.filter(
@@ -153,6 +159,19 @@ export function AiAssistant() {
     },
   ];
   const redactionCount = redacted.findings.reduce((sum, f) => sum + f.count, 0);
+  const prompt = promptDraft;
+
+  useEffect(() => {
+    if (!promptEdited) setPromptDraft(basePrompt);
+  }, [basePrompt, promptEdited]);
+
+  useEffect(() => {
+    if (!selectedProvider) return;
+    const nextModel = selectedProvider.models.includes(model)
+      ? model
+      : (selectedProvider.default_model || selectedProvider.models[0] || "");
+    if (nextModel !== model) setModel(nextModel);
+  }, [model, selectedProvider]);
 
   async function copyPrompt() {
     await navigator.clipboard.writeText(prompt);
@@ -164,7 +183,7 @@ export function AiAssistant() {
     setRunning(true);
     setResult(null);
     try {
-      const out = await ai.runPrompt(provider, prompt);
+      const out = await ai.runPrompt(provider, prompt, selectedModel);
       setResult(out);
       if (out.exit_code === 0 && !out.timed_out) {
         toast.success(`${selectedProvider.label} completed`);
@@ -201,6 +220,35 @@ export function AiAssistant() {
             showConfig={showConfig}
             onToggleConfig={() => setShowConfig((open) => !open)}
           />
+          {showConfig && (
+            <ConfigurationPanel
+              provider={selectedProvider}
+              providers={providers.data ?? []}
+              value={provider}
+              model={selectedModel}
+              prompt={prompt}
+              promptEdited={promptEdited}
+              onChange={(nextProvider) => {
+                setProvider(nextProvider);
+                setApproved(false);
+              }}
+              onModelChange={(nextModel) => {
+                setModel(nextModel);
+                setApproved(false);
+              }}
+              onPromptChange={(nextPrompt) => {
+                setPromptDraft(nextPrompt);
+                setPromptEdited(nextPrompt !== basePrompt);
+                setApproved(false);
+              }}
+              onResetPrompt={() => {
+                setPromptDraft(basePrompt);
+                setPromptEdited(false);
+                setApproved(false);
+              }}
+              onCopy={() => void copyPrompt()}
+            />
+          )}
           <ApprovalPanel
             approved={approved}
             prompt={prompt}
@@ -212,20 +260,12 @@ export function AiAssistant() {
             redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
             onCopy={() => void copyPrompt()}
           />
-          {showConfig && (
-            <ConfigurationPanel
-              provider={selectedProvider}
-              providers={providers.data ?? []}
-              value={provider}
-              onChange={setProvider}
-              onCopy={() => void copyPrompt()}
-            />
-          )}
           <TaskChooser
             task={task}
             onSelect={(item) => {
               setTask(item.id);
               setQuestion(item.prompt);
+              setPromptEdited(false);
               setApproved(false);
               setResult(null);
             }}
@@ -246,10 +286,12 @@ export function AiAssistant() {
             disabled={running}
             onQuestionChange={(value) => {
               setQuestion(value);
+              setPromptEdited(false);
               setApproved(false);
             }}
             onNotesChange={(value) => {
               setNotes(value);
+              setPromptEdited(false);
               setApproved(false);
             }}
             onApprovedChange={setApproved}
@@ -257,7 +299,13 @@ export function AiAssistant() {
           />
         </div>
 
-        <AnswerPanel result={result} provider={selectedProvider} />
+        <AnswerPanel
+          result={result}
+          provider={selectedProvider}
+          model={selectedModel}
+          question={question}
+          running={running}
+        />
       </div>
     </LumenPage>
   );
@@ -271,41 +319,119 @@ function ConfigurationPanel({
   provider,
   providers,
   value,
+  model,
+  prompt,
+  promptEdited,
   onChange,
+  onModelChange,
+  onPromptChange,
+  onResetPrompt,
   onCopy,
 }: {
   provider?: AiProviderStatus;
   providers: AiProviderStatus[];
   value: "codex" | "claude";
+  model: string;
+  prompt: string;
+  promptEdited: boolean;
   onChange: (value: "codex" | "claude") => void;
+  onModelChange: (value: string) => void;
+  onPromptChange: (value: string) => void;
+  onResetPrompt: () => void;
   onCopy: () => void;
 }) {
+  const install = getProviderInstallHelp(value);
   return (
-    <SectionPanel className="grid gap-4 lg:grid-cols-[minmax(220px,320px)_minmax(0,1fr)]">
-      <div>
-        <div className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">
-          Provider
+    <SectionPanel className="space-y-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(260px,360px)_minmax(0,1fr)]">
+        <div className="space-y-3">
+          <div>
+            <div className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">
+              Provider
+            </div>
+            <ProviderPicker providers={providers} value={value} onChange={onChange} />
+          </div>
+
+          <label className="block">
+            <span className="mb-2 block text-[10px] uppercase tracking-wide text-text-muted">
+              Model
+            </span>
+            <select
+              value={model}
+              disabled={!provider?.models.length}
+              onChange={(event) => onModelChange(event.target.value)}
+              className="h-9 w-full rounded-control border border-border-default bg-elevated px-3 text-[12px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {(provider?.models.length ? provider.models : [""]).map((item) => (
+                <option key={item || "none"} value={item}>
+                  {item || "No models detected"}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {!provider?.available && (
+            <div className="rounded-control border border-warning/35 bg-[var(--status-warning-soft)] p-3">
+              <div className="flex items-center gap-2 text-[12px] font-semibold text-warning">
+                <TriangleAlert className="size-3.5" />
+                {install.title}
+              </div>
+              <p className="mt-1 text-[11px] leading-4 text-text-secondary">
+                {install.description}
+              </p>
+              <pre className="mt-2 overflow-x-auto rounded border border-border-subtle bg-code-surface p-2 font-mono text-[10px] leading-4 text-text-secondary">
+                {install.commands.join("\n")}
+              </pre>
+            </div>
+          )}
         </div>
-        <ProviderPicker providers={providers} value={value} onChange={onChange} />
+
+        <div>
+          <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
+            <TerminalSquare className="size-3.5 text-accent-primary" />
+            Execution preview
+          </div>
+          <div className="rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-secondary">
+            {(provider?.command_preview ?? "Select an AI provider").replace(
+              "<model>",
+              model || provider?.default_model || "model",
+            )}
+            {provider?.path && <div className="text-text-muted">{provider.path}</div>}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-3 text-[12px] text-text-secondary">
+            <SafetyLine>Read-only execution</SafetyLine>
+            <SafetyLine>No cluster changes</SafetyLine>
+            <SafetyLine>Manual command approval</SafetyLine>
+          </div>
+        </div>
       </div>
-      <div>
-        <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
-          <TerminalSquare className="size-3.5 text-accent-primary" />
-          Execution preview
+
+      <label className="block">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[10px] uppercase tracking-wide text-text-muted">
+            Prompt
+          </span>
+          <div className="flex items-center gap-2">
+            {promptEdited && (
+              <span className="text-[10px] uppercase tracking-wide text-warning">
+                customized
+              </span>
+            )}
+            <Button type="button" variant="ghost" size="sm" onClick={onResetPrompt}>
+              Reset
+            </Button>
+            <Button type="button" variant="secondary" size="sm" onClick={onCopy}>
+              <Clipboard className="size-3.5" /> copy prompt
+            </Button>
+          </div>
         </div>
-        <div className="rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-secondary">
-          {provider?.command_preview ?? "Select an AI provider"}
-          {provider?.path && <div className="text-text-muted">{provider.path}</div>}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-3 text-[12px] text-text-secondary">
-          <SafetyLine>Read-only execution</SafetyLine>
-          <SafetyLine>No cluster changes</SafetyLine>
-          <SafetyLine>Manual command approval</SafetyLine>
-        </div>
-        <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={onCopy}>
-          <Clipboard className="size-3.5" /> copy prompt
-        </Button>
-      </div>
+        <textarea
+          value={prompt}
+          onChange={(event) => onPromptChange(event.target.value)}
+          className="min-h-[180px] w-full resize-y rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+          spellCheck={false}
+        />
+      </label>
     </SectionPanel>
   );
 }
@@ -607,9 +733,15 @@ function SafetyLine({ children }: { children: React.ReactNode }) {
 function AnswerPanel({
   result,
   provider,
+  model,
+  question,
+  running,
 }: {
   result: AiRunResult | null;
   provider?: AiProviderStatus;
+  model: string;
+  question: string;
+  running: boolean;
 }) {
   return (
     <aside className="min-h-[760px] rounded-panel border border-border-default bg-shell/90 p-4 shadow-[var(--shadow-panel)] xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-auto">
@@ -617,7 +749,11 @@ function AnswerPanel({
         <div>
           <h2 className="text-sm font-semibold text-text-primary">Answer</h2>
           <p className="mt-1 text-[11px] text-text-muted">
-            {result ? `${result.provider} exit ${result.exit_code ?? "n/a"}` : provider?.label ?? "No provider selected"}
+            {result
+              ? `${result.provider} · ${model || "default"} · exit ${result.exit_code ?? "n/a"}`
+              : provider
+                ? `${provider.label} · ${model || provider.default_model}`
+                : "No provider selected"}
           </p>
         </div>
         <Button
@@ -630,34 +766,73 @@ function AnswerPanel({
           <Clipboard className="size-3.5" /> Copy
         </Button>
       </div>
-      {!result ? (
-        <div className="rounded-control border border-border-default bg-elevated p-4">
-          <div className="flex items-start gap-3">
-            <div className="rounded-control border border-accent-primary/25 bg-accent-primary-soft p-2 text-accent-primary">
-              <Sparkles className="size-4" />
+      <div className="space-y-3">
+        {(running || result) && (
+          <div className="ml-auto max-w-[92%] rounded-control border border-accent-primary/25 bg-accent-primary-soft p-3">
+            <div className="text-[10px] uppercase tracking-wide text-accent-primary">
+              You asked
             </div>
-            <div>
-              <div className="text-[13px] font-semibold text-text-primary">
-                Waiting for an approved question
-              </div>
-              <p className="mt-1 text-[12px] leading-5 text-text-secondary">
-                Approve the redacted payload, then run Ask. The answer will be
-                grouped into summary, evidence, likely cause, next checks, safe
-                commands, remediation, and confirmation-required actions.
-              </p>
+            <div className="mt-1 text-[12px] leading-5 text-text-primary">
+              {question}
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {result.stderr && (
-            <div className="rounded-control border border-warning/35 bg-[var(--status-warning-soft)] p-3 text-[11px] text-warning whitespace-pre-wrap">
-              {result.stderr}
+        )}
+
+        {!result && !running ? (
+          <div className="rounded-control border border-border-default bg-elevated p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-control border border-accent-primary/25 bg-accent-primary-soft p-2 text-accent-primary">
+                <Sparkles className="size-4" />
+              </div>
+              <div>
+                <div className="text-[13px] font-semibold text-text-primary">
+                  Waiting for an approved question
+                </div>
+                <p className="mt-1 text-[12px] leading-5 text-text-secondary">
+                  Approve the redacted payload, then run Ask. The answer will be
+                  grouped into summary, evidence, likely cause, next checks, safe
+                  commands, remediation, and confirmation-required actions.
+                </p>
+              </div>
             </div>
-          )}
-          <StructuredAnswer stdout={result.stdout} />
-        </div>
-      )}
+          </div>
+        ) : null}
+
+        {running && (
+          <div className="rounded-control border border-border-default bg-elevated p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-control border border-success/25 bg-[var(--status-success-soft)] p-2 text-success">
+                <Loader2 className="size-4 animate-spin" />
+              </div>
+              <div>
+                <div className="text-[13px] font-semibold text-text-primary">
+                  Analyzing redacted context
+                </div>
+                <div className="mt-2 grid gap-2 text-[12px] text-text-secondary">
+                  <SafetyLine>Building an evidence-only prompt</SafetyLine>
+                  <SafetyLine>Running {provider?.label ?? "AI CLI"} in read-only mode</SafetyLine>
+                  <SafetyLine>Formatting the result into operator sections</SafetyLine>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {result ? (
+          <div className="rounded-control border border-border-default bg-elevated p-3">
+            <div className="mb-3 flex items-center gap-2 text-[12px] font-semibold text-text-primary">
+              <Bot className="size-4 text-accent-primary" />
+              Lumen assistant
+            </div>
+            {result.stderr && (
+              <div className="mb-3 rounded-control border border-warning/35 bg-[var(--status-warning-soft)] p-3 text-[11px] text-warning whitespace-pre-wrap">
+                {result.stderr}
+              </div>
+            )}
+            <StructuredAnswer stdout={result.stdout} />
+          </div>
+        ) : null}
+      </div>
     </aside>
   );
 }
@@ -739,6 +914,9 @@ function AnswerSectionCard({ section }: { section: AnswerSection }) {
     : lines;
   const actionLines = section.tone === "remediation" ? lines : [];
   const evidenceItems = section.tone === "evidence" ? lines : [];
+  const checklistItems = section.tone === "checks" ? lines : [];
+  const summaryLines = section.tone === "summary" ? lines : [];
+  const causeLines = section.tone === "cause" ? lines : [];
 
   return (
     <section className="rounded-control border border-border-default bg-elevated p-3">
@@ -769,7 +947,59 @@ function AnswerSectionCard({ section }: { section: AnswerSection }) {
         </div>
       )}
 
-      {section.tone !== "evidence" && section.tone !== "remediation" && bodyLines.length > 0 && (
+      {section.tone === "summary" && summaryLines.length > 0 && (
+        <div className="rounded-control border border-accent-primary/20 bg-code-surface/60 p-3">
+          <div className="text-[12px] font-medium leading-5 text-text-primary">
+            {cleanListMarker(summaryLines[0])}
+          </div>
+          {summaryLines.slice(1).length > 0 && (
+            <div className="mt-2 space-y-1">
+              {summaryLines.slice(1).map((line, index) => (
+                <div
+                  key={`${line}-${index}`}
+                  className="flex gap-2 text-[12px] leading-5 text-text-secondary"
+                >
+                  <span className="mt-2 size-1 shrink-0 rounded-full bg-accent-primary" />
+                  <span>{cleanListMarker(line)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {section.tone === "cause" && causeLines.length > 0 && (
+        <div className="space-y-2">
+          {causeLines.map((line, index) => (
+            <div
+              key={`${line}-${index}`}
+              className="rounded-control border border-danger/20 bg-[var(--status-error-soft)] px-3 py-2 text-[12px] leading-5 text-text-secondary"
+            >
+              {cleanListMarker(line)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {section.tone === "checks" && checklistItems.length > 0 && (
+        <div className="space-y-2">
+          {checklistItems.map((line, index) => (
+            <div
+              key={`${line}-${index}`}
+              className="flex items-start gap-3 rounded-control border border-border-subtle bg-code-surface/60 px-3 py-2"
+            >
+              <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border border-info/30 bg-[var(--status-info-soft)] text-[10px] font-semibold text-info">
+                {index + 1}
+              </span>
+              <span className="text-[12px] leading-5 text-text-secondary">
+                {cleanListMarker(line)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!["evidence", "remediation", "summary", "cause", "checks"].includes(section.tone) && bodyLines.length > 0 && (
         <div className="space-y-2 text-[12px] leading-5 text-text-secondary">
           {bodyLines.map((line) => (
             <p key={line} className="whitespace-pre-wrap">
@@ -920,7 +1150,7 @@ function normalizeSectionLines(content: string): string[] {
     .replace(/```(?:bash|sh|shell)?/gi, "")
     .replace(/```/g, "")
     .split("\n")
-    .map((line) => line.trim())
+    .map((line) => line.trim().replace(/^\*\*(.+)\*\*$/, "$1"))
     .filter(Boolean);
 }
 
@@ -949,9 +1179,9 @@ function parseAnswerSections(stdout: string): AnswerSection[] {
     { label: "Requires confirmation", tone: "confirmation" },
   ] as const;
   const pattern = new RegExp(
-    `(?:^|\\n)\\s*(?:\\d+\\.\\s*)?(${headings
+    `(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:\\d+\\.\\s*)?\\*{0,2}(${headings
       .map((h) => h.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("|")})\\s*:?\\s*\\n`,
+      .join("|")})\\*{0,2}\\s*:?\\s*(?:\\n|$)`,
     "gi",
   );
   const matches = Array.from(text.matchAll(pattern));
@@ -1086,6 +1316,31 @@ function ProviderPicker({
   );
 }
 
+function getProviderInstallHelp(provider: "codex" | "claude") {
+  if (provider === "claude") {
+    return {
+      title: "Claude Code CLI not found",
+      description:
+        "Install Claude Code, sign in, then restart Lumen so the desktop app can see the updated PATH.",
+      commands: [
+        "npm install -g @anthropic-ai/claude-code",
+        "claude auth login",
+        "which claude",
+      ],
+    };
+  }
+  return {
+    title: "Codex CLI not found",
+    description:
+      "Install Codex CLI, sign in, then restart Lumen so the desktop app can see the updated PATH.",
+    commands: [
+      "npm install -g @openai/codex",
+      "codex login",
+      "which codex",
+    ],
+  };
+}
+
 function buildContextPack(
   ctx: string,
   workloads: WorkloadSummary[],
@@ -1147,13 +1402,22 @@ Operator question:
 ${question.trim() || "Analyze the provided Kubernetes context."}
 
 Return this structure:
-1. Summary
-2. Evidence
-3. Most likely cause
-4. Next checks
-5. Safe kubectl commands
-6. Remediation suggestions
-7. Requires confirmation
+Use these exact section headings, each on its own line, without markdown fences:
+Summary
+Evidence
+Most likely cause
+Next checks
+Safe kubectl commands
+Remediation suggestions
+Requires confirmation
+
+Formatting rules:
+- Keep Summary to 1-3 short sentences.
+- Make Evidence a bullet list of concrete signals.
+- Make Next checks and Remediation suggestions actionable bullet lists.
+- Put one command per line in Safe kubectl commands.
+- Put mutating commands only in Requires confirmation, one command per line.
+- If a section has nothing useful, write "None."
 
 Redacted context:
 ${context}`;
