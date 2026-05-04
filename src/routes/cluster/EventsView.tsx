@@ -191,22 +191,22 @@ export function EventsView() {
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="sticky top-0 z-10 bg-term-bg/95 backdrop-blur border-b border-term-border-soft px-6 py-4 shrink-0">
+      <div className="sticky top-0 z-10 bg-app/95 backdrop-blur border-b border-border-subtle px-6 py-4 shrink-0">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="mds-heading text-[20px] text-term-fg flex items-center gap-2">
+            <h1 className="mds-heading text-[20px] text-text-primary flex items-center gap-2">
               <Activity className="size-5" /> events
             </h1>
-            <p className="text-[12px] text-term-muted">
+            <p className="text-[12px] text-text-secondary">
               {context}
               {` · ${namespace || "all namespaces"}`} · {counts.normal} normal
               {counts.warn > 0 && (
-                <span className="text-amber-400"> · {counts.warn} warning</span>
+                <span className="text-warning"> · {counts.warn} warning</span>
               )}
               {!paused ? (
-                <span className="text-emerald-400"> · live</span>
+                <span className="text-success"> · live</span>
               ) : (
-                <span className="text-term-subtle"> · paused</span>
+                <span className="text-text-muted"> · paused</span>
               )}
             </p>
           </div>
@@ -231,13 +231,13 @@ export function EventsView() {
         </div>
         <div className="mt-3 flex items-center gap-2 flex-wrap">
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-term-subtle mb-1">
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
               namespace
             </label>
             <select
               value={namespace}
               onChange={(e) => setNamespace(e.target.value)}
-              className="h-8 px-2 rounded-md bg-term-bg border border-term-border-soft text-[12px] text-term-fg w-[220px]"
+              className="h-8 px-2 rounded-control bg-app border border-border-subtle text-[12px] text-text-primary w-[220px]"
               title="empty selection streams cluster-wide events"
             >
               <option value="">all namespaces</option>
@@ -249,21 +249,21 @@ export function EventsView() {
             </select>
           </div>
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-term-subtle mb-1">
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
               type
             </label>
-            <div className="flex h-8 rounded-md border border-term-border-soft overflow-hidden">
+            <div className="flex h-8 rounded-control border border-border-subtle overflow-hidden">
               {(["all", "Normal", "Warning"] as Severity[]).map((s) => (
                 <button
                   key={s}
                   onClick={() => setSeverity(s)}
                   className={cn(
-                    "px-3 text-[11px] border-r last:border-r-0 border-term-border-soft transition-colors",
+                    "px-3 text-[11px] border-r last:border-r-0 border-border-subtle transition-colors",
                     severity === s
                       ? s === "Warning"
-                        ? "bg-amber-500/15 text-amber-300"
+                        ? "bg-amber-500/15 text-warning"
                         : "bg-term-green-soft text-term-green"
-                      : "text-term-muted hover:bg-term-panel-2",
+                      : "text-text-secondary hover:bg-elevated",
                   )}
                 >
                   {s.toLowerCase()}
@@ -272,26 +272,26 @@ export function EventsView() {
             </div>
           </div>
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-[10px] uppercase tracking-wider text-term-subtle mb-1">
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
               filter
             </label>
-            <div className="flex items-center gap-2 h-8 px-2 rounded-md bg-term-bg border border-term-border-soft">
-              <Search className="size-3.5 text-term-subtle" />
+            <div className="flex items-center gap-2 h-8 px-2 rounded-control bg-app border border-border-subtle">
+              <Search className="size-3.5 text-text-muted" />
               <input
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="grep reason / message / object..."
-                className="flex-1 bg-transparent outline-none text-[12px] text-term-fg placeholder:text-term-subtle"
+                className="flex-1 bg-transparent outline-none text-[12px] text-text-primary placeholder:text-text-muted"
               />
               {filterLc && (
-                <span className="text-[10px] text-term-subtle tabular-nums">
+                <span className="text-[10px] text-text-muted tabular-nums">
                   {visibleEvents.length}/{events.length}
                 </span>
               )}
             </div>
           </div>
         </div>
-        <p className="mt-2 text-[10px] text-term-subtle">
+        <p className="mt-2 text-[10px] text-text-muted">
           streaming {namespace ? `events from ${namespace}` : "events cluster-wide"}.
         </p>
       </div>
@@ -300,13 +300,13 @@ export function EventsView() {
         {paused && visibleEvents.length > 0 && (
           <button
             onClick={jumpToTop}
-            className="absolute left-1/2 -translate-x-1/2 top-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-term-green/40 bg-term-green/10 text-[11px] text-term-green hover:bg-term-green/20 transition-colors shadow-md"
+            className="absolute left-1/2 -translate-x-1/2 top-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-accent-primary/40 bg-term-green/10 text-[11px] text-term-green hover:bg-term-green/20 transition-colors shadow-md"
           >
             <ArrowUp className="size-3" /> jump to newest
           </button>
         )}
-        <div ref={parentRef} className="absolute inset-0 overflow-auto bg-term-bg">
-          <div className="sticky top-0 z-[1] bg-term-panel border-b border-term-border-soft grid grid-cols-[100px_90px_140px_220px_1fr] px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+        <div ref={parentRef} className="absolute inset-0 overflow-auto bg-app">
+          <div className="sticky top-0 z-[1] bg-shell border-b border-border-subtle grid grid-cols-[100px_90px_140px_220px_1fr] px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
             <span>time</span>
             <span>type</span>
             <span>reason</span>
@@ -314,7 +314,7 @@ export function EventsView() {
             <span>message</span>
           </div>
           {visibleEvents.length === 0 ? (
-            <div className="p-6 text-[12px] text-term-muted">
+            <div className="p-6 text-[12px] text-text-secondary">
               {events.length === 0
                 ? "waiting for first event…"
                 : "no events match the current filter."}
@@ -359,12 +359,12 @@ function EventRow({ e, now }: { e: EventLine; now: number }) {
   return (
     <div
       className={cn(
-        "grid grid-cols-[100px_90px_140px_220px_1fr] gap-0 px-3 py-2 border-b border-term-border-soft hover:bg-term-panel-2 text-[12px]",
+        "grid grid-cols-[100px_90px_140px_220px_1fr] gap-0 px-3 py-2 border-b border-border-subtle hover:bg-elevated text-[12px]",
         isWarn && "border-l-2 border-l-amber-400",
       )}
       title={e.message}
     >
-      <span className="text-term-subtle tabular-nums text-[11px]">
+      <span className="text-text-muted tabular-nums text-[11px]">
         {relTime(e.ts, now)}
       </span>
       <span>
@@ -372,8 +372,8 @@ function EventRow({ e, now }: { e: EventLine; now: number }) {
           className={cn(
             "inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded font-semibold uppercase tracking-wide border",
             isWarn
-              ? "bg-amber-500/10 text-amber-400 border-amber-500/40"
-              : "bg-term-panel-2 text-term-muted border-term-border-soft",
+              ? "bg-amber-500/10 text-warning border-amber-500/40"
+              : "bg-elevated text-text-secondary border-border-subtle",
           )}
         >
           {isWarn ? (
@@ -384,19 +384,19 @@ function EventRow({ e, now }: { e: EventLine; now: number }) {
           {e.type_ || "—"}
         </span>
       </span>
-      <span className="text-term-fg font-mono text-[11px] truncate" title={e.reason}>
+      <span className="text-text-primary font-mono text-[11px] truncate" title={e.reason}>
         {e.reason || "—"}
       </span>
       <span className="min-w-0 truncate font-mono text-[11px]" title={e.involved}>
-        <span className="text-term-subtle uppercase">{kind || "—"}</span>
+        <span className="text-text-muted uppercase">{kind || "—"}</span>
         {name && (
           <>
-            <span className="text-term-subtle">/</span>
-            <span className="text-term-fg">{name}</span>
+            <span className="text-text-muted">/</span>
+            <span className="text-text-primary">{name}</span>
           </>
         )}
       </span>
-      <span className="text-term-fg break-words pr-2 line-clamp-2">{e.message}</span>
+      <span className="text-text-primary break-words pr-2 line-clamp-2">{e.message}</span>
     </div>
   );
 }
