@@ -15,8 +15,6 @@ import {
 import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
-import { YamlModal } from "@/components/YamlModal";
-import { PinButton } from "@/components/PinButton";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import { useRecentResources } from "@/hooks/useRecentResources";
 import { RESOURCE_KIND_BY_SLUG, listResourceDefinitions, resourceKindLabel } from "@/lib/k8s/resourceRegistry";
@@ -639,7 +637,7 @@ export function WorkloadsView() {
 
   const refetchAll = () => queries.forEach((q) => q.refetch());
 
-  // ─── Detail surfaces (drawer for pods, YamlModal for everything else) ──
+  // ─── Detail surface ───────────────────────────────────────────────────
 
   const recent = useRecentResources(context);
   const [drawerResource, setDrawerResource] = useState<{
@@ -647,31 +645,11 @@ export function WorkloadsView() {
     namespace: string;
     name: string;
   } | null>(null);
-  const [selected, setSelected] = useState<WorkloadSummary | null>(null);
 
   const openResource = (w: WorkloadSummary) => {
     recent.push({ kind: w.kind, namespace: w.namespace, name: w.name });
-    if (w.kind === "pod") {
-      setDrawerResource({ kind: "pod", namespace: w.namespace, name: w.name });
-    } else {
-      setSelected(w);
-    }
+    setDrawerResource({ kind: w.kind, namespace: w.namespace, name: w.name });
   };
-
-  const yamlQuery = useQuery({
-    queryKey: selected
-      ? ["k8s", "resource", context, selected.namespace, selected.kind, selected.name]
-      : ["k8s", "resource", "noop"],
-    queryFn: () =>
-      k8s.getResource(
-        selected!.namespace,
-        selected!.kind,
-        selected!.name,
-        context || undefined,
-      ),
-    enabled: !!selected,
-    staleTime: 5_000,
-  });
 
   // ─── render ─────────────────────────────────────────────────────────────
 
@@ -892,46 +870,12 @@ export function WorkloadsView() {
             )}
           </SectionPanel>
 
-      {/* Pod detail drawer (Lumen-distinct: side-docked, severity strip,
-          chiclets, hotkeys L/S/D/Y/Esc). */}
+      {/* Consistent resource detail drawer for every workload kind. */}
       <ResourceDetailDrawer
         ctx={context}
         resource={drawerResource}
         onClose={() => setDrawerResource(null)}
       />
-
-      {/* YAML modal kept for non-pod kinds until we extend the drawer. */}
-      {selected && (
-        <YamlModal
-          title={`${selected.kind}/${selected.name}`}
-          subtitle={selected.namespace}
-          yaml={yamlQuery.data?.yaml}
-          loading={yamlQuery.isLoading}
-          error={yamlQuery.error ? (yamlQuery.error as Error).message : null}
-          sensitive={selected.kind === "secret"}
-          onClose={() => setSelected(null)}
-          editable={
-            selected.kind === "secret"
-              ? undefined
-              : {
-                  namespace: selected.namespace,
-                  kind: selected.kind,
-                  name: selected.name,
-                  context: context || undefined,
-                }
-          }
-          pinSlot={
-            <PinButton
-              ctx={context}
-              resource={{
-                kind: selected.kind,
-                namespace: selected.namespace,
-                name: selected.name,
-              }}
-            />
-          }
-        />
-      )}
     </LumenPage>
   );
 }

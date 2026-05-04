@@ -23,6 +23,7 @@ import {
 } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { HelmActionDialog } from "@/components/HelmActionDialog";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 
 type HelmAction =
   | { kind: "rollback"; release: string; namespace: string; revision: number; wait: boolean }
@@ -209,6 +210,7 @@ function ReleaseDetail({
   const [revision, setRevision] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>("values");
   const [action, setAction] = useState<HelmAction | null>(null);
+  const [confirmAction, setConfirmAction] = useState<HelmAction | null>(null);
   const detail = useQuery({
     queryKey: [
       "k8s",
@@ -270,20 +272,14 @@ function ReleaseDetail({
         </div>
         <div className="mt-2 flex items-center gap-1.5">
           <button
-            onClick={() => {
-              if (
-                confirm(
-                  `Uninstall release "${summary.name}" from namespace "${summary.namespace}"? Resources managed by this release will be deleted.`,
-                )
-              ) {
-                setAction({
-                  kind: "uninstall",
-                  release: summary.name,
-                  namespace: summary.namespace,
-                  keepHistory: false,
-                });
-              }
-            }}
+            onClick={() =>
+              setConfirmAction({
+                kind: "uninstall",
+                release: summary.name,
+                namespace: summary.namespace,
+                keepHistory: false,
+              })
+            }
             className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-red !border-term-red/40"
             title="helm uninstall this release"
           >
@@ -348,7 +344,7 @@ function ReleaseDetail({
             current={d.summary.revision}
             onPick={(r) => setRevision(r)}
             onRollback={(r) =>
-              setAction({
+              setConfirmAction({
                 kind: "rollback",
                 release: summary.name,
                 namespace: summary.namespace,
@@ -364,6 +360,29 @@ function ReleaseDetail({
           action={action}
           context={context}
           onClose={() => setAction(null)}
+        />
+      )}
+      {confirmAction && (
+        <ConfirmActionDialog
+          open
+          title={
+            confirmAction.kind === "uninstall"
+              ? `uninstall ${confirmAction.release}`
+              : `rollback ${confirmAction.release}`
+          }
+          description={
+            confirmAction.kind === "uninstall"
+              ? `Uninstall release ${confirmAction.release} from namespace ${confirmAction.namespace}. Resources managed by this release will be deleted.`
+              : `Rollback ${confirmAction.release} to revision ${confirmAction.revision}. Helm will create a new revision from that manifest.`
+          }
+          target={`${confirmAction.namespace}/${confirmAction.release}`}
+          confirmLabel={confirmAction.kind === "uninstall" ? "uninstall" : "rollback"}
+          intent={confirmAction.kind === "uninstall" ? "danger" : "warning"}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={() => {
+            setAction(confirmAction);
+            setConfirmAction(null);
+          }}
         />
       )}
     </div>
@@ -441,15 +460,7 @@ function HistoryPane({
               </button>
               {r.revision !== current && (
                 <button
-                  onClick={() => {
-                    if (
-                      confirm(
-                        `Rollback ${name} to revision ${r.revision}? Current revision becomes ${current + 1} → ${r.revision}; this creates a new revision pointing at ${r.revision}'s manifest.`,
-                      )
-                    ) {
-                      onRollback(r.revision);
-                    }
-                  }}
+                  onClick={() => onRollback(r.revision)}
                   className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-amber !border-term-amber/40"
                   title={`helm rollback ${name} ${r.revision}`}
                 >
