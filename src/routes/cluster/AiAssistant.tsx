@@ -7,8 +7,12 @@ import {
   Clipboard,
   Database,
   FileText,
+  History,
   ListChecks,
+  LockKeyhole,
   Loader2,
+  MessageSquare,
+  Play,
   Search,
   SendHorizontal,
   Settings2,
@@ -16,6 +20,7 @@ import {
   Sparkles,
   TerminalSquare,
   TriangleAlert,
+  Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useParams, useSearchParams } from "react-router-dom";
@@ -210,8 +215,18 @@ export function AiAssistant() {
   }
 
   return (
-    <LumenPage className="max-w-[1760px] gap-3">
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_460px]">
+    <LumenPage className="max-w-[1880px] gap-3">
+      <div className="grid gap-3 2xl:grid-cols-[300px_minmax(0,1fr)_460px]">
+        <AiSessionRail
+          ctx={ctx}
+          task={selectedTask}
+          provider={selectedProvider}
+          model={selectedModel}
+          redactionCount={redactionCount}
+          unhealthyCount={unhealthyCount}
+          resourceFocus={resourceFocus}
+        />
+
         <div className="space-y-3">
           <ContextStrip
             items={contextSignals}
@@ -299,13 +314,21 @@ export function AiAssistant() {
           />
         </div>
 
-        <AnswerPanel
-          result={result}
-          provider={selectedProvider}
-          model={selectedModel}
-          question={question}
-          running={running}
-        />
+        <div className="space-y-3">
+          <AnswerPanel
+            result={result}
+            provider={selectedProvider}
+            model={selectedModel}
+            question={question}
+            running={running}
+          />
+          <AiActionQueue
+            task={selectedTask}
+            approved={approved}
+            provider={selectedProvider}
+            running={running}
+          />
+        </div>
       </div>
     </LumenPage>
   );
@@ -313,6 +336,165 @@ export function AiAssistant() {
 
 function parseAiTask(value: string | null): AiTask | null {
   return TASKS.some((task) => task.id === value) ? (value as AiTask) : null;
+}
+
+function AiSessionRail({
+  ctx,
+  task,
+  provider,
+  model,
+  redactionCount,
+  unhealthyCount,
+  resourceFocus,
+}: {
+  ctx: string;
+  task: (typeof TASKS)[number];
+  provider?: AiProviderStatus;
+  model: string;
+  redactionCount: number;
+  unhealthyCount: number;
+  resourceFocus: { kind: string; namespace: string; name: string };
+}) {
+  const focus = resourceFocus.name
+    ? `${resourceFocus.kind}/${resourceFocus.name}`
+    : "cluster-wide";
+  return (
+    <aside className="space-y-3 2xl:sticky 2xl:top-4 2xl:self-start">
+      <SectionPanel className="space-y-3 p-3">
+        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
+          <MessageSquare className="size-3.5" />
+          AI workspace
+        </div>
+        <div className="rounded-control border border-accent-primary/35 bg-accent-primary-soft p-3">
+          <div className="text-[12px] font-semibold text-text-primary">
+            {task.label}
+          </div>
+          <div className="mt-1 text-[11px] leading-4 text-text-secondary">
+            {focus} on {ctx || "unknown"}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <WorkspaceMetric label="signals" value={unhealthyCount} tone="warning" />
+          <WorkspaceMetric label="redacted" value={redactionCount} tone="success" />
+        </div>
+      </SectionPanel>
+
+      <SectionPanel className="space-y-3 p-3">
+        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
+          <Bot className="size-3.5" />
+          Provider profile
+        </div>
+        <div className="rounded-control border border-border-default bg-elevated p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[12px] font-semibold text-text-primary">
+                {provider?.label ?? "No provider"}
+              </div>
+              <div className="mt-1 font-mono text-[11px] text-text-muted">
+                {model || "default model"}
+              </div>
+            </div>
+            <span
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[10px]",
+                provider?.available
+                  ? "border-success/25 bg-[var(--status-success-soft)] text-success"
+                  : "border-warning/30 bg-[var(--status-warning-soft)] text-warning",
+              )}
+            >
+              {provider?.available ? "ready" : "missing"}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 text-[11px] text-text-secondary">
+            <SafetyLine>Local CLI subscription</SafetyLine>
+            <SafetyLine>Read-only assistant execution</SafetyLine>
+            <SafetyLine>Commands require confirmation</SafetyLine>
+          </div>
+        </div>
+      </SectionPanel>
+
+      <SectionPanel className="space-y-3 p-3">
+        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
+          <History className="size-3.5" />
+          Sessions
+        </div>
+        <SessionRow
+          active
+          title={task.label}
+          meta={focus}
+          status="draft"
+        />
+        <SessionRow
+          title="Failed cleanup jobs"
+          meta="dev · 3 commands"
+          status="reviewed"
+        />
+        <SessionRow
+          title="Node memory pressure"
+          meta="prod · runbook"
+          status="closed"
+        />
+      </SectionPanel>
+    </aside>
+  );
+}
+
+function WorkspaceMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "success" | "warning";
+}) {
+  return (
+    <div className="rounded-control border border-border-default bg-elevated px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-text-muted">{label}</div>
+      <div
+        className={cn(
+          "mt-1 font-mono text-[14px]",
+          tone === "success" ? "text-success" : "text-warning",
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function SessionRow({
+  title,
+  meta,
+  status,
+  active,
+}: {
+  title: string;
+  meta: string;
+  status: string;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "w-full rounded-control border px-3 py-2 text-left transition-colors",
+        active
+          ? "border-accent-primary/40 bg-accent-primary-soft"
+          : "border-border-default bg-elevated hover:bg-hover",
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-[12px] font-medium text-text-primary">
+          {title}
+        </span>
+        <span className="rounded-full border border-border-subtle px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-text-muted">
+          {status}
+        </span>
+      </div>
+      <div className="mt-1 truncate text-[10px] text-text-muted">{meta}</div>
+    </button>
+  );
 }
 
 function ConfigurationPanel({
@@ -744,7 +926,7 @@ function AnswerPanel({
   running: boolean;
 }) {
   return (
-    <aside className="min-h-[760px] rounded-panel border border-border-default bg-shell/90 p-4 shadow-[var(--shadow-panel)] xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-auto">
+    <aside className="min-h-[560px] rounded-panel border border-border-default bg-shell/90 p-4 shadow-[var(--shadow-panel)] 2xl:sticky 2xl:top-4 2xl:max-h-[calc(100vh-7rem)] 2xl:overflow-auto">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-semibold text-text-primary">Answer</h2>
@@ -834,6 +1016,90 @@ function AnswerPanel({
         ) : null}
       </div>
     </aside>
+  );
+}
+
+function AiActionQueue({
+  task,
+  approved,
+  provider,
+  running,
+}: {
+  task: (typeof TASKS)[number];
+  approved: boolean;
+  provider?: AiProviderStatus;
+  running: boolean;
+}) {
+  const steps = [
+    {
+      icon: <ShieldCheck className="size-4" />,
+      title: "Review payload",
+      meta: approved ? "Approved for local AI CLI" : "Approval required",
+      state: approved ? "done" : "active",
+    },
+    {
+      icon: <Bot className="size-4" />,
+      title: "Ask assistant",
+      meta: provider?.available ? `${provider.label} ready` : "Install or configure provider",
+      state: running ? "active" : provider?.available ? "ready" : "blocked",
+    },
+    {
+      icon: <ListChecks className="size-4" />,
+      title: "Review plan",
+      meta: "Evidence, next checks, and remediation cards",
+      state: "ready",
+    },
+    {
+      icon: <Play className="size-4" />,
+      title: "Run commands",
+      meta: "Every command opens confirmation first",
+      state: "locked",
+    },
+  ] as const;
+
+  return (
+    <SectionPanel className="space-y-3 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
+          <Wrench className="size-3.5" />
+          Operator queue
+        </div>
+        <span className="rounded-full border border-border-default bg-elevated px-2 py-0.5 text-[10px] text-text-muted">
+          {task.label}
+        </span>
+      </div>
+      <div className="space-y-2">
+        {steps.map((step) => (
+          <div
+            key={step.title}
+            className="flex items-start gap-3 rounded-control border border-border-default bg-elevated p-3"
+          >
+            <div
+              className={cn(
+                "rounded-control border p-1.5",
+                step.state === "done"
+                  ? "border-success/30 bg-[var(--status-success-soft)] text-success"
+                  : step.state === "blocked"
+                    ? "border-warning/35 bg-[var(--status-warning-soft)] text-warning"
+                    : step.state === "locked"
+                      ? "border-border-default bg-code-surface text-text-muted"
+                      : "border-accent-primary/30 bg-accent-primary-soft text-accent-primary",
+              )}
+            >
+              {step.state === "locked" ? <LockKeyhole className="size-4" /> : step.icon}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-medium text-text-primary">
+                {step.title}
+              </div>
+              <div className="mt-1 text-[11px] leading-4 text-text-muted">
+                {step.meta}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </SectionPanel>
   );
 }
 
