@@ -18,7 +18,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { ai, type AiProviderStatus, type AiRunResult } from "@/lib/ai";
 import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { redactForAi } from "@/lib/aiRedaction";
@@ -83,10 +83,26 @@ const CONTEXT_KINDS: WorkloadKind[] = ["pod", "deployment", "statefulset", "daem
 
 export function AiAssistant() {
   const params = useParams();
+  const [searchParams] = useSearchParams();
   const ctx = decodeURIComponent(params.ctx ?? "");
-  const [task, setTask] = useState<AiTask>("root-cause");
-  const [question, setQuestion] = useState(TASKS.find((t) => t.id === "root-cause")!.prompt);
-  const [notes, setNotes] = useState("");
+  const initialTask = parseAiTask(searchParams.get("task")) ?? "root-cause";
+  const resourceFocus = useMemo(
+    () => ({
+      kind: searchParams.get("kind") ?? "",
+      namespace: searchParams.get("namespace") ?? "",
+      name: searchParams.get("name") ?? "",
+    }),
+    [searchParams],
+  );
+  const focusText = resourceFocus.kind && resourceFocus.name
+    ? `Focused resource: ${resourceFocus.kind}/${resourceFocus.namespace ? `${resourceFocus.namespace}/` : ""}${resourceFocus.name}`
+    : "";
+  const [task, setTask] = useState<AiTask>(initialTask);
+  const [question, setQuestion] = useState(
+    searchParams.get("question") ??
+      TASKS.find((t) => t.id === initialTask)!.prompt,
+  );
+  const [notes, setNotes] = useState(focusText);
   const [provider, setProvider] = useState<"codex" | "claude">("codex");
   const [approved, setApproved] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -127,9 +143,14 @@ export function AiAssistant() {
   ).length;
   const contextSignals = [
     { label: "Cluster", value: ctx || "unknown" },
-    { label: "Namespace", value: "all" },
+    { label: "Namespace", value: resourceFocus.namespace || "all" },
     { label: "Resources", value: `${workloads.length} sampled` },
-    { label: "Signals", value: `${unhealthyCount} attention` },
+    {
+      label: resourceFocus.name ? "Focus" : "Signals",
+      value: resourceFocus.name
+        ? `${resourceFocus.kind}/${resourceFocus.name}`
+        : `${unhealthyCount} attention`,
+    },
   ];
   const redactionCount = redacted.findings.reduce((sum, f) => sum + f.count, 0);
 
@@ -240,6 +261,10 @@ export function AiAssistant() {
       </div>
     </LumenPage>
   );
+}
+
+function parseAiTask(value: string | null): AiTask | null {
+  return TASKS.some((task) => task.id === value) ? (value as AiTask) : null;
 }
 
 function ConfigurationPanel({

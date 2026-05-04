@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import {
@@ -14,6 +15,7 @@ import {
   Plus,
   RotateCw,
   ScrollText,
+  Sparkles,
   TerminalSquare,
   Trash2,
   X,
@@ -22,6 +24,7 @@ import { toast } from "sonner";
 import { PinButton } from "@/components/PinButton";
 import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
+import { aiResourceUrl } from "@/lib/aiNavigation";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -86,6 +89,7 @@ export function ResourceDetailDrawer({
   const [actionBusy, setActionBusy] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingResourceAction | null>(null);
   const { openSession } = useShellDock();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const resourceKind = resource?.kind as WorkloadKind | undefined;
   const restartable = isRestartableKind(resource?.kind);
@@ -132,6 +136,11 @@ export function ResourceDetailDrawer({
       container: defaultContainer,
       command: ["/bin/sh"],
     });
+  }
+
+  function askLumen() {
+    if (!resource) return;
+    navigate(aiResourceUrl(ctx, resource));
   }
 
   // Reset when drawer opens for a new resource.
@@ -339,6 +348,7 @@ export function ResourceDetailDrawer({
           onViewLogs={handleViewLogs}
           onDownloadLogs={handleDownloadLogs}
           onShellExec={openShell}
+          onAskLumen={askLumen}
           onEditYaml={() => setActiveTab("yaml")}
           restartable={restartable}
           scalable={scalable}
@@ -452,6 +462,7 @@ function Header({
   onViewLogs,
   onDownloadLogs,
   onShellExec,
+  onAskLumen,
   onEditYaml,
   restartable,
   scalable,
@@ -473,6 +484,7 @@ function Header({
   onViewLogs: () => void;
   onDownloadLogs: () => void;
   onShellExec: () => void;
+  onAskLumen: () => void;
   onEditYaml: () => void;
   restartable: boolean;
   scalable: boolean;
@@ -542,6 +554,11 @@ function Header({
             namespace: resource.namespace,
             name: resource.name,
           }}
+        />
+        <ActionIcon
+          icon={<Sparkles className="size-3.5" />}
+          label="ask Lumen"
+          onClick={onAskLumen}
         />
         <ActionIcon
           icon={<ScrollText className="size-3.5" />}
