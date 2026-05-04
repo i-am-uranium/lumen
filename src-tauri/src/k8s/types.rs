@@ -11,19 +11,28 @@ pub struct ContextInfo {
     pub is_prod: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkloadKind {
     Deployment,
     StatefulSet,
     DaemonSet,
+    ReplicaSet,
+    ReplicationController,
     CronJob,
     Job,
     Pod,
     Service,
     Ingress,
+    Endpoint,
+    EndpointSlice,
     ConfigMap,
     Secret,
+    ServiceAccount,
+    Role,
+    RoleBinding,
+    ClusterRole,
+    ClusterRoleBinding,
     NetworkPolicy,
     #[serde(rename = "persistentvolumeclaim")]
     PersistentVolumeClaim,
@@ -33,6 +42,8 @@ pub enum WorkloadKind {
     PersistentVolume,
     #[serde(rename = "storageclass")]
     StorageClass,
+    #[serde(rename = "volumeattributesclass")]
+    VolumeAttributesClass,
     #[serde(rename = "ingressclass")]
     IngressClass,
     // Namespaced.
@@ -40,6 +51,8 @@ pub enum WorkloadKind {
     ResourceQuota,
     #[serde(rename = "horizontalpodautoscaler")]
     HorizontalPodAutoscaler,
+    #[serde(rename = "verticalpodautoscaler")]
+    VerticalPodAutoscaler,
     // PR D+1 long-tail kinds.
     #[serde(rename = "limitrange")]
     LimitRange,
@@ -47,13 +60,29 @@ pub enum WorkloadKind {
     PodDisruptionBudget,
     #[serde(rename = "priorityclass")]
     PriorityClass,
+    #[serde(rename = "runtimeclass")]
+    RuntimeClass,
+    Lease,
+    #[serde(rename = "controllerrevision")]
+    ControllerRevision,
     #[serde(rename = "mutatingwebhookconfiguration")]
     MutatingWebhookConfiguration,
     #[serde(rename = "validatingwebhookconfiguration")]
     ValidatingWebhookConfiguration,
+    #[serde(rename = "gatewayclass")]
+    GatewayClass,
+    Gateway,
+    #[serde(rename = "httproute")]
+    HttpRoute,
+    #[serde(rename = "grpcroute")]
+    GrpcRoute,
+    #[serde(rename = "jobset")]
+    JobSet,
+    #[serde(rename = "customresourcedefinition")]
+    CustomResourceDefinition,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Health {
     Healthy,
@@ -103,6 +132,61 @@ pub struct ResourceDetail {
     pub summary: WorkloadSummary,
     pub yaml: String,
     pub owner_refs: Vec<OwnerRefLite>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RbacRuleDetail {
+    pub api_groups: Vec<String>,
+    pub resources: Vec<String>,
+    pub resource_names: Vec<String>,
+    pub non_resource_urls: Vec<String>,
+    pub verbs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RbacSubjectDetail {
+    pub kind: String,
+    pub name: String,
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RbacDetail {
+    pub role_ref: Option<String>,
+    pub subjects: Vec<RbacSubjectDetail>,
+    pub rules: Vec<RbacRuleDetail>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageDetail {
+    pub phase: Option<String>,
+    pub capacity: Option<String>,
+    pub access_modes: Vec<String>,
+    pub storage_class: Option<String>,
+    pub volume_name: Option<String>,
+    pub reclaim_policy: Option<String>,
+    pub binding_mode: Option<String>,
+    pub provisioner: Option<String>,
+    pub allow_expansion: Option<bool>,
+    pub claim_ref: Option<String>,
+    pub parameters: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceInsightRow {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceInsightSection {
+    pub title: String,
+    pub rows: Vec<ResourceInsightRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceInsights {
+    pub sections: Vec<ResourceInsightSection>,
 }
 
 // ─── Fleet ───────────────────────────────────────────────────────────────

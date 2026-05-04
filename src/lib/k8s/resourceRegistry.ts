@@ -1,0 +1,566 @@
+import type { WorkloadKind } from "@/lib/k8s";
+
+export type ResourceCategory =
+  | "workloads"
+  | "network"
+  | "config"
+  | "storage"
+  | "rbac"
+  | "policy"
+  | "cluster"
+  | "extend";
+
+export type ResourceDefinition = {
+  kind: WorkloadKind;
+  label: string;
+  singularLabel: string;
+  slug: string;
+  apiGroup: string;
+  version: string;
+  plural: string;
+  namespaced: boolean;
+  category: ResourceCategory;
+  optional?: boolean;
+  supportsLogs?: boolean;
+  supportsShell?: boolean;
+  supportsScale?: boolean;
+  supportsRestart?: boolean;
+  supportsTrigger?: boolean;
+};
+
+export const ALL_RESOURCE_DEFINITIONS: ResourceDefinition[] = [
+  {
+    kind: "pod",
+    label: "Pods",
+    singularLabel: "Pod",
+    slug: "pods",
+    apiGroup: "",
+    version: "v1",
+    plural: "pods",
+    namespaced: true,
+    category: "workloads",
+    supportsLogs: true,
+    supportsShell: true,
+  },
+  {
+    kind: "deployment",
+    label: "Deployments",
+    singularLabel: "Deployment",
+    slug: "deployments",
+    apiGroup: "apps",
+    version: "v1",
+    plural: "deployments",
+    namespaced: true,
+    category: "workloads",
+    supportsScale: true,
+    supportsRestart: true,
+  },
+  {
+    kind: "statefulset",
+    label: "StatefulSets",
+    singularLabel: "StatefulSet",
+    slug: "statefulsets",
+    apiGroup: "apps",
+    version: "v1",
+    plural: "statefulsets",
+    namespaced: true,
+    category: "workloads",
+    supportsLogs: true,
+    supportsScale: true,
+    supportsRestart: true,
+  },
+  {
+    kind: "daemonset",
+    label: "DaemonSets",
+    singularLabel: "DaemonSet",
+    slug: "daemonsets",
+    apiGroup: "apps",
+    version: "v1",
+    plural: "daemonsets",
+    namespaced: true,
+    category: "workloads",
+    supportsLogs: true,
+    supportsRestart: true,
+  },
+  {
+    kind: "replicaset",
+    label: "ReplicaSets",
+    singularLabel: "ReplicaSet",
+    slug: "replicasets",
+    apiGroup: "apps",
+    version: "v1",
+    plural: "replicasets",
+    namespaced: true,
+    category: "workloads",
+    supportsLogs: true,
+    supportsScale: true,
+  },
+  {
+    kind: "replicationcontroller",
+    label: "ReplicationControllers",
+    singularLabel: "ReplicationController",
+    slug: "replicationcontrollers",
+    apiGroup: "",
+    version: "v1",
+    plural: "replicationcontrollers",
+    namespaced: true,
+    category: "workloads",
+    supportsLogs: true,
+    supportsScale: true,
+  },
+  {
+    kind: "job",
+    label: "Jobs",
+    singularLabel: "Job",
+    slug: "jobs",
+    apiGroup: "batch",
+    version: "v1",
+    plural: "jobs",
+    namespaced: true,
+    category: "workloads",
+    supportsLogs: true,
+  },
+  {
+    kind: "cronjob",
+    label: "CronJobs",
+    singularLabel: "CronJob",
+    slug: "cronjobs",
+    apiGroup: "batch",
+    version: "v1",
+    plural: "cronjobs",
+    namespaced: true,
+    category: "workloads",
+    supportsTrigger: true,
+  },
+  {
+    kind: "service",
+    label: "Services",
+    singularLabel: "Service",
+    slug: "services",
+    apiGroup: "",
+    version: "v1",
+    plural: "services",
+    namespaced: true,
+    category: "network",
+  },
+  {
+    kind: "ingress",
+    label: "Ingresses",
+    singularLabel: "Ingress",
+    slug: "ingresses",
+    apiGroup: "networking.k8s.io",
+    version: "v1",
+    plural: "ingresses",
+    namespaced: true,
+    category: "network",
+  },
+  {
+    kind: "ingressclass",
+    label: "Ingress Classes",
+    singularLabel: "Ingress Class",
+    slug: "ingressclasses",
+    apiGroup: "networking.k8s.io",
+    version: "v1",
+    plural: "ingressclasses",
+    namespaced: false,
+    category: "network",
+  },
+  {
+    kind: "endpoint",
+    label: "Endpoints",
+    singularLabel: "Endpoints",
+    slug: "endpoints",
+    apiGroup: "",
+    version: "v1",
+    plural: "endpoints",
+    namespaced: true,
+    category: "network",
+  },
+  {
+    kind: "endpointslice",
+    label: "EndpointSlices",
+    singularLabel: "EndpointSlice",
+    slug: "endpointslices",
+    apiGroup: "discovery.k8s.io",
+    version: "v1",
+    plural: "endpointslices",
+    namespaced: true,
+    category: "network",
+  },
+  {
+    kind: "configmap",
+    label: "ConfigMaps",
+    singularLabel: "ConfigMap",
+    slug: "configmaps",
+    apiGroup: "",
+    version: "v1",
+    plural: "configmaps",
+    namespaced: true,
+    category: "config",
+  },
+  {
+    kind: "secret",
+    label: "Secrets",
+    singularLabel: "Secret",
+    slug: "secrets",
+    apiGroup: "",
+    version: "v1",
+    plural: "secrets",
+    namespaced: true,
+    category: "config",
+  },
+  {
+    kind: "serviceaccount",
+    label: "ServiceAccounts",
+    singularLabel: "ServiceAccount",
+    slug: "serviceaccounts",
+    apiGroup: "",
+    version: "v1",
+    plural: "serviceaccounts",
+    namespaced: true,
+    category: "rbac",
+  },
+  {
+    kind: "role",
+    label: "Roles",
+    singularLabel: "Role",
+    slug: "roles",
+    apiGroup: "rbac.authorization.k8s.io",
+    version: "v1",
+    plural: "roles",
+    namespaced: true,
+    category: "rbac",
+  },
+  {
+    kind: "rolebinding",
+    label: "RoleBindings",
+    singularLabel: "RoleBinding",
+    slug: "rolebindings",
+    apiGroup: "rbac.authorization.k8s.io",
+    version: "v1",
+    plural: "rolebindings",
+    namespaced: true,
+    category: "rbac",
+  },
+  {
+    kind: "clusterrole",
+    label: "ClusterRoles",
+    singularLabel: "ClusterRole",
+    slug: "clusterroles",
+    apiGroup: "rbac.authorization.k8s.io",
+    version: "v1",
+    plural: "clusterroles",
+    namespaced: false,
+    category: "rbac",
+  },
+  {
+    kind: "clusterrolebinding",
+    label: "ClusterRoleBindings",
+    singularLabel: "ClusterRoleBinding",
+    slug: "clusterrolebindings",
+    apiGroup: "rbac.authorization.k8s.io",
+    version: "v1",
+    plural: "clusterrolebindings",
+    namespaced: false,
+    category: "rbac",
+  },
+  {
+    kind: "networkpolicy",
+    label: "Network Policies",
+    singularLabel: "Network Policy",
+    slug: "networkpolicies",
+    apiGroup: "networking.k8s.io",
+    version: "v1",
+    plural: "networkpolicies",
+    namespaced: true,
+    category: "policy",
+  },
+  {
+    kind: "persistentvolumeclaim",
+    label: "PVCs",
+    singularLabel: "PVC",
+    slug: "pvcs",
+    apiGroup: "",
+    version: "v1",
+    plural: "persistentvolumeclaims",
+    namespaced: true,
+    category: "storage",
+  },
+  {
+    kind: "persistentvolume",
+    label: "Persistent Volumes",
+    singularLabel: "Persistent Volume",
+    slug: "pvs",
+    apiGroup: "",
+    version: "v1",
+    plural: "persistentvolumes",
+    namespaced: false,
+    category: "storage",
+  },
+  {
+    kind: "storageclass",
+    label: "Storage Classes",
+    singularLabel: "Storage Class",
+    slug: "storageclasses",
+    apiGroup: "storage.k8s.io",
+    version: "v1",
+    plural: "storageclasses",
+    namespaced: false,
+    category: "storage",
+  },
+  {
+    kind: "volumeattributesclass",
+    label: "VolumeAttributesClasses",
+    singularLabel: "VolumeAttributesClass",
+    slug: "volumeattributesclasses",
+    apiGroup: "storage.k8s.io",
+    version: "v1",
+    plural: "volumeattributesclasses",
+    namespaced: false,
+    category: "storage",
+    optional: true,
+  },
+  {
+    kind: "resourcequota",
+    label: "Resource Quotas",
+    singularLabel: "Resource Quota",
+    slug: "resourcequotas",
+    apiGroup: "",
+    version: "v1",
+    plural: "resourcequotas",
+    namespaced: true,
+    category: "policy",
+  },
+  {
+    kind: "horizontalpodautoscaler",
+    label: "HPAs",
+    singularLabel: "HPA",
+    slug: "hpas",
+    apiGroup: "autoscaling",
+    version: "v2",
+    plural: "horizontalpodautoscalers",
+    namespaced: true,
+    category: "policy",
+  },
+  {
+    kind: "verticalpodautoscaler",
+    label: "VPAs",
+    singularLabel: "VPA",
+    slug: "vpas",
+    apiGroup: "autoscaling.k8s.io",
+    version: "v1",
+    plural: "verticalpodautoscalers",
+    namespaced: true,
+    category: "policy",
+    optional: true,
+  },
+  {
+    kind: "limitrange",
+    label: "Limit Ranges",
+    singularLabel: "Limit Range",
+    slug: "limitranges",
+    apiGroup: "",
+    version: "v1",
+    plural: "limitranges",
+    namespaced: true,
+    category: "policy",
+  },
+  {
+    kind: "poddisruptionbudget",
+    label: "PDBs",
+    singularLabel: "PDB",
+    slug: "pdbs",
+    apiGroup: "policy",
+    version: "v1",
+    plural: "poddisruptionbudgets",
+    namespaced: true,
+    category: "policy",
+  },
+  {
+    kind: "priorityclass",
+    label: "Priority Classes",
+    singularLabel: "Priority Class",
+    slug: "priorityclasses",
+    apiGroup: "scheduling.k8s.io",
+    version: "v1",
+    plural: "priorityclasses",
+    namespaced: false,
+    category: "policy",
+  },
+  {
+    kind: "runtimeclass",
+    label: "Runtime Classes",
+    singularLabel: "Runtime Class",
+    slug: "runtimeclasses",
+    apiGroup: "node.k8s.io",
+    version: "v1",
+    plural: "runtimeclasses",
+    namespaced: false,
+    category: "cluster",
+  },
+  {
+    kind: "lease",
+    label: "Leases",
+    singularLabel: "Lease",
+    slug: "leases",
+    apiGroup: "coordination.k8s.io",
+    version: "v1",
+    plural: "leases",
+    namespaced: true,
+    category: "cluster",
+  },
+  {
+    kind: "controllerrevision",
+    label: "ControllerRevisions",
+    singularLabel: "ControllerRevision",
+    slug: "controllerrevisions",
+    apiGroup: "apps",
+    version: "v1",
+    plural: "controllerrevisions",
+    namespaced: true,
+    category: "cluster",
+  },
+  {
+    kind: "mutatingwebhookconfiguration",
+    label: "Mutating Webhooks",
+    singularLabel: "Mutating Webhook",
+    slug: "mutatingwebhooks",
+    apiGroup: "admissionregistration.k8s.io",
+    version: "v1",
+    plural: "mutatingwebhookconfigurations",
+    namespaced: false,
+    category: "cluster",
+  },
+  {
+    kind: "validatingwebhookconfiguration",
+    label: "Validating Webhooks",
+    singularLabel: "Validating Webhook",
+    slug: "validatingwebhooks",
+    apiGroup: "admissionregistration.k8s.io",
+    version: "v1",
+    plural: "validatingwebhookconfigurations",
+    namespaced: false,
+    category: "cluster",
+  },
+  {
+    kind: "gatewayclass",
+    label: "GatewayClasses",
+    singularLabel: "GatewayClass",
+    slug: "gatewayclasses",
+    apiGroup: "gateway.networking.k8s.io",
+    version: "v1",
+    plural: "gatewayclasses",
+    namespaced: false,
+    category: "network",
+    optional: true,
+  },
+  {
+    kind: "gateway",
+    label: "Gateways",
+    singularLabel: "Gateway",
+    slug: "gateways",
+    apiGroup: "gateway.networking.k8s.io",
+    version: "v1",
+    plural: "gateways",
+    namespaced: true,
+    category: "network",
+    optional: true,
+  },
+  {
+    kind: "httproute",
+    label: "HTTPRoutes",
+    singularLabel: "HTTPRoute",
+    slug: "httproutes",
+    apiGroup: "gateway.networking.k8s.io",
+    version: "v1",
+    plural: "httproutes",
+    namespaced: true,
+    category: "network",
+    optional: true,
+  },
+  {
+    kind: "grpcroute",
+    label: "GRPCRoutes",
+    singularLabel: "GRPCRoute",
+    slug: "grpcroutes",
+    apiGroup: "gateway.networking.k8s.io",
+    version: "v1",
+    plural: "grpcroutes",
+    namespaced: true,
+    category: "network",
+    optional: true,
+  },
+  {
+    kind: "jobset",
+    label: "JobSets",
+    singularLabel: "JobSet",
+    slug: "jobsets",
+    apiGroup: "jobset.x-k8s.io",
+    version: "v1alpha2",
+    plural: "jobsets",
+    namespaced: true,
+    category: "workloads",
+    optional: true,
+  },
+  {
+    kind: "customresourcedefinition",
+    label: "CRDs",
+    singularLabel: "CRD",
+    slug: "crds",
+    apiGroup: "apiextensions.k8s.io",
+    version: "v1",
+    plural: "customresourcedefinitions",
+    namespaced: false,
+    category: "extend",
+  },
+];
+
+const DEFINITIONS_BY_KIND = new Map(
+  ALL_RESOURCE_DEFINITIONS.map((definition) => [definition.kind, definition]),
+);
+
+const DEFINITIONS_BY_SLUG = new Map(
+  ALL_RESOURCE_DEFINITIONS.map((definition) => [definition.slug, definition]),
+);
+
+export const RESOURCE_KIND_BY_SLUG: Record<string, WorkloadKind> =
+  Object.fromEntries(
+    ALL_RESOURCE_DEFINITIONS.map((definition) => [
+      definition.slug,
+      definition.kind,
+    ]),
+  );
+
+export function getResourceDefinition(kind: WorkloadKind): ResourceDefinition {
+  const definition = DEFINITIONS_BY_KIND.get(kind);
+  if (!definition) {
+    throw new Error(`Unknown Kubernetes resource kind: ${kind}`);
+  }
+  return definition;
+}
+
+export function getResourceDefinitionBySlug(
+  slug: string,
+): ResourceDefinition | null {
+  return DEFINITIONS_BY_SLUG.get(slug) ?? null;
+}
+
+export function listResourceDefinitions(filter?: {
+  category?: ResourceCategory;
+}): ResourceDefinition[] {
+  const definitions = filter?.category
+    ? ALL_RESOURCE_DEFINITIONS.filter(
+        (definition) => definition.category === filter.category,
+      )
+    : ALL_RESOURCE_DEFINITIONS;
+
+  return [...definitions];
+}
+
+export function resourceKindToSlug(kind: WorkloadKind): string {
+  return getResourceDefinition(kind).slug;
+}
+
+export function resourceKindLabel(kind: WorkloadKind): string {
+  return getResourceDefinition(kind).label;
+}

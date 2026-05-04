@@ -25,25 +25,45 @@ export type WorkloadKind =
   | "deployment"
   | "statefulset"
   | "daemonset"
+  | "replicaset"
+  | "replicationcontroller"
   | "cronjob"
   | "job"
   | "pod"
   | "service"
   | "ingress"
+  | "endpoint"
+  | "endpointslice"
   | "configmap"
   | "secret"
+  | "serviceaccount"
+  | "role"
+  | "rolebinding"
+  | "clusterrole"
+  | "clusterrolebinding"
   | "networkpolicy"
   | "persistentvolumeclaim"
   | "persistentvolume"
   | "storageclass"
+  | "volumeattributesclass"
   | "ingressclass"
   | "resourcequota"
   | "horizontalpodautoscaler"
+  | "verticalpodautoscaler"
   | "limitrange"
   | "poddisruptionbudget"
   | "priorityclass"
+  | "runtimeclass"
+  | "lease"
+  | "controllerrevision"
   | "mutatingwebhookconfiguration"
-  | "validatingwebhookconfiguration";
+  | "validatingwebhookconfiguration"
+  | "gatewayclass"
+  | "gateway"
+  | "httproute"
+  | "grpcroute"
+  | "jobset"
+  | "customresourcedefinition";
 
 export type Health = "healthy" | "degraded" | "failed" | "unknown";
 
@@ -109,6 +129,54 @@ export type ResourceDetail = {
   summary: WorkloadSummary;
   yaml: string;
   owner_refs: OwnerRefLite[];
+};
+
+export type RbacRuleDetail = {
+  api_groups: string[];
+  resources: string[];
+  resource_names: string[];
+  non_resource_urls: string[];
+  verbs: string[];
+};
+
+export type RbacSubjectDetail = {
+  kind: string;
+  name: string;
+  namespace: string | null;
+};
+
+export type RbacDetail = {
+  role_ref: string | null;
+  subjects: RbacSubjectDetail[];
+  rules: RbacRuleDetail[];
+};
+
+export type StorageDetail = {
+  phase: string | null;
+  capacity: string | null;
+  access_modes: string[];
+  storage_class: string | null;
+  volume_name: string | null;
+  reclaim_policy: string | null;
+  binding_mode: string | null;
+  provisioner: string | null;
+  allow_expansion: boolean | null;
+  claim_ref: string | null;
+  parameters: Record<string, string>;
+};
+
+export type ResourceInsightRow = {
+  label: string;
+  value: string;
+};
+
+export type ResourceInsightSection = {
+  title: string;
+  rows: ResourceInsightRow[];
+};
+
+export type ResourceInsights = {
+  sections: ResourceInsightSection[];
 };
 
 // ─── Fleet ────────────────────────────────────────────────────────────────
@@ -223,6 +291,21 @@ export type SecurityReport = {
   scanned_at_ms: number;
   counts_by_severity: Record<string, number>;
   resources_scanned: number;
+};
+
+export type AccessReviewRequest = {
+  kind: WorkloadKind;
+  verb: string;
+  namespace?: string | null;
+  name?: string | null;
+  subresource?: string | null;
+};
+
+export type AccessReviewResult = {
+  allowed: boolean;
+  denied: boolean;
+  reason: string | null;
+  evaluation_error: string | null;
 };
 
 // ─── CRD Browser ──────────────────────────────────────────────────────────
@@ -402,6 +485,38 @@ export const k8s = {
     invoke<CloudMap>("cloud_map", { context, namespace }),
   securityScan: (context?: string) =>
     invoke<SecurityReport>("security_scan", { context }),
+  checkAccess: (request: AccessReviewRequest, context?: string) =>
+    invoke<AccessReviewResult>("check_access", { request, context }),
+  getRbacDetails: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) => invoke<RbacDetail>("get_rbac_details", { namespace, kind, name, context }),
+  getStorageDetails: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) =>
+    invoke<StorageDetail>("get_storage_details", {
+      namespace,
+      kind,
+      name,
+      context,
+    }),
+  getResourceInsights: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) =>
+    invoke<ResourceInsights>("get_resource_insights", {
+      namespace,
+      kind,
+      name,
+      context,
+    }),
   listCrds: (context?: string) => invoke<CrdSummary[]>("list_crds", { context }),
   listCrInstances: (
     group: string,
@@ -493,6 +608,12 @@ export const k8s = {
     }),
   deletePod: (namespace: string, name: string, context?: string) =>
     invoke<void>("delete_pod", { namespace, name, context }),
+  deleteResource: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) => invoke<void>("delete_resource", { namespace, kind, name, context }),
   listPodContainers: (namespace: string, pod: string, context?: string) =>
     invoke<PodContainerInfo[]>("list_pod_containers", { namespace, pod, context }),
   startPortForward: (opts: {

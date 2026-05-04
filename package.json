@@ -6,7 +6,7 @@
     "type": "git",
     "url": "git+https://github.com/i-am-uranium/lumen.git"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "version": "0.6.0",
   "type": "module",
   "scripts": {
@@ -16,7 +16,8 @@
     "tauri": "tauri",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "perf:bundle": "node scripts/check-bundle-budget.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",

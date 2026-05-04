@@ -9,6 +9,7 @@
 //! through a separate command behind an explicit confirmation flow.
 
 use crate::error::{AppError, AppResult};
+use crate::k8s::time;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::{
     CustomResourceDefinition, CustomResourceDefinitionVersion,
 };
@@ -73,12 +74,7 @@ pub async fn list_crds(client: &Client) -> AppResult<Vec<CrdSummary>> {
             let scope = spec.scope.clone();
             let versions: Vec<String> = spec.versions.iter().map(|v| v.name.clone()).collect();
             let preferred = preferred_version(&spec.versions);
-            let age = crd
-                .metadata
-                .creation_timestamp
-                .as_ref()
-                .map(|t| (chrono::Utc::now() - t.0).num_seconds().max(0))
-                .unwrap_or(0);
+            let age = time::age_seconds(crd.metadata.creation_timestamp.as_ref());
             CrdSummary {
                 name,
                 group,
@@ -151,12 +147,7 @@ pub async fn list_instances(
         .items
         .into_iter()
         .map(|obj| {
-            let age = obj
-                .metadata
-                .creation_timestamp
-                .as_ref()
-                .map(|t| (chrono::Utc::now() - t.0).num_seconds().max(0))
-                .unwrap_or(0);
+            let age = time::age_seconds(obj.metadata.creation_timestamp.as_ref());
             let status_hint = status_hint_of(&obj);
             CrInstance {
                 name: obj.metadata.name.clone().unwrap_or_default(),

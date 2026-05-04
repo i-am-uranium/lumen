@@ -129,9 +129,21 @@ pub async fn watch_workloads(
         }};
     }
 
-    spawn_kind!(Deployment, crate::k8s::resources::deployment_summary, "Deployment");
-    spawn_kind!(StatefulSet, crate::k8s::resources::statefulset_summary, "StatefulSet");
-    spawn_kind!(DaemonSet, crate::k8s::resources::daemonset_summary, "DaemonSet");
+    spawn_kind!(
+        Deployment,
+        crate::k8s::resources::deployment_summary,
+        "Deployment"
+    );
+    spawn_kind!(
+        StatefulSet,
+        crate::k8s::resources::statefulset_summary,
+        "StatefulSet"
+    );
+    spawn_kind!(
+        DaemonSet,
+        crate::k8s::resources::daemonset_summary,
+        "DaemonSet"
+    );
     spawn_kind!(CronJob, crate::k8s::resources::cronjob_summary, "CronJob");
     spawn_kind!(Job, crate::k8s::resources::job_summary, "Job");
     spawn_kind!(Pod, crate::k8s::resources::pod_summary, "Pod");

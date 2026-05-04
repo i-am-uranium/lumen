@@ -144,8 +144,7 @@ struct MetricsCache {
     pods: HashMap<String, CacheEntry<Vec<PodUsage>>>,
 }
 
-static CACHE: LazyLock<Mutex<MetricsCache>> =
-    LazyLock::new(|| Mutex::new(MetricsCache::default()));
+static CACHE: LazyLock<Mutex<MetricsCache>> = LazyLock::new(|| Mutex::new(MetricsCache::default()));
 
 fn ttl_for(value: &Option<impl Sized>) -> Duration {
     if value.is_some() {
@@ -173,28 +172,26 @@ pub async fn node_usage(client: &Client, ctx: &str) -> Option<Vec<NodeUsage>> {
         }
     }
 
-    let value: Option<Vec<NodeUsage>> = match get_raw::<MetricsList<NodeMetricsItem>>(
-        client,
-        "/apis/metrics.k8s.io/v1beta1/nodes",
-    )
-    .await
-    {
-        Some(list) => Some(
-            list.items
-                .into_iter()
-                .filter_map(|n| {
-                    let cpu = n.usage.cpu.as_deref().and_then(parse_cpu_milli)?;
-                    let mem = n.usage.memory.as_deref().and_then(parse_memory_bytes)?;
-                    Some(NodeUsage {
-                        name: n.metadata.name,
-                        cpu_milli: cpu,
-                        mem_bytes: mem,
+    let value: Option<Vec<NodeUsage>> =
+        match get_raw::<MetricsList<NodeMetricsItem>>(client, "/apis/metrics.k8s.io/v1beta1/nodes")
+            .await
+        {
+            Some(list) => Some(
+                list.items
+                    .into_iter()
+                    .filter_map(|n| {
+                        let cpu = n.usage.cpu.as_deref().and_then(parse_cpu_milli)?;
+                        let mem = n.usage.memory.as_deref().and_then(parse_memory_bytes)?;
+                        Some(NodeUsage {
+                            name: n.metadata.name,
+                            cpu_milli: cpu,
+                            mem_bytes: mem,
+                        })
                     })
-                })
-                .collect(),
-        ),
-        None => None,
-    };
+                    .collect(),
+            ),
+            None => None,
+        };
 
     if let Ok(mut c) = CACHE.lock() {
         c.nodes.insert(
@@ -217,37 +214,40 @@ pub async fn pod_usage(client: &Client, ctx: &str) -> Option<Vec<PodUsage>> {
         }
     }
 
-    let value: Option<Vec<PodUsage>> = match get_raw::<MetricsList<PodMetricsItem>>(
-        client,
-        "/apis/metrics.k8s.io/v1beta1/pods",
-    )
-    .await
-    {
-        Some(list) => Some(
-            list.items
-                .into_iter()
-                .map(|p| {
-                    let (cpu, mem) = p.containers.iter().fold((0i64, 0i64), |(c, m), ctr| {
-                        let cpu = ctr.usage.cpu.as_deref().and_then(parse_cpu_milli).unwrap_or(0);
-                        let mem = ctr
-                            .usage
-                            .memory
-                            .as_deref()
-                            .and_then(parse_memory_bytes)
-                            .unwrap_or(0);
-                        (c + cpu, m + mem)
-                    });
-                    PodUsage {
-                        name: p.metadata.name,
-                        namespace: p.metadata.namespace.unwrap_or_default(),
-                        cpu_milli: cpu,
-                        mem_bytes: mem,
-                    }
-                })
-                .collect(),
-        ),
-        None => None,
-    };
+    let value: Option<Vec<PodUsage>> =
+        match get_raw::<MetricsList<PodMetricsItem>>(client, "/apis/metrics.k8s.io/v1beta1/pods")
+            .await
+        {
+            Some(list) => Some(
+                list.items
+                    .into_iter()
+                    .map(|p| {
+                        let (cpu, mem) = p.containers.iter().fold((0i64, 0i64), |(c, m), ctr| {
+                            let cpu = ctr
+                                .usage
+                                .cpu
+                                .as_deref()
+                                .and_then(parse_cpu_milli)
+                                .unwrap_or(0);
+                            let mem = ctr
+                                .usage
+                                .memory
+                                .as_deref()
+                                .and_then(parse_memory_bytes)
+                                .unwrap_or(0);
+                            (c + cpu, m + mem)
+                        });
+                        PodUsage {
+                            name: p.metadata.name,
+                            namespace: p.metadata.namespace.unwrap_or_default(),
+                            cpu_milli: cpu,
+                            mem_bytes: mem,
+                        }
+                    })
+                    .collect(),
+            ),
+            None => None,
+        };
 
     if let Ok(mut c) = CACHE.lock() {
         c.pods.insert(

@@ -1,6 +1,6 @@
 import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Cpu, MemoryStick, RefreshCw, Server } from "lucide-react";
+import { Cpu, MemoryStick, RefreshCw, Server, SignalZero } from "lucide-react";
 import { k8s, type NodeSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
@@ -137,6 +137,10 @@ export function NodesView() {
     command: "watch_nodes",
     args: { context: context || undefined },
   });
+  const nodes = data ?? [];
+  const metricsUnavailable =
+    nodes.length > 0 &&
+    nodes.every((node) => node.cpu_usage_milli === null && node.mem_usage_bytes === null);
 
   return (
     <div className="h-full overflow-auto">
@@ -164,45 +168,55 @@ export function NodesView() {
           </div>
         ) : isLoading ? (
           <div className="text-[13px] text-term-muted">loading nodes...</div>
-        ) : (data ?? []).length === 0 ? (
+        ) : nodes.length === 0 ? (
           <div className="text-[13px] text-term-muted">no nodes found.</div>
         ) : (
-          <div className="rounded-lg border border-term-border-soft overflow-hidden">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-term-panel">
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
-                    node
-                  </th>
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
-                    version
-                  </th>
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
-                    arch
-                  </th>
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
-                    <Cpu className="size-3 inline mr-1" />
-                    cpu
-                  </th>
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
-                    <MemoryStick className="size-3 inline mr-1" />
-                    mem
-                  </th>
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
-                    pods
-                  </th>
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
-                    taints
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data ?? []).map((n) => (
-                  <Row key={n.name} n={n} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            {metricsUnavailable ? (
+              <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
+                <SignalZero className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  metrics-server is unavailable; showing allocatable capacity only.
+                </span>
+              </div>
+            ) : null}
+            <div className="rounded-lg border border-term-border-soft overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-term-panel">
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+                      node
+                    </th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+                      version
+                    </th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+                      arch
+                    </th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+                      <Cpu className="size-3 inline mr-1" />
+                      cpu
+                    </th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+                      <MemoryStick className="size-3 inline mr-1" />
+                      mem
+                    </th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+                      pods
+                    </th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+                      taints
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nodes.map((n) => (
+                    <Row key={n.name} n={n} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>

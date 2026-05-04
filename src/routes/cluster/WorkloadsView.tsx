@@ -9,70 +9,21 @@ import { YamlModal } from "@/components/YamlModal";
 import { PinButton } from "@/components/PinButton";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import { useRecentResources } from "@/hooks/useRecentResources";
+import { RESOURCE_KIND_BY_SLUG, listResourceDefinitions, resourceKindLabel } from "@/lib/k8s/resourceRegistry";
 
 // ─── URL slug ↔ WorkloadKind ──────────────────────────────────────────────
 
-const SLUG_TO_KIND: Record<string, WorkloadKind> = {
-  pods: "pod",
-  deployments: "deployment",
-  statefulsets: "statefulset",
-  daemonsets: "daemonset",
-  jobs: "job",
-  cronjobs: "cronjob",
-  // Config / Network / Storage groups (PR B v1).
-  configmaps: "configmap",
-  secrets: "secret",
-  services: "service",
-  ingresses: "ingress",
-  networkpolicies: "networkpolicy",
-  pvcs: "persistentvolumeclaim",
-  // Cluster-scoped + extended (PR D).
-  pvs: "persistentvolume",
-  storageclasses: "storageclass",
-  ingressclasses: "ingressclass",
-  resourcequotas: "resourcequota",
-  hpas: "horizontalpodautoscaler",
-  // PR D+1 long-tail kinds.
-  limitranges: "limitrange",
-  pdbs: "poddisruptionbudget",
-  priorityclasses: "priorityclass",
-  mutatingwebhooks: "mutatingwebhookconfiguration",
-  validatingwebhooks: "validatingwebhookconfiguration",
-};
+const SLUG_TO_KIND = RESOURCE_KIND_BY_SLUG;
 
 const ALL_KINDS: WorkloadKind[] = [
-  "pod",
-  "deployment",
-  "statefulset",
-  "daemonset",
-  "job",
-  "cronjob",
+  ...listResourceDefinitions({ category: "workloads" })
+    .filter((definition) =>
+      ["pod", "deployment", "statefulset", "daemonset", "job", "cronjob"].includes(
+        definition.kind,
+      ),
+    )
+    .map((definition) => definition.kind),
 ];
-
-const KIND_LABEL: Record<WorkloadKind, string> = {
-  pod: "Pods",
-  deployment: "Deployments",
-  statefulset: "StatefulSets",
-  daemonset: "DaemonSets",
-  job: "Jobs",
-  cronjob: "CronJobs",
-  service: "Services",
-  ingress: "Ingresses",
-  configmap: "ConfigMaps",
-  secret: "Secrets",
-  networkpolicy: "Network Policies",
-  persistentvolumeclaim: "PVCs",
-  persistentvolume: "Persistent Volumes",
-  storageclass: "Storage Classes",
-  ingressclass: "Ingress Classes",
-  resourcequota: "Resource Quotas",
-  horizontalpodautoscaler: "HPAs",
-  limitrange: "Limit Ranges",
-  poddisruptionbudget: "PDBs",
-  priorityclass: "Priority Classes",
-  mutatingwebhookconfiguration: "Mutating Webhooks",
-  validatingwebhookconfiguration: "Validating Webhooks",
-};
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -617,7 +568,7 @@ export function WorkloadsView() {
 
   // ─── render ─────────────────────────────────────────────────────────────
 
-  const title = filterKind ? KIND_LABEL[filterKind].toLowerCase() : "workloads";
+  const title = filterKind ? resourceKindLabel(filterKind).toLowerCase() : "workloads";
   const nsLabel = namespace || "all namespaces";
 
   return (
@@ -709,7 +660,7 @@ export function WorkloadsView() {
             <span>
               {hasFilters
                 ? `no matches in ${nsLabel}`
-                : `no ${filterKind ? KIND_LABEL[filterKind].toLowerCase() : "workloads"} in ${nsLabel}`}
+                : `no ${filterKind ? resourceKindLabel(filterKind).toLowerCase() : "workloads"} in ${nsLabel}`}
             </span>
             {hasFilters && (
               <button
@@ -790,13 +741,18 @@ export function WorkloadsView() {
           yaml={yamlQuery.data?.yaml}
           loading={yamlQuery.isLoading}
           error={yamlQuery.error ? (yamlQuery.error as Error).message : null}
+          sensitive={selected.kind === "secret"}
           onClose={() => setSelected(null)}
-          editable={{
-            namespace: selected.namespace,
-            kind: selected.kind,
-            name: selected.name,
-            context: context || undefined,
-          }}
+          editable={
+            selected.kind === "secret"
+              ? undefined
+              : {
+                  namespace: selected.namespace,
+                  kind: selected.kind,
+                  name: selected.name,
+                  context: context || undefined,
+                }
+          }
           pinSlot={
             <PinButton
               ctx={context}

@@ -2,6 +2,8 @@
 
 Lumen is an open source desktop workbench for Kubernetes clusters. It gives operators and developers a fast local UI for cluster discovery, workload triage, logs, events, YAML inspection, port forwarding, Helm release operations, and pod shell sessions.
 
+Lumen exists for teams and individuals who want a capable Kubernetes dashboard without sending cluster access through a hosted SaaS control plane.
+
 ## Scope
 
 Lumen is intentionally local-first:
@@ -10,6 +12,29 @@ Lumen is intentionally local-first:
 - Talks directly to Kubernetes APIs from the Tauri app.
 - Does not require a hosted backend, gateway, or SaaS account.
 - Keeps cluster state and UI preferences on the user's machine.
+
+## Features
+
+- Multi-context fleet view with health probes and soft-disconnect.
+- Namespace-aware workload explorer for core Kubernetes resources and long-tail resource families.
+- Resource detail drawer with events, YAML, labels, owner references, pod metrics, container state, and kind-specific insights.
+- Rich detail views for RBAC, storage, services, ingress, NetworkPolicy, HPA, PDB, ResourceQuota, and LimitRange resources.
+- Logs with virtualized rendering, search, pause/resume, bounded buffers, and multi-workload streams.
+- Pod shell sessions via Kubernetes attach, with lazy-loaded terminal code.
+- Port forwarding for Pods and Services.
+- Helm release list, details, history, install, upgrade, rollback, and uninstall flows.
+- CRD discovery and custom resource YAML inspection.
+- DevSec scan for workload security context, mutable images, missing probes/limits, NetworkPolicy coverage, risky services, and RBAC risks.
+- RBAC-aware mutating actions for YAML apply and generic resource delete.
+- Secret YAML redaction by default.
+
+## Security Model
+
+- No hosted backend: the app talks to the Kubernetes API directly from the local desktop process.
+- Uses the user's kubeconfig and current Kubernetes RBAC permissions.
+- Write operations are narrow, explicit, and guarded with RBAC checks where supported.
+- Secret resource YAML redacts `data`, `stringData`, and `binaryData` before rendering.
+- See [docs/security/SECURITY_MODEL.md](docs/security/SECURITY_MODEL.md) and [SECURITY.md](SECURITY.md).
 
 ## Tech Stack
 
@@ -34,26 +59,34 @@ Run the desktop shell:
 npm run tauri dev
 ```
 
+Create a local kind fixture cluster:
+
+```bash
+./scripts/kind-fixture.sh
+```
+
+Then select context `kind-lumen-dev` and namespace `lumen-demo`. See [docs/development/local-cluster.md](docs/development/local-cluster.md).
+
 Run checks:
 
 ```bash
 npm run lint
 npm run test
+npm run build
+npm run perf:bundle
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-## Performance Direction
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-The current architecture is already pointed in the right direction for a cluster workbench: route-level code splitting, React Query cache reuse, virtualized logs, coalesced log stream updates, Rust-side watch streams, and local Tauri commands avoid a backend hop.
+## Performance
 
-The next high-impact optimizations are:
+The current architecture is built for large-cluster use: route-level code splitting, React Query cache reuse, virtualized logs, coalesced log stream updates, Rust-side watch streams, and local Tauri commands avoid a backend hop.
 
-- Keep all large lists virtualized, including CRD and event-heavy screens.
-- Prefer watch-driven invalidation over frequent polling.
-- Bound log buffers and event buffers per stream.
-- Move CPU-heavy graph layout and security scans off the UI thread where practical.
-- Add lightweight tracing around slow Kubernetes calls so unreachable contexts do not degrade the whole fleet view.
+CI enforces bundle budgets for the main app chunk, terminal chunk, and workloads route with `npm run perf:bundle`.
 
 ## License
 
-MIT
+Apache-2.0

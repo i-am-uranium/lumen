@@ -13,6 +13,7 @@
 //! * The emitted kubeconfig contains the token. Treat it as a secret.
 
 use crate::error::{AppError, AppResult};
+use crate::k8s::time;
 use k8s_openapi::api::authentication::v1::{TokenRequest, TokenRequestSpec};
 use k8s_openapi::api::core::v1::ServiceAccount;
 use k8s_openapi::api::rbac::v1::{
@@ -108,17 +109,13 @@ pub struct TeamAccessResult {
 
 fn validate_member_id(s: &str) -> AppResult<()> {
     if s.is_empty() || s.len() > 40 {
-        return Err(AppError::Internal(
-            "member_id must be 1-40 chars".into(),
-        ));
+        return Err(AppError::Internal("member_id must be 1-40 chars".into()));
     }
     if !s
         .bytes()
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
     {
-        return Err(AppError::Internal(
-            "member_id must match [a-z0-9-]+".into(),
-        ));
+        return Err(AppError::Internal("member_id must match [a-z0-9-]+".into()));
     }
     if s.starts_with('-') || s.ends_with('-') {
         return Err(AppError::Internal(
@@ -138,7 +135,10 @@ fn binding_name(member: &str, ns: &str) -> String {
     format!("lumen-team-{member}-{ns}")
 }
 
-fn lumen_labels(member: &str, template: AccessTemplate) -> std::collections::BTreeMap<String, String> {
+fn lumen_labels(
+    member: &str,
+    template: AccessTemplate,
+) -> std::collections::BTreeMap<String, String> {
     let mut m = std::collections::BTreeMap::new();
     m.insert(LUMEN_MANAGED_LABEL.into(), LUMEN_MANAGED_VALUE.into());
     m.insert(LUMEN_OWNER_LABEL.into(), member.to_string());
@@ -171,10 +171,7 @@ async fn issue_long_lived_token(
     let name = token_secret_name(member);
 
     let mut annotations = std::collections::BTreeMap::new();
-    annotations.insert(
-        "kubernetes.io/service-account.name".into(),
-        sa.to_string(),
-    );
+    annotations.insert("kubernetes.io/service-account.name".into(), sa.to_string());
 
     let secret = Secret {
         metadata: ObjectMeta {
@@ -407,21 +404,31 @@ async fn upsert_cluster_role(
     Ok(())
 }
 
-async fn upsert_binding_to_role(
-    client: &Client,
-    ns: &str,
-    binding_name: &str,
-    role_name: &str,
-    sa_name: &str,
-    sa_ns: &str,
-    member: &str,
+struct RoleBindingTarget<'a> {
+    namespace: &'a str,
+    binding_name: &'a str,
+    role_name: &'a str,
+    service_account_name: &'a str,
+    service_account_namespace: &'a str,
+    member: &'a str,
     template: AccessTemplate,
-) -> AppResult<()> {
-    let api: Api<RoleBinding> = Api::namespaced(client.clone(), ns);
+}
+
+async fn upsert_binding_to_role(client: &Client, target: RoleBindingTarget<'_>) -> AppResult<()> {
+    let RoleBindingTarget {
+        namespace,
+        binding_name,
+        role_name,
+        service_account_name,
+        service_account_namespace,
+        member,
+        template,
+    } = target;
+    let api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
     let rb = RoleBinding {
         metadata: ObjectMeta {
             name: Some(binding_name.into()),
-            namespace: Some(ns.into()),
+            namespace: Some(namespace.into()),
             labels: Some(lumen_labels(member, template)),
             ..Default::default()
         },
@@ -432,8 +439,8 @@ async fn upsert_binding_to_role(
         },
         subjects: Some(vec![Subject {
             kind: "ServiceAccount".into(),
-            name: sa_name.into(),
-            namespace: Some(sa_ns.into()),
+            name: service_account_name.into(),
+            namespace: Some(service_account_namespace.into()),
             api_group: None,
         }]),
     };
@@ -486,9 +493,7 @@ async fn issue_token(
     sa_name: &str,
     ttl_seconds: i64,
 ) -> AppResult<(String, String)> {
-    let path = format!(
-        "/api/v1/namespaces/{ns}/serviceaccounts/{sa_name}/token"
-    );
+    let path = format!("/api/v1/namespaces/{ns}/serviceaccounts/{sa_name}/token");
     let tr = TokenRequest {
         metadata: ObjectMeta::default(),
         spec: TokenRequestSpec {
@@ -513,7 +518,7 @@ async fn issue_token(
     let status = resp
         .status
         .ok_or_else(|| AppError::K8s("TokenRequest returned no status".into()))?;
-    Ok((status.token, status.expiration_timestamp.0.to_rfc3339()))
+    Ok((status.token, time::rfc3339(&status.expiration_timestamp)))
 }
 
 /// Produce a kubeconfig YAML string using the token and the cluster endpoint
@@ -570,7 +575,9 @@ fn extract_cluster_endpoint(
         .clusters
         .iter()
         .find(|c| c.name == ctx.cluster)
-        .ok_or_else(|| AppError::Kubeconfig(format!("cluster '{}' not in kubeconfig", ctx.cluster)))?
+        .ok_or_else(|| {
+            AppError::Kubeconfig(format!("cluster '{}' not in kubeconfig", ctx.cluster))
+        })?
         .cluster
         .clone()
         .ok_or_else(|| AppError::Kubeconfig("cluster entry empty".into()))?;
@@ -651,13 +658,15 @@ pub async fn provision(
             let bn = binding_name(&req.member_id, ns);
             upsert_binding_to_role(
                 client,
-                ns,
-                &bn,
-                &role,
-                &sa,
-                &sa_ns,
-                &req.member_id,
-                req.template,
+                RoleBindingTarget {
+                    namespace: ns,
+                    binding_name: &bn,
+                    role_name: &role,
+                    service_account_name: &sa,
+                    service_account_namespace: &sa_ns,
+                    member: &req.member_id,
+                    template: req.template,
+                },
             )
             .await?;
             created.push(CreatedObject {
@@ -671,8 +680,7 @@ pub async fn provision(
     // 2. Issue the token. Long-lived uses a Secret-typed token; short-lived
     //    uses the TokenRequest subresource.
     let (token, expires_at) = if req.long_lived {
-        let tok =
-            issue_long_lived_token(client, &sa_ns, &sa, &req.member_id, req.template).await?;
+        let tok = issue_long_lived_token(client, &sa_ns, &sa, &req.member_id, req.template).await?;
         created.push(CreatedObject {
             kind: "Secret".into(),
             name: token_secret_name(&req.member_id),
@@ -755,10 +763,7 @@ pub async fn renew_token(
         TokenMode::Short => issue_token(client, &sa_ns, &sa, ttl_seconds).await?,
         TokenMode::Long => {
             let t = read_long_lived_token(client, &sa_ns, member_id).await?;
-            (
-                t,
-                "never (long-lived — revoke to invalidate)".to_string(),
-            )
+            (t, "never (long-lived — revoke to invalidate)".to_string())
         }
     };
 
@@ -963,7 +968,9 @@ fn pick_owner(labels: &std::collections::BTreeMap<String, String>) -> Option<Str
 }
 
 fn pick_template(labels: &std::collections::BTreeMap<String, String>) -> Option<AccessTemplate> {
-    labels.get(LUMEN_TEMPLATE_LABEL).and_then(|s| template_from_str(s))
+    labels
+        .get(LUMEN_TEMPLATE_LABEL)
+        .and_then(|s| template_from_str(s))
 }
 
 fn labels_of(
@@ -976,10 +983,7 @@ fn labels_of(
 }
 
 fn age_of(meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> i64 {
-    meta.creation_timestamp
-        .as_ref()
-        .map(|t| (chrono::Utc::now() - t.0).num_seconds().max(0))
-        .unwrap_or(0)
+    time::age_seconds(meta.creation_timestamp.as_ref())
 }
 
 pub async fn list_grants(client: &Client) -> AppResult<Vec<TeamGrant>> {
@@ -990,20 +994,11 @@ pub async fn list_grants(client: &Client) -> AppResult<Vec<TeamGrant>> {
     let rb_api: Api<RoleBinding> = Api::all(client.clone());
     let crb_api: Api<ClusterRoleBinding> = Api::all(client.clone());
 
-    let (sa_list, rb_list, crb_list) = tokio::join!(
-        sa_api.list(&lp),
-        rb_api.list(&lp),
-        crb_api.list(&lp),
-    );
-    let sa_items = sa_list
-        .map_err(|e| AppError::K8s(e.to_string()))?
-        .items;
-    let rb_items = rb_list
-        .map_err(|e| AppError::K8s(e.to_string()))?
-        .items;
-    let crb_items = crb_list
-        .map_err(|e| AppError::K8s(e.to_string()))?
-        .items;
+    let (sa_list, rb_list, crb_list) =
+        tokio::join!(sa_api.list(&lp), rb_api.list(&lp), crb_api.list(&lp),);
+    let sa_items = sa_list.map_err(|e| AppError::K8s(e.to_string()))?.items;
+    let rb_items = rb_list.map_err(|e| AppError::K8s(e.to_string()))?.items;
+    let crb_items = crb_list.map_err(|e| AppError::K8s(e.to_string()))?.items;
 
     // Roll up everything by member id.
     use std::collections::BTreeMap;
@@ -1117,9 +1112,7 @@ mod tests {
     #[test]
     fn editor_rules_include_write_verbs() {
         let rules = rules_for(AccessTemplate::Editor);
-        let has_create = rules
-            .iter()
-            .any(|r| r.verbs.iter().any(|v| v == "create"));
+        let has_create = rules.iter().any(|r| r.verbs.iter().any(|v| v == "create"));
         assert!(has_create);
     }
 

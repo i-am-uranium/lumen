@@ -165,10 +165,12 @@ pub async fn stream_logs(
     channel: Channel<LogLine>,
     cancel: CancellationToken,
 ) -> AppResult<()> {
-    let mut params = LogParams::default();
-    params.follow = true;
-    params.tail_lines = selector.tail_lines.or(Some(200));
-    params.since_seconds = selector.since_seconds;
+    let params = LogParams {
+        follow: true,
+        tail_lines: selector.tail_lines.or(Some(200)),
+        since_seconds: selector.since_seconds,
+        ..Default::default()
+    };
 
     // Single-pod path: one-shot, no polling needed.
     if let Some(pod) = selector.pod_name.clone() {

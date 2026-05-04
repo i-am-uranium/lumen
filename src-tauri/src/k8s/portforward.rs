@@ -204,9 +204,9 @@ async fn pipe_one(
         .portforward(&pod, &[pod_port])
         .await
         .map_err(|e| AppError::K8s(format!("open port-forward: {e}")))?;
-    let upstream = pf
-        .take_stream(pod_port)
-        .ok_or_else(|| AppError::K8s("kube did not return a stream for the requested port".into()))?;
+    let upstream = pf.take_stream(pod_port).ok_or_else(|| {
+        AppError::K8s("kube did not return a stream for the requested port".into())
+    })?;
 
     let (mut up_r, mut up_w) = tokio::io::split(upstream);
     let (mut tcp_r, mut tcp_w) = tcp.split();
@@ -237,7 +237,7 @@ async fn pipe_one(
     result
 }
 
-async fn listener_loop(
+struct ListenerLoopInput {
     registry: Arc<ForwardRegistry>,
     id: String,
     client: Client,
@@ -246,7 +246,19 @@ async fn listener_loop(
     pod_port: u16,
     listener: TcpListener,
     cancel: CancellationToken,
-) {
+}
+
+async fn listener_loop(input: ListenerLoopInput) {
+    let ListenerLoopInput {
+        registry,
+        id,
+        client,
+        namespace,
+        pod,
+        pod_port,
+        listener,
+        cancel,
+    } = input;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -305,18 +317,11 @@ pub async fn start(
     // bind-in-use errors immediately.
     let listener = TcpListener::bind(("127.0.0.1", req.local_port))
         .await
-        .map_err(|e| {
-            AppError::K8s(format!(
-                "cannot bind local port {}: {e}",
-                req.local_port
-            ))
-        })?;
+        .map_err(|e| AppError::K8s(format!("cannot bind local port {}: {e}", req.local_port)))?;
 
     let id = format!(
         "pf-{}-{}-{}",
-        req.namespace,
-        req.target_name,
-        req.local_port
+        req.namespace, req.target_name, req.local_port
     );
     let session = ForwardSession {
         id: id.clone(),
@@ -350,7 +355,17 @@ pub async fn start(
     let id_clone = id.clone();
     let ns = req.namespace.clone();
     tokio::spawn(async move {
-        listener_loop(reg, id_clone, client, ns, pod_name, pod_port, listener, cancel).await;
+        listener_loop(ListenerLoopInput {
+            registry: reg,
+            id: id_clone,
+            client,
+            namespace: ns,
+            pod: pod_name,
+            pod_port,
+            listener,
+            cancel,
+        })
+        .await;
     });
 
     Ok(session)

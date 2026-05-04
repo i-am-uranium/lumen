@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
@@ -8,12 +8,14 @@ import {
   Pencil,
   ScrollText,
   TerminalSquare,
+  Trash2,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import { PinButton } from "@/components/PinButton";
 import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
-import { k8s, type ContainerInfo } from "@/lib/k8s";
+import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 
 // ─── Lumen-distinct touches vs Lens ────────────────────────────────────
@@ -42,7 +44,9 @@ export function ResourceDetailDrawer({
   const showLogsTab = isPod || ["deployment", "statefulset", "daemonset", "replicaset", "job"].includes(resource?.kind ?? "");
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
   const [downloading, setDownloading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { openSession } = useShellDock();
+  const qc = useQueryClient();
 
   // Pre-load pod-details so the Shell action can pick a default container
   // synchronously. SeverityStrip already runs the same query, so this is a
@@ -109,6 +113,30 @@ export function ResourceDetailDrawer({
     setActiveTab("logs");
   }
 
+  async function handleDelete() {
+    if (!resource || deleting) return;
+    const ok = window.confirm(
+      `Delete ${resource.kind}/${resource.name} from ${resource.namespace || "cluster scope"} in ${ctx}?`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await k8s.deleteResource(
+        resource.namespace,
+        resource.kind as WorkloadKind,
+        resource.name,
+        ctx,
+      );
+      toast.success(`deleted ${resource.kind}/${resource.name}`);
+      await qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
+      await qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   async function handleDownloadLogs() {
     if (!resource || downloading) return;
@@ -230,6 +258,8 @@ export function ResourceDetailDrawer({
           onDownloadLogs={handleDownloadLogs}
           onShellExec={openShell}
           onEditYaml={() => setActiveTab("yaml")}
+          deleting={deleting}
+          onDelete={handleDelete}
           onClose={onClose}
         />
         <Tabs activeTab={activeTab} onChange={setActiveTab} showLogsTab={showLogsTab} />
@@ -293,6 +323,8 @@ function Header({
   onDownloadLogs,
   onShellExec,
   onEditYaml,
+  deleting,
+  onDelete,
   onClose,
 }: {
   titleId: string;
@@ -304,9 +336,37 @@ function Header({
   onDownloadLogs: () => void;
   onShellExec: () => void;
   onEditYaml: () => void;
+  deleting: boolean;
+  onDelete: () => void;
   onClose: () => void;
 }) {
+  const kind = resource?.kind as WorkloadKind | undefined;
+  const canDelete = useQuery({
+    queryKey: [
+      "k8s",
+      "access",
+      ctx,
+      resource?.namespace,
+      resource?.kind,
+      resource?.name,
+      "delete",
+    ],
+    queryFn: () =>
+      k8s.checkAccess(
+        {
+          kind: kind!,
+          verb: "delete",
+          namespace: resource!.namespace || null,
+          name: resource!.name,
+        },
+        ctx,
+      ),
+    enabled: !!resource && !!kind,
+    staleTime: 15_000,
+  });
   if (!resource) return null;
+  const deleteDisabled =
+    deleting || canDelete.isLoading || canDelete.data?.allowed !== true;
   return (
     <div className="min-h-12 px-3 py-2 flex items-center gap-2 border-b border-term-border-soft shrink-0 bg-term-panel">
       <div className="flex flex-col min-w-0 flex-1">
@@ -369,6 +429,22 @@ function Header({
           label="yaml"
           hint="Y"
           onClick={onEditYaml}
+        />
+        <ActionIcon
+          icon={
+            deleting ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="size-3.5" />
+            )
+          }
+          label={
+            canDelete.data?.allowed === false
+              ? "delete denied by RBAC"
+              : "delete"
+          }
+          disabled={deleteDisabled}
+          onClick={onDelete}
         />
         <ActionIcon
           icon={<X className="size-4" />}
@@ -769,10 +845,327 @@ function NonPodPropertiesTab({
           </div>
         </Section>
       )}
+      {isRbacKind(s.kind) && (
+        <RbacDetailsSection ctx={ctx} resource={resource} kind={s.kind} />
+      )}
+      {isStorageKind(s.kind) && (
+        <StorageDetailsSection ctx={ctx} resource={resource} kind={s.kind} />
+      )}
+      {hasResourceInsights(s.kind) && (
+        <ResourceInsightsSection ctx={ctx} resource={resource} kind={s.kind} />
+      )}
       <Section title="labels">
         <LabelPills entries={s.labels} max={8} />
       </Section>
     </div>
+  );
+}
+
+function isRbacKind(kind: WorkloadKind): boolean {
+  return (
+    kind === "role" ||
+    kind === "clusterrole" ||
+    kind === "rolebinding" ||
+    kind === "clusterrolebinding"
+  );
+}
+
+function isStorageKind(kind: WorkloadKind): boolean {
+  return (
+    kind === "persistentvolumeclaim" ||
+    kind === "persistentvolume" ||
+    kind === "storageclass"
+  );
+}
+
+function hasResourceInsights(kind: WorkloadKind): boolean {
+  return (
+    kind === "service" ||
+    kind === "ingress" ||
+    kind === "networkpolicy" ||
+    kind === "horizontalpodautoscaler" ||
+    kind === "poddisruptionbudget" ||
+    kind === "resourcequota" ||
+    kind === "limitrange"
+  );
+}
+
+function RbacDetailsSection({
+  ctx,
+  resource,
+  kind,
+}: {
+  ctx: string;
+  resource: Resource;
+  kind: WorkloadKind;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["k8s", "rbac-details", ctx, resource.namespace, kind, resource.name],
+    queryFn: () =>
+      k8s.getRbacDetails(resource.namespace, kind, resource.name, ctx || undefined),
+    staleTime: 10_000,
+  });
+
+  if (isLoading) {
+    return (
+      <Section title="rbac">
+        <div className="text-[12px] text-term-muted flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading RBAC details…
+        </div>
+      </Section>
+    );
+  }
+  if (error || !data) {
+    return (
+      <Section title="rbac">
+        <div className="text-[12px] text-term-red flex items-center gap-2">
+          <AlertTriangle className="size-3.5" /> failed to load RBAC details
+        </div>
+      </Section>
+    );
+  }
+
+  return (
+    <>
+      {(data.role_ref || data.subjects.length > 0) && (
+        <Section title="binding">
+          <Dl>
+            {data.role_ref && <DlRow label="role ref" value={data.role_ref} mono />}
+            {data.subjects.length > 0 && (
+              <DlRow
+                label="subjects"
+                value={
+                  <div className="space-y-1">
+                    {data.subjects.map((subject) => (
+                      <div
+                        key={`${subject.kind}/${subject.namespace ?? ""}/${subject.name}`}
+                        className="font-mono text-[11px] text-term-fg"
+                      >
+                        <span className="text-term-subtle">{subject.kind}</span>{" "}
+                        {subject.namespace ? `${subject.namespace}/` : ""}
+                        {subject.name}
+                      </div>
+                    ))}
+                  </div>
+                }
+              />
+            )}
+          </Dl>
+        </Section>
+      )}
+      <Section title="rules">
+        {data.rules.length === 0 ? (
+          <div className="text-[11px] text-term-subtle">
+            no readable policy rules found
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {data.rules.map((rule, index) => (
+              <div
+                key={index}
+                className="rounded border border-term-border-soft bg-term-panel-2 px-2.5 py-2"
+              >
+                <div className="flex flex-wrap gap-1">
+                  {rule.verbs.map((verb) => (
+                    <span
+                      key={verb}
+                      className={cn(
+                        "px-1.5 py-0.5 rounded border text-[10px] font-mono",
+                        verb === "*" || verb === "delete" || verb === "deletecollection"
+                          ? "border-term-red/40 bg-term-red/10 text-term-red"
+                          : verb === "create" || verb === "patch" || verb === "update"
+                            ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+                            : "border-term-border-soft bg-term-panel text-term-muted",
+                      )}
+                    >
+                      {verb}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
+                  <span className="text-term-subtle">api groups</span>
+                  <span className="font-mono text-term-muted break-all">
+                    {rule.api_groups.join(", ")}
+                  </span>
+                  <span className="text-term-subtle">resources</span>
+                  <span className="font-mono text-term-fg break-all">
+                    {rule.resources.join(", ")}
+                  </span>
+                  {rule.resource_names.length > 0 && (
+                    <>
+                      <span className="text-term-subtle">names</span>
+                      <span className="font-mono text-term-muted break-all">
+                        {rule.resource_names.join(", ")}
+                      </span>
+                    </>
+                  )}
+                  {rule.non_resource_urls.length > 0 && (
+                    <>
+                      <span className="text-term-subtle">urls</span>
+                      <span className="font-mono text-term-muted break-all">
+                        {rule.non_resource_urls.join(", ")}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}
+
+function StorageDetailsSection({
+  ctx,
+  resource,
+  kind,
+}: {
+  ctx: string;
+  resource: Resource;
+  kind: WorkloadKind;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["k8s", "storage-details", ctx, resource.namespace, kind, resource.name],
+    queryFn: () =>
+      k8s.getStorageDetails(
+        resource.namespace,
+        kind,
+        resource.name,
+        ctx || undefined,
+      ),
+    staleTime: 10_000,
+  });
+
+  if (isLoading) {
+    return (
+      <Section title="storage">
+        <div className="text-[12px] text-term-muted flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading storage details…
+        </div>
+      </Section>
+    );
+  }
+  if (error || !data) {
+    return (
+      <Section title="storage">
+        <div className="text-[12px] text-term-red flex items-center gap-2">
+          <AlertTriangle className="size-3.5" /> failed to load storage details
+        </div>
+      </Section>
+    );
+  }
+
+  const params = Object.entries(data.parameters);
+  return (
+    <Section title="storage">
+      <Dl>
+        <DlRow label="phase" value={data.phase ?? "—"} />
+        <DlRow label="capacity" value={data.capacity ?? "—"} mono />
+        <DlRow
+          label="access modes"
+          value={data.access_modes.length ? data.access_modes.join(", ") : "—"}
+          mono
+        />
+        <DlRow label="storage class" value={data.storage_class ?? "—"} mono />
+        {data.volume_name && <DlRow label="volume" value={data.volume_name} mono />}
+        {data.claim_ref && <DlRow label="claim" value={data.claim_ref} mono />}
+        {data.provisioner && (
+          <DlRow label="provisioner" value={data.provisioner} mono />
+        )}
+        {data.reclaim_policy && (
+          <DlRow label="reclaim" value={data.reclaim_policy} mono />
+        )}
+        {data.binding_mode && <DlRow label="binding" value={data.binding_mode} mono />}
+        {data.allow_expansion !== null && (
+          <DlRow
+            label="expansion"
+            value={data.allow_expansion ? "allowed" : "not allowed"}
+          />
+        )}
+        {params.length > 0 && (
+          <DlRow
+            label="parameters"
+            value={
+              <div className="space-y-1">
+                {params.map(([key, value]) => (
+                  <div key={key} className="font-mono text-[11px] break-all">
+                    <span className="text-term-subtle">{key}</span>
+                    <span className="text-term-muted">=</span>
+                    <span className="text-term-fg">{value}</span>
+                  </div>
+                ))}
+              </div>
+            }
+          />
+        )}
+      </Dl>
+    </Section>
+  );
+}
+
+function ResourceInsightsSection({
+  ctx,
+  resource,
+  kind,
+}: {
+  ctx: string;
+  resource: Resource;
+  kind: WorkloadKind;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["k8s", "resource-insights", ctx, resource.namespace, kind, resource.name],
+    queryFn: () =>
+      k8s.getResourceInsights(
+        resource.namespace,
+        kind,
+        resource.name,
+        ctx || undefined,
+      ),
+    staleTime: 10_000,
+  });
+
+  if (isLoading) {
+    return (
+      <Section title="insights">
+        <div className="text-[12px] text-term-muted flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading insights…
+        </div>
+      </Section>
+    );
+  }
+  if (error || !data) {
+    return (
+      <Section title="insights">
+        <div className="text-[12px] text-term-red flex items-center gap-2">
+          <AlertTriangle className="size-3.5" /> failed to load insights
+        </div>
+      </Section>
+    );
+  }
+
+  return (
+    <>
+      {data.sections.map((insight) => (
+        <Section key={insight.title} title={insight.title}>
+          {insight.rows.length === 0 ? (
+            <div className="text-[11px] text-term-subtle">no details reported</div>
+          ) : (
+            <Dl>
+              {insight.rows.map((row) => (
+                <DlRow
+                  key={`${insight.title}-${row.label}`}
+                  label={row.label}
+                  value={row.value || "—"}
+                  mono
+                />
+              ))}
+            </Dl>
+          )}
+        </Section>
+      ))}
+    </>
   );
 }
 

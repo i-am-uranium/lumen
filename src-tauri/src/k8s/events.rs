@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use crate::k8s::time;
 use k8s_openapi::api::core::v1::Event;
 use kube::{
     api::Api,
@@ -40,7 +41,7 @@ pub async fn stream_events(
                 match ev {
                     Some(Ok(e)) => {
                         let line = EventLine {
-                            ts: e.event_time.map(|t| t.0.to_rfc3339()),
+                            ts: e.event_time.as_ref().map(time::micro_rfc3339),
                             kind: "Event".into(),
                             reason: e.reason.unwrap_or_default(),
                             message: e.message.unwrap_or_default(),

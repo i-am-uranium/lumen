@@ -16,6 +16,10 @@ import { useUi } from "@/state/ui";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { k8s, type WorkloadKind } from "@/lib/k8s";
 import {
+  listResourceDefinitions,
+  resourceKindToSlug,
+} from "@/lib/k8s/resourceRegistry";
+import {
   Boxes,
   FileText,
   Layers,
@@ -27,44 +31,8 @@ import {
   UserPlus,
 } from "lucide-react";
 
-const JUMP_KINDS: WorkloadKind[] = [
-  "pod",
-  "deployment",
-  "statefulset",
-  "daemonset",
-  "service",
-  "ingress",
-  "configmap",
-  "secret",
-  "persistentvolumeclaim",
-  "horizontalpodautoscaler",
-  "networkpolicy",
-];
-
-const KIND_TO_SLUG: Record<WorkloadKind, string> = {
-  pod: "pods",
-  deployment: "deployments",
-  statefulset: "statefulsets",
-  daemonset: "daemonsets",
-  cronjob: "cronjobs",
-  job: "jobs",
-  service: "services",
-  ingress: "ingresses",
-  configmap: "configmaps",
-  secret: "secrets",
-  networkpolicy: "networkpolicies",
-  persistentvolumeclaim: "pvcs",
-  persistentvolume: "pvs",
-  storageclass: "storageclasses",
-  ingressclass: "ingressclasses",
-  resourcequota: "resourcequotas",
-  horizontalpodautoscaler: "hpas",
-  limitrange: "limitranges",
-  poddisruptionbudget: "pdbs",
-  priorityclass: "priorityclasses",
-  mutatingwebhookconfiguration: "mutatingwebhooks",
-  validatingwebhookconfiguration: "validatingwebhooks",
-};
+export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
+  listResourceDefinitions().map((definition) => definition.kind);
 
 type Jumpable = { kind: WorkloadKind; name: string; namespace: string };
 
@@ -87,6 +55,7 @@ export function CommandPalette() {
     .replace(/^ns\s+/i, "switch namespace: ")
     .replace(/^ctx\s+/i, "switch context: ")
     .replace(/^logs\s+/i, "view logs: ");
+  const shouldSearchResources = normalizedQuery.trim().length >= 2;
 
   const { data: contexts = [] } = useQuery({
     queryKey: ["k8s", "contexts"],
@@ -101,11 +70,11 @@ export function CommandPalette() {
     staleTime: 30_000,
   });
   const resourceQueries = useQueries({
-    queries: JUMP_KINDS.map((kind) => ({
+    queries: COMMAND_PALETTE_RESOURCE_KINDS.map((kind) => ({
       queryKey: ["k8s", "workloads", currentCtx, currentNs, kind] as const,
       queryFn: () =>
         k8s.listWorkloads(currentNs ?? "", kind, currentCtx ?? undefined),
-      enabled: paletteOpen && !!currentNs,
+      enabled: paletteOpen && !!currentNs && shouldSearchResources,
       staleTime: 10_000,
     })),
   });
@@ -114,7 +83,7 @@ export function CommandPalette() {
   const allResources: Jumpable[] = useMemo(() => {
     const out: Jumpable[] = [];
     resourceQueries.forEach((query, i) => {
-      const kind = JUMP_KINDS[i];
+      const kind = COMMAND_PALETTE_RESOURCE_KINDS[i];
       for (const workload of query.data ?? []) {
         out.push({
           kind,
@@ -201,7 +170,7 @@ export function CommandPalette() {
   function pickResource(resource: Jumpable) {
     const ctx = useClusterStore.getState().contextName;
     if (!ctx) return close();
-    const slug = KIND_TO_SLUG[resource.kind] ?? "pods";
+    const slug = resourceKindToSlug(resource.kind);
     const params = new URLSearchParams({
       q: resource.name,
       ns: resource.namespace,

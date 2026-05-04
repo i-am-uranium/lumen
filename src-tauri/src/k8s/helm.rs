@@ -215,11 +215,7 @@ pub async fn list_releases(client: &Client) -> AppResult<Vec<HelmReleaseSummary>
             .or_insert(sum);
     }
     let mut out: Vec<HelmReleaseSummary> = latest.into_values().collect();
-    out.sort_by(|a, b| {
-        a.namespace
-            .cmp(&b.namespace)
-            .then(a.name.cmp(&b.name))
-    });
+    out.sort_by(|a, b| a.namespace.cmp(&b.namespace).then(a.name.cmp(&b.name)));
     Ok(out)
 }
 

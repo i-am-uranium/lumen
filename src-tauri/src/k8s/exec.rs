@@ -29,8 +29,12 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum AttachEvent {
-    Stdout { text: String },
-    Stderr { text: String },
+    Stdout {
+        text: String,
+    },
+    Stderr {
+        text: String,
+    },
     Closed {
         message: Option<String>,
         exit_code: Option<i32>,
@@ -274,9 +278,7 @@ pub async fn start(
 // reason is "ExitCode" — the message field holds the integer as a string.
 // `status: "Success"` (zero-cause) means exit 0; missing details fall back
 // to None so the UI can display "exited" without a code.
-fn parse_exit_code(
-    status: &k8s_openapi::apimachinery::pkg::apis::meta::v1::Status,
-) -> Option<i32> {
+fn parse_exit_code(status: &k8s_openapi::apimachinery::pkg::apis::meta::v1::Status) -> Option<i32> {
     if status.status.as_deref() == Some("Success") {
         return Some(0);
     }
