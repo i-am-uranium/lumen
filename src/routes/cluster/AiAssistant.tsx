@@ -176,6 +176,19 @@ export function AiAssistant() {
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="space-y-3">
           <ContextStrip items={contextSignals} loading={loadingContext} />
+          <ApprovalPanel
+            ref={approvalRef}
+            approved={approved}
+            onApprovedChange={setApproved}
+            prompt={prompt}
+            byteSize={new Blob([prompt]).size}
+            workloads={workloads.length}
+            unhealthy={unhealthyCount}
+            notes={notes.trim() ? 1 : 0}
+            redactionCount={redactionCount}
+            redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
+            onCopy={() => void copyPrompt()}
+          />
           <AssistantHeader
             provider={selectedProvider}
             showConfig={showConfig}
@@ -221,20 +234,6 @@ export function AiAssistant() {
               setApproved(false);
             }}
             onRun={handleQuestionAction}
-          />
-
-          <ApprovalPanel
-            ref={approvalRef}
-            approved={approved}
-            onApprovedChange={setApproved}
-            prompt={prompt}
-            byteSize={new Blob([prompt]).size}
-            workloads={workloads.length}
-            unhealthy={unhealthyCount}
-            notes={notes.trim() ? 1 : 0}
-            redactionCount={redactionCount}
-            redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
-            onCopy={() => void copyPrompt()}
           />
         </div>
 
@@ -627,31 +626,22 @@ function AnswerPanel({
         </Button>
       </div>
       {!result ? (
-        <div className="space-y-3">
-          <AnswerSkeleton
-            title="Summary"
-            icon={<FileText className="size-4 text-accent-primary" />}
-            lines={[
-              "Run the assistant to get a focused operator answer.",
-              "Output is structured for evidence, next checks, safe commands, and remediation.",
-            ]}
-          />
-          <AnswerSkeleton
-            title="Evidence"
-            icon={<Database className="size-4 text-warning" />}
-            lines={[
-              "Cluster context, pasted logs, events, YAML, and notes appear here after review.",
-              "Sensitive values remain redacted.",
-            ]}
-          />
-          <AnswerSkeleton
-            title="Safe commands"
-            icon={<ListChecks className="size-4 text-success" />}
-            lines={[
-              "Generated kubectl commands are advisory.",
-              "Lumen does not execute them from this panel.",
-            ]}
-          />
+        <div className="rounded-control border border-border-default bg-elevated p-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-control border border-accent-primary/25 bg-accent-primary-soft p-2 text-accent-primary">
+              <Sparkles className="size-4" />
+            </div>
+            <div>
+              <div className="text-[13px] font-semibold text-text-primary">
+                Waiting for an approved question
+              </div>
+              <p className="mt-1 text-[12px] leading-5 text-text-secondary">
+                Approve the redacted payload, then run Ask. The answer will be
+                grouped into summary, evidence, likely cause, next checks, safe
+                commands, remediation, and confirmation-required actions.
+              </p>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="space-y-3">
@@ -660,37 +650,156 @@ function AnswerPanel({
               {result.stderr}
             </div>
           )}
-          <pre className="min-h-[520px] overflow-auto rounded-control border border-border-default bg-code-surface p-3 text-[12px] leading-relaxed text-text-primary whitespace-pre-wrap">
-            {result.stdout || "no output"}
-          </pre>
+          <StructuredAnswer stdout={result.stdout} />
         </div>
       )}
     </aside>
   );
 }
 
-function AnswerSkeleton({
-  title,
-  icon,
-  lines,
-}: {
+type AnswerSection = {
   title: string;
-  icon: React.ReactNode;
-  lines: string[];
-}) {
+  content: string;
+  tone: "summary" | "evidence" | "cause" | "checks" | "commands" | "remediation" | "confirmation";
+};
+
+const ANSWER_SECTION_META: Record<
+  AnswerSection["tone"],
+  { icon: React.ReactNode; className: string }
+> = {
+  summary: {
+    icon: <FileText className="size-4" />,
+    className: "border-accent-primary/30 bg-accent-primary-soft text-accent-primary",
+  },
+  evidence: {
+    icon: <Database className="size-4" />,
+    className: "border-warning/30 bg-[var(--status-warning-soft)] text-warning",
+  },
+  cause: {
+    icon: <Search className="size-4" />,
+    className: "border-danger/30 bg-[var(--status-error-soft)] text-danger",
+  },
+  checks: {
+    icon: <ListChecks className="size-4" />,
+    className: "border-info/30 bg-[var(--status-info-soft)] text-info",
+  },
+  commands: {
+    icon: <TerminalSquare className="size-4" />,
+    className: "border-success/30 bg-[var(--status-success-soft)] text-success",
+  },
+  remediation: {
+    icon: <ShieldCheck className="size-4" />,
+    className: "border-accent-primary/30 bg-accent-primary-soft text-accent-primary",
+  },
+  confirmation: {
+    icon: <TriangleAlert className="size-4" />,
+    className: "border-warning/30 bg-[var(--status-warning-soft)] text-warning",
+  },
+};
+
+function StructuredAnswer({ stdout }: { stdout: string }) {
+  const sections = useMemo(() => parseAnswerSections(stdout), [stdout]);
+  if (!stdout.trim()) {
+    return (
+      <div className="rounded-control border border-border-default bg-code-surface p-4 text-[12px] text-text-muted">
+        No output returned.
+      </div>
+    );
+  }
+
   return (
-    <section className="rounded-control border border-border-default bg-elevated p-4">
-      <div className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-text-primary">
-        {icon}
-        {title}
+    <div className="space-y-3">
+      {sections.map((section) => (
+        <AnswerSectionCard key={section.title} section={section} />
+      ))}
+    </div>
+  );
+}
+
+function AnswerSectionCard({ section }: { section: AnswerSection }) {
+  const meta = ANSWER_SECTION_META[section.tone];
+  const lines = section.content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const commandLines = section.tone === "commands"
+    ? lines.filter((line) => /^(?:[-*]\s*)?(?:`{0,3})?(?:kubectl|helm|k9s)\b/i.test(line))
+    : [];
+  const bodyLines = commandLines.length
+    ? lines.filter((line) => !commandLines.includes(line))
+    : lines;
+
+  return (
+    <section className="rounded-control border border-border-default bg-elevated p-3">
+      <div className="mb-3 flex items-center gap-2">
+        <div className={cn("rounded-control border p-1.5", meta.className)}>
+          {meta.icon}
+        </div>
+        <h3 className="text-[13px] font-semibold text-text-primary">{section.title}</h3>
       </div>
-      <div className="space-y-2 text-[12px] leading-5 text-text-secondary">
-        {lines.map((line) => (
-          <p key={line}>{line}</p>
-        ))}
-      </div>
+
+      {bodyLines.length > 0 && (
+        <div className="space-y-2 text-[12px] leading-5 text-text-secondary">
+          {bodyLines.map((line) => (
+            <p key={line} className="whitespace-pre-wrap">
+              {line.replace(/^[-*]\s*/, "")}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {commandLines.length > 0 && (
+        <div className="space-y-2">
+          {commandLines.map((line) => (
+            <code
+              key={line}
+              className="block overflow-x-auto rounded-control border border-border-subtle bg-code-surface px-3 py-2 font-mono text-[11px] leading-5 text-success"
+            >
+              {line.replace(/^[-*]\s*/, "").replace(/^`+|`+$/g, "")}
+            </code>
+          ))}
+        </div>
+      )}
     </section>
   );
+}
+
+function parseAnswerSections(stdout: string): AnswerSection[] {
+  const text = stdout.trim();
+  if (!text) return [];
+  const headings = [
+    { label: "Summary", tone: "summary" },
+    { label: "Evidence", tone: "evidence" },
+    { label: "Most likely cause", tone: "cause" },
+    { label: "Next checks", tone: "checks" },
+    { label: "Safe kubectl commands", tone: "commands" },
+    { label: "Remediation suggestions", tone: "remediation" },
+    { label: "Requires confirmation", tone: "confirmation" },
+  ] as const;
+  const pattern = new RegExp(
+    `(?:^|\\n)\\s*(?:\\d+\\.\\s*)?(${headings
+      .map((h) => h.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|")})\\s*:?\\s*\\n`,
+    "gi",
+  );
+  const matches = Array.from(text.matchAll(pattern));
+  if (!matches.length) {
+    return [{ title: "Summary", content: text, tone: "summary" }];
+  }
+
+  return matches
+    .map((match, index) => {
+      const title = match[1];
+      const start = match.index! + match[0].length;
+      const end = matches[index + 1]?.index ?? text.length;
+      const meta = headings.find((h) => h.label.toLowerCase() === title.toLowerCase());
+      return {
+        title: meta?.label ?? title,
+        content: text.slice(start, end).trim(),
+        tone: meta?.tone ?? "summary",
+      };
+    })
+    .filter((section) => section.content.length > 0);
 }
 
 function ProviderPicker({
