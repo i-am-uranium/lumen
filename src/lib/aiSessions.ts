@@ -50,16 +50,30 @@ export type AiAssistantSession = {
 };
 
 type StoredSessions = AiAssistantSession[] | { sessions?: unknown };
+type SessionCrypto = {
+  randomUUID?: () => string;
+  getRandomValues?: (array: Uint8Array) => Uint8Array;
+};
+
+let sessionIdCounter = 0;
 
 export function createSessionId(): string {
+  const webCrypto = (
+    typeof globalThis !== "undefined" && "crypto" in globalThis
+      ? globalThis.crypto
+      : undefined
+  ) as SessionCrypto | undefined;
   const random =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : (() => {
-          const bytes = new Uint8Array(10);
-          crypto.getRandomValues(bytes);
-          return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-        })();
+    webCrypto?.randomUUID?.() ??
+    (() => {
+      if (webCrypto?.getRandomValues) {
+        const bytes = new Uint8Array(10);
+        webCrypto.getRandomValues(bytes);
+        return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+      }
+      sessionIdCounter += 1;
+      return `fallback_${sessionIdCounter.toString(36)}`;
+    })();
   return `ai_${Date.now().toString(36)}_${random}`;
 }
 
