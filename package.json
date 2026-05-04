@@ -17,7 +17,8 @@
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "perf:bundle": "node scripts/check-bundle-budget.mjs"
+    "perf:bundle": "node scripts/check-bundle-budget.mjs",
+    "bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
