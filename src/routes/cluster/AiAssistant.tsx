@@ -24,6 +24,7 @@ import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { redactForAi } from "@/lib/aiRedaction";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { LumenPage, PanelHeading, SectionPanel } from "@/components/lumen/page";
 
 type AiTask =
@@ -703,16 +704,16 @@ function StructuredAnswer({ stdout }: { stdout: string }) {
 
 function AnswerSectionCard({ section }: { section: AnswerSection }) {
   const meta = ANSWER_SECTION_META[section.tone];
-  const lines = section.content
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const commandLines = section.tone === "commands"
-    ? lines.filter((line) => /^(?:[-*]\s*)?(?:`{0,3})?(?:kubectl|helm|k9s)\b/i.test(line))
-    : [];
+  const lines = normalizeSectionLines(section.content);
+  const commandLines =
+    section.tone === "commands" || section.tone === "confirmation"
+      ? lines.filter(isCommandLine)
+      : [];
   const bodyLines = commandLines.length
     ? lines.filter((line) => !commandLines.includes(line))
     : lines;
+  const actionLines = section.tone === "remediation" ? lines : [];
+  const evidenceItems = section.tone === "evidence" ? lines : [];
 
   return (
     <section className="rounded-control border border-border-default bg-elevated p-3">
@@ -723,11 +724,31 @@ function AnswerSectionCard({ section }: { section: AnswerSection }) {
         <h3 className="text-[13px] font-semibold text-text-primary">{section.title}</h3>
       </div>
 
-      {bodyLines.length > 0 && (
+      {section.tone === "evidence" && evidenceItems.length > 0 && (
+        <div className="space-y-2">
+          {evidenceItems.map((line, index) => (
+            <EvidenceRow key={`${line}-${index}`} line={line} />
+          ))}
+        </div>
+      )}
+
+      {section.tone === "remediation" && actionLines.length > 0 && (
+        <div className="space-y-2">
+          {actionLines.map((line, index) => (
+            <SuggestedActionRow
+              key={`${line}-${index}`}
+              text={line}
+              index={index}
+            />
+          ))}
+        </div>
+      )}
+
+      {section.tone !== "evidence" && section.tone !== "remediation" && bodyLines.length > 0 && (
         <div className="space-y-2 text-[12px] leading-5 text-text-secondary">
           {bodyLines.map((line) => (
             <p key={line} className="whitespace-pre-wrap">
-              {line.replace(/^[-*]\s*/, "")}
+              {cleanListMarker(line)}
             </p>
           ))}
         </div>
@@ -735,18 +756,159 @@ function AnswerSectionCard({ section }: { section: AnswerSection }) {
 
       {commandLines.length > 0 && (
         <div className="space-y-2">
-          {commandLines.map((line) => (
-            <code
-              key={line}
-              className="block overflow-x-auto rounded-control border border-border-subtle bg-code-surface px-3 py-2 font-mono text-[11px] leading-5 text-success"
-            >
-              {line.replace(/^[-*]\s*/, "").replace(/^`+|`+$/g, "")}
-            </code>
+          {commandLines.map((line, index) => (
+            <CommandActionRow
+              key={`${line}-${index}`}
+              command={line}
+              intent={section.tone === "confirmation" ? "warning" : "primary"}
+              label={section.tone === "confirmation" ? "Confirm" : "Run"}
+            />
           ))}
         </div>
       )}
     </section>
   );
+}
+
+function EvidenceRow({ line }: { line: string }) {
+  const cleaned = cleanListMarker(line);
+  const [label, ...rest] = cleaned.split(/:\s+/);
+  const hasLabel = rest.length > 0 && label.length <= 42;
+  return (
+    <div className="rounded-control border border-border-subtle bg-code-surface/60 px-3 py-2">
+      {hasLabel ? (
+        <>
+          <div className="text-[10px] uppercase tracking-wide text-warning">
+            {label}
+          </div>
+          <div className="mt-1 text-[12px] leading-5 text-text-secondary">
+            {rest.join(": ")}
+          </div>
+        </>
+      ) : (
+        <div className="text-[12px] leading-5 text-text-secondary">{cleaned}</div>
+      )}
+    </div>
+  );
+}
+
+function SuggestedActionRow({ text, index }: { text: string; index: number }) {
+  const [confirming, setConfirming] = useState(false);
+  const action = cleanListMarker(text);
+  async function copyAction() {
+    await navigator.clipboard.writeText(action);
+    toast.success("Remediation action copied");
+    setConfirming(false);
+  }
+  return (
+    <>
+      <div className="rounded-control border border-border-subtle bg-code-surface/60 p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-accent-primary">
+              step {index + 1}
+            </div>
+            <div className="mt-1 text-[12px] leading-5 text-text-secondary">
+              {action}
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => setConfirming(true)}
+          >
+            <Clipboard className="size-3.5" /> Copy
+          </Button>
+        </div>
+      </div>
+      <ConfirmActionDialog
+        open={confirming}
+        title="Copy remediation action"
+        description="This copies an AI-suggested remediation step. Review it before using it operationally."
+        target={action}
+        confirmLabel="copy action"
+        intent="primary"
+        confirmText="copy"
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => void copyAction()}
+      />
+    </>
+  );
+}
+
+function CommandActionRow({
+  command,
+  intent,
+  label,
+}: {
+  command: string;
+  intent: "primary" | "warning";
+  label: string;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const cleaned = cleanCommand(command);
+  async function copyCommand() {
+    await navigator.clipboard.writeText(cleaned);
+    toast.success("Command copied");
+    setConfirming(false);
+  }
+  return (
+    <>
+      <div className="rounded-control border border-border-subtle bg-code-surface p-2">
+        <div className="flex items-start gap-2">
+          <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-success">
+            {cleaned}
+          </code>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="shrink-0"
+            onClick={() => setConfirming(true)}
+          >
+            <TerminalSquare className="size-3.5" /> {label}
+          </Button>
+        </div>
+      </div>
+      <ConfirmActionDialog
+        open={confirming}
+        title={intent === "warning" ? "Confirm generated command" : "Confirm read-only command"}
+        description={
+          intent === "warning"
+            ? "This command may change cluster state. Lumen will copy it only after confirmation; review it before running in your terminal."
+            : "This command is AI-generated. Lumen will copy it only after confirmation; review it before running in your terminal."
+        }
+        target={cleaned}
+        confirmLabel="copy command"
+        intent={intent}
+        confirmText={intent === "warning" ? cleaned : "copy"}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => void copyCommand()}
+      />
+    </>
+  );
+}
+
+function normalizeSectionLines(content: string): string[] {
+  return content
+    .replace(/```(?:bash|sh|shell)?/gi, "")
+    .replace(/```/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isCommandLine(line: string): boolean {
+  return /^(?:[-*]\s*)?(?:`{0,3})?(?:kubectl|helm|k9s)\b/i.test(line);
+}
+
+function cleanListMarker(line: string): string {
+  return line.replace(/^[-*]\s*/, "").replace(/^\d+\.\s*/, "").trim();
+}
+
+function cleanCommand(line: string): string {
+  return cleanListMarker(line).replace(/^`+|`+$/g, "").trim();
 }
 
 function parseAnswerSections(stdout: string): AnswerSection[] {
