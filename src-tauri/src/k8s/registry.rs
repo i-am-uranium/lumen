@@ -63,6 +63,39 @@ macro_rules! resource {
 }
 
 pub static ALL_RESOURCE_DEFINITIONS: &[ResourceDefinition] = &[
+    resource!(
+        WorkloadKind::Node,
+        "Nodes",
+        "Node",
+        "nodes",
+        "",
+        "v1",
+        "nodes",
+        false,
+        ResourceCategory::Cluster
+    ),
+    resource!(
+        WorkloadKind::Namespace,
+        "Namespaces",
+        "Namespace",
+        "namespaces",
+        "",
+        "v1",
+        "namespaces",
+        false,
+        ResourceCategory::Cluster
+    ),
+    resource!(
+        WorkloadKind::Event,
+        "Events",
+        "Event",
+        "events",
+        "",
+        "v1",
+        "events",
+        true,
+        ResourceCategory::Cluster
+    ),
     resource!(WorkloadKind::Pod, "Pods", "Pod", "pods", "", "v1", "pods", true, ResourceCategory::Workloads, logs: true, shell: true),
     resource!(WorkloadKind::Deployment, "Deployments", "Deployment", "deployments", "apps", "v1", "deployments", true, ResourceCategory::Workloads, scale: true, restart: true),
     resource!(WorkloadKind::StatefulSet, "StatefulSets", "StatefulSet", "statefulsets", "apps", "v1", "statefulsets", true, ResourceCategory::Workloads, logs: true, scale: true, restart: true),
@@ -247,7 +280,40 @@ pub static ALL_RESOURCE_DEFINITIONS: &[ResourceDefinition] = &[
         false,
         ResourceCategory::Storage
     ),
+    resource!(
+        WorkloadKind::CsiDriver,
+        "CSI Drivers",
+        "CSI Driver",
+        "csidrivers",
+        "storage.k8s.io",
+        "v1",
+        "csidrivers",
+        false,
+        ResourceCategory::Storage
+    ),
+    resource!(
+        WorkloadKind::CsiNode,
+        "CSI Nodes",
+        "CSI Node",
+        "csinodes",
+        "storage.k8s.io",
+        "v1",
+        "csinodes",
+        false,
+        ResourceCategory::Storage
+    ),
     resource!(WorkloadKind::VolumeAttributesClass, "VolumeAttributesClasses", "VolumeAttributesClass", "volumeattributesclasses", "storage.k8s.io", "v1", "volumeattributesclasses", false, ResourceCategory::Storage, optional: true),
+    resource!(
+        WorkloadKind::PodTemplate,
+        "PodTemplates",
+        "PodTemplate",
+        "podtemplates",
+        "",
+        "v1",
+        "podtemplates",
+        true,
+        ResourceCategory::Workloads
+    ),
     resource!(
         WorkloadKind::ResourceQuota,
         "Resource Quotas",
@@ -365,6 +431,28 @@ pub static ALL_RESOURCE_DEFINITIONS: &[ResourceDefinition] = &[
     resource!(WorkloadKind::GrpcRoute, "GRPCRoutes", "GRPCRoute", "grpcroutes", "gateway.networking.k8s.io", "v1", "grpcroutes", true, ResourceCategory::Network, optional: true),
     resource!(WorkloadKind::JobSet, "JobSets", "JobSet", "jobsets", "jobset.x-k8s.io", "v1alpha2", "jobsets", true, ResourceCategory::Workloads, optional: true),
     resource!(
+        WorkloadKind::ApiService,
+        "APIServices",
+        "APIService",
+        "apiservices",
+        "apiregistration.k8s.io",
+        "v1",
+        "apiservices",
+        false,
+        ResourceCategory::Cluster
+    ),
+    resource!(
+        WorkloadKind::CertificateSigningRequest,
+        "CertificateSigningRequests",
+        "CertificateSigningRequest",
+        "certificatesigningrequests",
+        "certificates.k8s.io",
+        "v1",
+        "certificatesigningrequests",
+        false,
+        ResourceCategory::Cluster
+    ),
+    resource!(
         WorkloadKind::CustomResourceDefinition,
         "CRDs",
         "CRD",
@@ -389,6 +477,9 @@ pub fn get_resource_definition(kind: &WorkloadKind) -> Option<&'static ResourceD
 
 pub fn api_kind(kind: &WorkloadKind) -> &'static str {
     match kind {
+        WorkloadKind::Node => "Node",
+        WorkloadKind::Namespace => "Namespace",
+        WorkloadKind::Event => "Event",
         WorkloadKind::Deployment => "Deployment",
         WorkloadKind::StatefulSet => "StatefulSet",
         WorkloadKind::DaemonSet => "DaemonSet",
@@ -412,7 +503,10 @@ pub fn api_kind(kind: &WorkloadKind) -> &'static str {
         WorkloadKind::PersistentVolumeClaim => "PersistentVolumeClaim",
         WorkloadKind::PersistentVolume => "PersistentVolume",
         WorkloadKind::StorageClass => "StorageClass",
+        WorkloadKind::CsiDriver => "CSIDriver",
+        WorkloadKind::CsiNode => "CSINode",
         WorkloadKind::VolumeAttributesClass => "VolumeAttributesClass",
+        WorkloadKind::PodTemplate => "PodTemplate",
         WorkloadKind::IngressClass => "IngressClass",
         WorkloadKind::ResourceQuota => "ResourceQuota",
         WorkloadKind::HorizontalPodAutoscaler => "HorizontalPodAutoscaler",
@@ -430,6 +524,8 @@ pub fn api_kind(kind: &WorkloadKind) -> &'static str {
         WorkloadKind::HttpRoute => "HTTPRoute",
         WorkloadKind::GrpcRoute => "GRPCRoute",
         WorkloadKind::JobSet => "JobSet",
+        WorkloadKind::ApiService => "APIService",
+        WorkloadKind::CertificateSigningRequest => "CertificateSigningRequest",
         WorkloadKind::CustomResourceDefinition => "CustomResourceDefinition",
     }
 }
@@ -449,6 +545,9 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
+                WorkloadKind::Node,
+                WorkloadKind::Namespace,
+                WorkloadKind::Event,
                 WorkloadKind::Pod,
                 WorkloadKind::Deployment,
                 WorkloadKind::StatefulSet,
@@ -473,7 +572,10 @@ mod tests {
                 WorkloadKind::PersistentVolumeClaim,
                 WorkloadKind::PersistentVolume,
                 WorkloadKind::StorageClass,
+                WorkloadKind::CsiDriver,
+                WorkloadKind::CsiNode,
                 WorkloadKind::VolumeAttributesClass,
+                WorkloadKind::PodTemplate,
                 WorkloadKind::ResourceQuota,
                 WorkloadKind::HorizontalPodAutoscaler,
                 WorkloadKind::VerticalPodAutoscaler,
@@ -490,6 +592,8 @@ mod tests {
                 WorkloadKind::HttpRoute,
                 WorkloadKind::GrpcRoute,
                 WorkloadKind::JobSet,
+                WorkloadKind::ApiService,
+                WorkloadKind::CertificateSigningRequest,
                 WorkloadKind::CustomResourceDefinition,
             ]
         );
@@ -517,12 +621,20 @@ mod tests {
         assert_eq!(gateway.plural, "gateways");
         assert!(gateway.namespaced);
         assert!(gateway.optional);
+
+        let node = get_resource_definition(&WorkloadKind::Node).unwrap();
+        assert_eq!(node.api_group, "");
+        assert_eq!(node.version, "v1");
+        assert_eq!(node.plural, "nodes");
+        assert!(!node.namespaced);
     }
 
     #[test]
     fn maps_display_labels_separately_from_api_kinds() {
         assert_eq!(super::api_kind(&WorkloadKind::IngressClass), "IngressClass");
         assert_eq!(super::api_kind(&WorkloadKind::HttpRoute), "HTTPRoute");
+        assert_eq!(super::api_kind(&WorkloadKind::CsiDriver), "CSIDriver");
+        assert_eq!(super::api_kind(&WorkloadKind::ApiService), "APIService");
         assert_eq!(super::api_kind(&WorkloadKind::Endpoint), "Endpoints");
     }
 }

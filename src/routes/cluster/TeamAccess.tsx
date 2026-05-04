@@ -30,6 +30,7 @@ import {
   type TokenMode,
 } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 
 const TEMPLATES: {
   value: AccessTemplate;
@@ -67,6 +68,10 @@ const TEMPLATES: {
   },
 ];
 
+type PendingTeamMutation =
+  | { kind: "rotate"; grant: TeamGrant }
+  | { kind: "revoke"; memberId: string; namespaces: string[] };
+
 export function TeamAccess() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
@@ -94,6 +99,7 @@ export function TeamAccess() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<TeamAccessResult | null>(null);
   const [renewTarget, setRenewTarget] = useState<TeamGrant | null>(null);
+  const [pendingMutation, setPendingMutation] = useState<PendingTeamMutation | null>(null);
 
   const handleRenew = async (g: TeamGrant, ttlHours: number) => {
     try {
@@ -110,11 +116,12 @@ export function TeamAccess() {
   // forcing the kubelet token-controller to issue a fresh JWT. The previous
   // token becomes invalid the moment the Secret is deleted, so this is a
   // one-click revoke+reissue rather than a "re-download same token" flow.
-  const handleRotate = async (g: TeamGrant) => {
+  const executeRotate = async (g: TeamGrant) => {
     try {
       const res = await k8s.rotateTeamToken(g.member_id, context || undefined);
       setResult(res);
       setRenewTarget(null);
+      setPendingMutation(null);
       toast.success(`rotated long-lived token for ${g.member_id}`);
     } catch (e) {
       toast.error(`rotate failed: ${(e as Error).message ?? e}`);
@@ -159,12 +166,12 @@ export function TeamAccess() {
     }
   };
 
-  const revoke = async (memberId: string, namespaces: string[]) => {
-    if (!confirm(`revoke all lumen-team-${memberId} objects from this cluster?`)) return;
+  const executeRevoke = async (memberId: string, namespaces: string[]) => {
     try {
       await k8s.revokeTeamAccess(memberId, namespaces, context || undefined);
       toast.success(`revoked ${memberId}`);
       setResult(null);
+      setPendingMutation(null);
       qc.invalidateQueries({ queryKey: ["k8s", "team-access", context] });
     } catch (e) {
       toast.error(`revoke failed: ${(e as Error).message ?? e}`);
@@ -172,26 +179,61 @@ export function TeamAccess() {
   };
 
   const chosenList = scope === "cluster" ? ["(cluster-wide)"] : Array.from(chosenNs);
+  const mutationDialog = pendingMutation ? (
+    <ConfirmActionDialog
+      open
+      title={
+        pendingMutation.kind === "rotate"
+          ? `rotate ${pendingMutation.grant.member_id}`
+          : `revoke ${pendingMutation.memberId}`
+      }
+      description={
+        pendingMutation.kind === "rotate"
+          ? "This deletes and recreates the long-lived token Secret. The current token is invalidated immediately."
+          : "This deletes Lumen-managed RBAC objects and token material for this team member."
+      }
+      target={
+        pendingMutation.kind === "rotate"
+          ? pendingMutation.grant.member_id
+          : pendingMutation.memberId
+      }
+      confirmLabel={pendingMutation.kind === "rotate" ? "rotate" : "revoke"}
+      intent="danger"
+      onCancel={() => setPendingMutation(null)}
+      onConfirm={() => {
+        if (pendingMutation.kind === "rotate") {
+          void executeRotate(pendingMutation.grant);
+        } else {
+          void executeRevoke(pendingMutation.memberId, pendingMutation.namespaces);
+        }
+      }}
+    />
+  ) : null;
 
   if (result) {
     return (
-      <ResultView
-        result={result}
-        memberId={memberId}
-        onReset={() => {
-          setResult(null);
-          setMemberId("");
-          setChosenNs(new Set());
-        }}
-        onRevoke={() =>
-          revoke(
-            memberId,
-            scope === "cluster"
-              ? [result.sa_namespace]
-              : Array.from(chosenNs),
-          )
-        }
-      />
+      <>
+        <ResultView
+          result={result}
+          memberId={memberId}
+          onReset={() => {
+            setResult(null);
+            setMemberId("");
+            setChosenNs(new Set());
+          }}
+          onRevoke={() =>
+            setPendingMutation({
+              kind: "revoke",
+              memberId,
+              namespaces:
+                scope === "cluster"
+                  ? [result.sa_namespace]
+                  : Array.from(chosenNs),
+            })
+          }
+        />
+        {mutationDialog}
+      </>
     );
   }
 
@@ -213,9 +255,15 @@ export function TeamAccess() {
           fetching={grants.isFetching}
           error={grants.error as Error | null}
           onRefresh={() => grants.refetch()}
-          onRevoke={(g) => revoke(g.member_id, g.namespaces)}
+          onRevoke={(g) =>
+            setPendingMutation({
+              kind: "revoke",
+              memberId: g.member_id,
+              namespaces: g.namespaces,
+            })
+          }
           onRenew={(g) => setRenewTarget(g)}
-          onRotate={handleRotate}
+          onRotate={(g) => setPendingMutation({ kind: "rotate", grant: g })}
         />
 
         {renewTarget && (
@@ -438,6 +486,7 @@ export function TeamAccess() {
             loading={loading}
           />
         )}
+        {mutationDialog}
       </div>
     </div>
   );
@@ -540,15 +589,7 @@ function ExistingGrants({
                 </button>
                 {g.token_mode === "long" && (
                   <button
-                    onClick={() => {
-                      if (
-                        confirm(
-                          `Rotate long-lived token for ${g.member_id}? The current token will be invalidated immediately.`,
-                        )
-                      ) {
-                        onRotate(g);
-                      }
-                    }}
+                    onClick={() => onRotate(g)}
                     className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px] !text-term-amber !border-term-amber/40"
                     title="invalidate the current long-lived token and issue a new one"
                   >
@@ -793,6 +834,8 @@ function ConfirmDialog({
   longLived: boolean;
   loading: boolean;
 }) {
+  const [typed, setTyped] = useState("");
+  const confirmed = typed === memberId;
   const toCreate = useMemo(() => {
     const base = [`ServiceAccount/lumen-team-${memberId}`];
     const rbac =
@@ -853,6 +896,18 @@ function ConfirmDialog({
             )}{" "}
             Template: <span className="text-term-fg font-mono">{template}</span>.
           </div>
+          <label className="block">
+            <span className="text-[11px] text-term-muted">
+              Type <span className="font-mono text-term-fg">{memberId}</span> to confirm provisioning.
+            </span>
+            <input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              className="term-input mt-2 w-full font-mono"
+              aria-label="confirmation text"
+              autoFocus
+            />
+          </label>
         </div>
         <div className="px-4 py-3 border-t border-term-border-soft flex justify-end gap-2">
           <button
@@ -864,7 +919,7 @@ function ConfirmDialog({
           </button>
           <button
             onClick={onConfirm}
-            disabled={loading}
+            disabled={loading || !confirmed}
             className="term-btn term-btn-primary !min-h-[30px] !text-[11px]"
           >
             <ShieldCheck className="size-3.5" /> apply

@@ -133,7 +133,7 @@ function PanelView({
     <div className={`flex-1 min-w-0 min-h-0 flex ${flexDir}`}>
       <div className="flex-1 min-w-0 min-h-0 flex flex-col">{renderLeaf(panel.a)}</div>
       <div
-        className="bg-term-border-soft shrink-0"
+        className="bg-border-default shrink-0"
         style={panel.direction === "h" ? { width: 3 } : { height: 3 }}
       />
       <div className="flex-1 min-w-0 min-h-0 flex flex-col">{renderLeaf(panel.b)}</div>
@@ -161,4 +161,3 @@ function useContainerOptionsForTabs(
   }
   return out;
 }
-

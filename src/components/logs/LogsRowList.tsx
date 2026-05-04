@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { LogLineRow } from "@/components/LogLineRow";
 import type { LogLine } from "@/state/logs";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 const STICKY_TOLERANCE = 24;
 
@@ -58,10 +59,10 @@ export function LogsRowList({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="absolute inset-0 overflow-y-auto bg-term-panel"
+        className="absolute inset-0 overflow-y-auto bg-surface"
       >
         {lines.length === 0 && (
-          <div className="px-3 py-6 text-[12px] text-term-subtle">
+          <div className="px-3 py-6 text-[12px] text-text-muted">
             no logs yet · streaming
           </div>
         )}
@@ -73,7 +74,7 @@ export function LogsRowList({
             <div className="flex-1 min-w-0">
               <LogLineRow
                 line={line}
-                color={podColors[line.pod] ?? "text-term-muted"}
+                color={podColors[line.pod] ?? "text-text-secondary"}
                 highlight={search}
               />
             </div>
@@ -81,13 +82,15 @@ export function LogsRowList({
         ))}
       </div>
       {newLinesPill > 0 && (
-        <button
+        <Button
           type="button"
           onClick={jumpToLive}
-          className="absolute bottom-3 right-3 px-3 py-1 rounded-full text-[11px] bg-term-green/15 text-term-green border border-term-green/40 shadow hover:bg-term-green/25 transition"
+          variant="outline"
+          size="sm"
+          className="absolute bottom-3 right-3 h-7 rounded-full px-3 text-[11px] bg-accent-primary-soft text-accent-primary border-accent-primary/40 shadow-[var(--shadow-popover)] hover:bg-accent-primary-soft/80"
         >
-          ▼ {newLinesPill} new {newLinesPill === 1 ? "line" : "lines"}
-        </button>
+          Live +{newLinesPill} {newLinesPill === 1 ? "line" : "lines"}
+        </Button>
       )}
     </div>
   );

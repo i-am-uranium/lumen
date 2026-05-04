@@ -7,7 +7,7 @@
     "url": "git+https://github.com/i-am-uranium/lumen.git"
   },
   "license": "Apache-2.0",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,8 @@
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "perf:bundle": "node scripts/check-bundle-budget.mjs"
+    "perf:bundle": "node scripts/check-bundle-budget.mjs",
+    "bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
@@ -26,7 +27,7 @@
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",
-    "@tanstack/react-query": "^5.100.1",
+    "@tanstack/react-query": "^5.100.9",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
@@ -47,6 +48,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.4",
     "@tauri-apps/cli": "^2",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
@@ -57,9 +59,9 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
-    "jsdom": "^29.0.2",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.10",
-    "tailwindcss": "^3.4.19",
+    "tailwindcss": "^4.2.4",
     "typescript": "~6.0.3",
     "vite": "^8.0.10",
     "vitest": "^4.1.5"

@@ -35,7 +35,9 @@ import { usePinnedResources, type PinnedRef } from "@/hooks/usePinnedResources";
 import { useRecentResources } from "@/hooks/useRecentResources";
 
 const RAIL_W = 220;
-const RAIL_W_COLLAPSED = 48;
+const RAIL_W_COLLAPSED = 56;
+const COLLAPSED_ROW =
+  "mx-auto flex size-10 items-center justify-center rounded-control border text-text-secondary transition-colors";
 
 type LeafItem = {
   kind: "leaf";
@@ -78,6 +80,7 @@ const SECTIONS: Item[] = [
       { to: "workloads/pods", label: "pods" },
       { to: "events", label: "events" },
       { to: "logs", label: "logs" },
+      { to: "ai", label: "AI assistant" },
     ],
   },
   { kind: "leaf", to: "nodes", label: "nodes", icon: Server },
@@ -98,6 +101,7 @@ const SECTIONS: Item[] = [
       { to: "workloads/jobs", label: "jobs" },
       { to: "workloads/cronjobs", label: "cronjobs" },
       { to: "workloads/jobsets", label: "job sets" },
+      { to: "workloads/podtemplates", label: "pod templates" },
     ],
   },
   // Config / Network / Storage groups — list views are routed through
@@ -150,6 +154,8 @@ const SECTIONS: Item[] = [
       { to: "workloads/pvcs", label: "pvcs" },
       { to: "workloads/pvs", label: "persistent volumes" },
       { to: "workloads/storageclasses", label: "storage classes" },
+      { to: "workloads/csidrivers", label: "csi drivers" },
+      { to: "workloads/csinodes", label: "csi nodes" },
       { to: "workloads/volumeattributesclasses", label: "volume attributes" },
     ],
   },
@@ -174,8 +180,13 @@ const SECTIONS: Item[] = [
     label: "cluster metadata",
     icon: FileBox,
     children: [
+      { to: "workloads/nodes", label: "nodes" },
+      { to: "workloads/namespaces", label: "namespaces" },
+      { to: "workloads/events", label: "events" },
       { to: "workloads/leases", label: "leases" },
       { to: "workloads/controllerrevisions", label: "controller revisions" },
+      { to: "workloads/apiservices", label: "api services" },
+      { to: "workloads/certificatesigningrequests", label: "certificate requests" },
     ],
   },
 
@@ -191,19 +202,19 @@ const SECTIONS: Item[] = [
 
 const navRow = ({ isActive }: { isActive: boolean }, collapsed: boolean) =>
   cn(
-    "group relative flex items-center gap-2 h-7 rounded-md text-[12px] transition-colors border",
-    collapsed ? "justify-center px-0 mx-1.5" : "px-2 mx-1.5",
+    "group relative flex items-center gap-2 rounded-md text-[12px] transition-colors border",
+    collapsed ? COLLAPSED_ROW : "h-7 px-2 mx-1.5",
     isActive
-      ? "bg-term-green/15 text-term-green border-term-green/40"
-      : "text-term-muted hover:text-term-fg hover:bg-term-panel-2 border-transparent",
+      ? "bg-accent-primary-soft text-accent-primary border-accent-primary/40"
+      : "text-text-secondary hover:text-text-primary hover:bg-hover border-transparent",
   );
 
 const childRow = ({ isActive }: { isActive: boolean }) =>
   cn(
     "flex items-center h-6 rounded-md text-[12px] pl-9 pr-2 mx-1.5 transition-colors border",
     isActive
-      ? "bg-term-green/15 text-term-green border-term-green/40"
-      : "text-term-muted hover:text-term-fg hover:bg-term-panel-2 border-transparent",
+      ? "bg-accent-primary-soft text-accent-primary border-accent-primary/40"
+      : "text-text-secondary hover:text-text-primary hover:bg-hover border-transparent",
   );
 
 function inferIcon(kind: string): LucideIcon {
@@ -261,7 +272,7 @@ function Header({
     return (
       <button
         onClick={onBack}
-        className="h-12 w-full flex items-center justify-center text-term-muted hover:text-term-fg border-b border-term-border-soft"
+        className="flex h-12 w-full items-center justify-center border-b border-border-default text-text-secondary hover:text-text-primary"
         title={`back to fleet · ${context}`}
         aria-label="back to fleet"
       >
@@ -270,30 +281,30 @@ function Header({
     );
   }
   return (
-    <div className="h-12 px-3 flex items-center gap-2 border-b border-term-border-soft shrink-0">
+    <div className="h-12 px-3 flex items-center gap-2 border-b border-border-default shrink-0">
       <button
         onClick={onBack}
-        className="text-term-muted hover:text-term-fg inline-flex items-center gap-1 text-[11px] shrink-0"
+        className="text-text-secondary hover:text-text-primary inline-flex items-center gap-1 text-[11px] shrink-0"
         title="back to fleet"
       >
         <ChevronLeft className="size-3.5" /> fleet
       </button>
-      <span className="text-term-subtle">/</span>
+      <span className="text-text-muted">/</span>
       <div className="flex flex-col min-w-0 flex-1">
         <span
-          className="mds-heading text-[13px] text-term-fg truncate"
+          className="mds-heading text-[13px] text-text-primary truncate"
           title={context}
         >
           {context}
         </span>
         <div className="flex items-center gap-1.5 mt-0.5">
           {isProd && (
-            <span className="px-1 py-px text-[9px] rounded bg-term-red/20 text-term-red border border-term-red/40 font-semibold uppercase tracking-wide">
+            <span className="px-1 py-px text-[9px] rounded bg-danger/15 text-danger border border-danger/40 font-semibold uppercase tracking-wide">
               prod
             </span>
           )}
           {cluster && (
-            <span className="text-[10px] text-term-subtle truncate" title={cluster}>
+            <span className="text-[10px] text-text-muted truncate" title={cluster}>
               {cluster}
             </span>
           )}
@@ -337,7 +348,8 @@ function GroupHeader({
       <button
         onClick={onToggle}
         className={cn(
-          "group flex items-center justify-center h-7 rounded-md mx-1.5 text-term-muted hover:text-term-fg hover:bg-term-panel-2",
+          COLLAPSED_ROW,
+          "border-transparent hover:bg-hover hover:text-text-primary",
         )}
         title={label}
         aria-label={label}
@@ -348,7 +360,7 @@ function GroupHeader({
   }
   const Chevron = open ? ChevronDown : ChevronRight;
   return (
-    <div className="flex items-center mx-1.5 h-7 rounded-md text-[12px] text-term-muted hover:bg-term-panel-2 hover:text-term-fg">
+    <div className="flex items-center mx-1.5 h-7 rounded-md text-[12px] text-text-secondary hover:bg-hover hover:text-text-primary">
       {to ? (
         <NavLink
           to={to}
@@ -356,7 +368,7 @@ function GroupHeader({
           className={({ isActive }) =>
             cn(
               "flex-1 flex items-center gap-2 h-7 px-2 rounded-md",
-              isActive && "text-term-green",
+              isActive && "text-accent-primary",
             )
           }
         >
@@ -376,7 +388,7 @@ function GroupHeader({
       <button
         onClick={onToggle}
         aria-label={`${open ? "collapse" : "expand"} ${label}`}
-        className="px-1.5 h-7 inline-flex items-center text-term-subtle hover:text-term-fg"
+        className="px-1.5 h-7 inline-flex items-center text-text-muted hover:text-text-primary"
       >
         <Chevron className="size-3.5" />
       </button>
@@ -396,7 +408,7 @@ function StubRow({
   if (collapsed) {
     return (
       <div
-        className="flex items-center justify-center h-7 mx-1.5 text-term-subtle/60 cursor-not-allowed"
+        className={cn(COLLAPSED_ROW, "cursor-not-allowed border-transparent text-text-muted/60")}
         title={`${label} — coming soon`}
         aria-disabled="true"
       >
@@ -406,7 +418,7 @@ function StubRow({
   }
   return (
     <div
-      className="flex items-center mx-1.5 h-7 px-2 rounded-md text-[12px] text-term-subtle/70 cursor-not-allowed select-none"
+      className="flex items-center mx-1.5 h-7 px-2 rounded-md text-[12px] text-text-muted/70 cursor-not-allowed select-none"
       title="coming soon"
       aria-disabled="true"
     >
@@ -434,9 +446,9 @@ function PinnedSection({
   const { items, unpin } = usePinnedResources(ctx);
   if (collapsed) {
     return (
-      <div className="py-1">
+      <div className="py-1.5">
         <div
-          className="flex items-center justify-center h-7 mx-1.5 text-term-subtle"
+          className={cn(COLLAPSED_ROW, "border-transparent text-text-muted")}
           title={`pinned (${items.length})`}
         >
           <Star className="size-3.5" />
@@ -461,7 +473,7 @@ function PinnedSection({
     <div className="py-1">
       <button
         onClick={onToggle}
-        className="flex items-center mx-1.5 h-6 px-2 w-[calc(100%-12px)] rounded-md text-[10px] uppercase tracking-wider text-term-subtle hover:text-term-fg"
+        className="flex items-center mx-1.5 h-6 px-2 w-[calc(100%-12px)] rounded-md text-[10px] uppercase tracking-wider text-text-muted hover:text-text-primary"
         aria-expanded={open}
       >
         {open ? (
@@ -471,14 +483,14 @@ function PinnedSection({
         )}
         <Star className="size-3 mr-1.5" />
         <span className="flex-1 text-left">pinned</span>
-        <span className="text-term-subtle/70 normal-case tracking-normal text-[10px]">
+        <span className="text-text-muted/70 normal-case tracking-normal text-[10px]">
           {items.length}
         </span>
       </button>
       {open && (
         <div className="mt-1">
           {items.length === 0 ? (
-            <div className="mx-3 px-2 py-1 text-[11px] text-term-subtle italic">
+            <div className="mx-3 px-2 py-1 text-[11px] text-text-muted italic">
               No pinned resources
             </div>
           ) : (
@@ -487,14 +499,14 @@ function PinnedSection({
               return (
                 <div
                   key={refKey(r)}
-                  className="group flex items-center mx-1.5 h-7 rounded-md text-[12px] text-term-muted hover:bg-term-panel-2 hover:text-term-fg"
+                  className="group flex items-center mx-1.5 h-7 rounded-md text-[12px] text-text-secondary hover:bg-hover hover:text-text-primary"
                 >
                   <NavLink
                     to={refToPath(r)}
                     className={({ isActive }) =>
                       cn(
                         "flex-1 flex items-center gap-2 h-7 px-2 rounded-md min-w-0",
-                        isActive && "text-term-green",
+                        isActive && "text-accent-primary",
                       )
                     }
                     title={`${r.kind}/${r.namespace ? `${r.namespace}/` : ""}${r.name}`}
@@ -508,7 +520,7 @@ function PinnedSection({
                       e.stopPropagation();
                       unpin(r);
                     }}
-                    className="px-1.5 h-7 text-term-subtle opacity-0 group-hover:opacity-100 hover:text-term-red"
+                    className="px-1.5 h-7 text-text-muted opacity-0 group-hover:opacity-100 hover:text-danger"
                     aria-label={`unpin ${r.kind}/${r.name}`}
                     title="unpin"
                   >
@@ -541,9 +553,9 @@ function RecentSection({
 
   if (collapsed) {
     return (
-      <div className="py-1">
+      <div className="py-1.5">
         <div
-          className="flex items-center justify-center h-7 mx-1.5 text-term-subtle"
+          className={cn(COLLAPSED_ROW, "border-transparent text-text-muted")}
           title={`recent (${items.length})`}
         >
           <Clock className="size-3.5" />
@@ -568,7 +580,7 @@ function RecentSection({
     <div className="py-1">
       <button
         onClick={onToggle}
-        className="flex items-center mx-1.5 h-6 px-2 w-[calc(100%-12px)] rounded-md text-[10px] uppercase tracking-wider text-term-subtle hover:text-term-fg"
+        className="flex items-center mx-1.5 h-6 px-2 w-[calc(100%-12px)] rounded-md text-[10px] uppercase tracking-wider text-text-muted hover:text-text-primary"
         aria-expanded={open}
       >
         {open ? (
@@ -578,7 +590,7 @@ function RecentSection({
         )}
         <Clock className="size-3 mr-1.5" />
         <span className="flex-1 text-left">recent</span>
-        <span className="text-term-subtle/70 normal-case tracking-normal text-[10px]">
+        <span className="text-text-muted/70 normal-case tracking-normal text-[10px]">
           {items.length}
         </span>
       </button>
@@ -594,8 +606,8 @@ function RecentSection({
                   cn(
                     "flex items-center gap-2 mx-1.5 h-7 px-2 rounded-md text-[12px] border",
                     isActive
-                      ? "bg-term-green/15 text-term-green border-term-green/40"
-                      : "text-term-muted hover:text-term-fg hover:bg-term-panel-2 border-transparent",
+                      ? "bg-accent-primary-soft text-accent-primary border-accent-primary/40"
+                      : "text-text-secondary hover:text-text-primary hover:bg-hover border-transparent",
                   )
                 }
                 title={`${r.kind}/${r.namespace ? `${r.namespace}/` : ""}${r.name}`}
@@ -638,7 +650,7 @@ export function ClusterWorkspace() {
   return (
     <div className="flex h-full">
       <aside
-        className="flex flex-col h-full bg-term-panel border-r border-term-border-soft shrink-0 transition-[width] duration-150"
+        className="flex flex-col h-full bg-surface border-r border-border-default shrink-0 transition-[width] duration-150"
         style={{ width: railWidth }}
         aria-label="cluster navigation"
       >
@@ -650,13 +662,16 @@ export function ClusterWorkspace() {
           onBack={() => nav("/cluster")}
         />
 
-        <nav className="flex-1 min-h-0 overflow-y-auto py-1.5">
+        <nav className={cn("flex-1 min-h-0 overflow-y-auto", collapsed ? "py-2" : "py-1.5")}>
           {SECTIONS.map((item, idx) => {
             if (item.kind === "divider") {
               return (
                 <div
                   key={`div-${idx}`}
-                  className="my-1.5 border-t border-term-border-soft"
+                  className={cn(
+                    "border-t border-border-default",
+                    collapsed ? "my-2" : "my-1.5",
+                  )}
                 />
               );
             }
@@ -715,7 +730,7 @@ export function ClusterWorkspace() {
             );
           })}
 
-          <div className="my-1.5 border-t border-term-border-soft" />
+          <div className={cn("border-t border-border-default", collapsed ? "my-2" : "my-1.5")} />
 
           <PinnedSection
             ctx={context}
@@ -732,7 +747,7 @@ export function ClusterWorkspace() {
         </nav>
 
         {/* Footer: port-forwards chip + collapse toggle */}
-        <div className="border-t border-term-border-soft shrink-0">
+        <div className="border-t border-border-default shrink-0">
           <div
             className={cn(
               "flex items-center gap-1 px-2 py-2",
@@ -741,13 +756,16 @@ export function ClusterWorkspace() {
           >
             {!collapsed && <PortForwardsChip />}
             {collapsed && (
-              <div className="flex items-center justify-center">
+              <div className="flex size-10 items-center justify-center">
                 <PortForwardsChip />
               </div>
             )}
             <button
               onClick={rail.toggleCollapsed}
-              className="inline-flex items-center justify-center size-7 rounded-md text-term-subtle hover:text-term-fg hover:bg-term-panel-2"
+              className={cn(
+                "inline-flex items-center justify-center rounded-md text-text-muted hover:bg-hover hover:text-text-primary",
+                collapsed ? "size-10" : "size-7",
+              )}
               title={collapsed ? "expand rail" : "collapse rail"}
               aria-label={collapsed ? "expand rail" : "collapse rail"}
             >

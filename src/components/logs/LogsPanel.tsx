@@ -162,7 +162,7 @@ export function LogsPanel(props: LogsPanelProps) {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="shrink-0 px-3 py-1 border-b border-term-border-soft text-[11px] text-term-subtle truncate">
+      <div className="shrink-0 px-3 py-1.5 border-b border-border-default bg-shell text-[11px] text-text-muted truncate">
         {namespace} / {pod} · since {sinceRef.current} · {view.lines.length.toLocaleString()} lines
         {paused && " · paused"}
       </div>
