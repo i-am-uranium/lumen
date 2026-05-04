@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { forwardRef, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   Bot,
@@ -87,6 +87,8 @@ export function AiAssistant() {
   const [notes, setNotes] = useState("");
   const [provider, setProvider] = useState<"codex" | "claude">("codex");
   const [approved, setApproved] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const approvalRef = useRef<HTMLDivElement>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<AiRunResult | null>(null);
 
@@ -128,15 +130,7 @@ export function AiAssistant() {
     { label: "Resources", value: `${workloads.length} sampled` },
     { label: "Signals", value: `${unhealthyCount} attention` },
   ];
-  const reviewTabs = [
-    { label: "Workloads", count: workloads.length },
-    { label: "Unhealthy", count: unhealthyCount },
-    { label: "Notes", count: notes.trim() ? 1 : 0 },
-    { label: "Redacted", count: redacted.findings.reduce((sum, f) => sum + f.count, 0) },
-  ];
-  const sampleRows = workloads
-    .filter((w) => w.health !== "healthy" || (w.restart_count ?? 0) > 0)
-    .slice(0, 8);
+  const redactionCount = redacted.findings.reduce((sum, f) => sum + f.count, 0);
 
   async function copyPrompt() {
     await navigator.clipboard.writeText(prompt);
@@ -162,16 +156,40 @@ export function AiAssistant() {
     }
   }
 
+  function handleQuestionAction() {
+    if (!selectedProvider?.available) {
+      setShowConfig(true);
+      return;
+    }
+    if (!approved) {
+      approvalRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      approvalRef.current
+        ?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+        ?.focus({ preventScroll: true });
+      return;
+    }
+    void runProvider();
+  }
+
   return (
     <LumenPage className="max-w-[1760px] gap-3">
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="space-y-3">
-          <AssistantHero
+          <ContextStrip items={contextSignals} loading={loadingContext} />
+          <AssistantHeader
             provider={selectedProvider}
-            providers={providers.data ?? []}
-            value={provider}
-            onChange={setProvider}
+            showConfig={showConfig}
+            onToggleConfig={() => setShowConfig((open) => !open)}
           />
+          {showConfig && (
+            <ConfigurationPanel
+              provider={selectedProvider}
+              providers={providers.data ?? []}
+              value={provider}
+              onChange={setProvider}
+              onCopy={() => void copyPrompt()}
+            />
+          )}
           <TaskChooser
             task={task}
             onSelect={(item) => {
@@ -186,7 +204,14 @@ export function AiAssistant() {
             question={question}
             notes={notes}
             running={running}
-            disabled={!approved || !selectedProvider?.available || running}
+            actionLabel={
+              !selectedProvider?.available
+                ? "Configure provider"
+                : approved
+                  ? "Ask"
+                  : "Review & approve"
+            }
+            disabled={running}
             onQuestionChange={(value) => {
               setQuestion(value);
               setApproved(false);
@@ -195,38 +220,22 @@ export function AiAssistant() {
               setNotes(value);
               setApproved(false);
             }}
-            onRun={() => void runProvider()}
+            onRun={handleQuestionAction}
           />
-          <ContextStrip items={contextSignals} loading={loadingContext} />
 
-          <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_360px]">
-            <ReviewPanel
-              tabs={reviewTabs}
-              rows={sampleRows}
-              prompt={prompt}
-              redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
-              byteSize={new Blob([prompt]).size}
-              loading={loadingContext}
-            />
-            <div className="space-y-3">
-              <PreviewPane
-                title="Redaction report"
-                empty="No sensitive patterns detected"
-                content={
-                  redacted.findings.length
-                    ? redacted.findings.map((f) => `${f.label}: ${f.count}`).join("\n")
-                    : ""
-                }
-                tone={redacted.findings.length ? "warning" : "success"}
-              />
-              <ExecutionPreview
-                provider={selectedProvider}
-                approved={approved}
-                onApprovedChange={setApproved}
-                onCopy={() => void copyPrompt()}
-              />
-            </div>
-          </div>
+          <ApprovalPanel
+            ref={approvalRef}
+            approved={approved}
+            onApprovedChange={setApproved}
+            prompt={prompt}
+            byteSize={new Blob([prompt]).size}
+            workloads={workloads.length}
+            unhealthy={unhealthyCount}
+            notes={notes.trim() ? 1 : 0}
+            redactionCount={redactionCount}
+            redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
+            onCopy={() => void copyPrompt()}
+          />
         </div>
 
         <AnswerPanel result={result} provider={selectedProvider} />
@@ -235,46 +244,87 @@ export function AiAssistant() {
   );
 }
 
-function AssistantHero({
+function AssistantHeader({
   provider,
-  providers,
-  value,
-  onChange,
+  showConfig,
+  onToggleConfig,
 }: {
   provider?: AiProviderStatus;
-  providers: AiProviderStatus[];
-  value: "codex" | "claude";
-  onChange: (value: "codex" | "claude") => void;
+  showConfig: boolean;
+  onToggleConfig: () => void;
 }) {
   return (
-    <section className="relative overflow-hidden rounded-panel border border-accent-primary/40 bg-[linear-gradient(135deg,rgba(99,102,241,0.18),rgba(16,185,129,0.06)_45%,rgba(13,15,20,0.92))] p-4 shadow-[var(--shadow-panel)]">
+    <section className="relative overflow-hidden rounded-panel border border-accent-primary/35 bg-[linear-gradient(135deg,rgba(99,102,241,0.14),rgba(16,185,129,0.05)_42%,rgba(13,15,20,0.92))] px-4 py-3 shadow-[var(--shadow-panel)]">
       <div className="absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--accent-primary),transparent)]" />
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-accent-primary">
             <Sparkles className="size-4" />
             AI assistant
           </div>
-          <h1 className="mt-2 text-2xl font-semibold leading-tight text-text-primary">
+          <h1 className="mt-1 text-xl font-semibold leading-tight text-text-primary">
             Ask Lumen
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            Local-first debugging with redacted context, explicit approval, and
-            read-only execution through your installed AI CLI.
+          <p className="mt-1 max-w-3xl text-[12px] text-text-secondary">
+            Ask a focused Kubernetes question. Lumen reviews redacted context before
+            sending anything to your local AI CLI.
           </p>
         </div>
-        <div className="flex shrink-0 flex-col gap-2">
-          <span className="text-[10px] uppercase tracking-wide text-text-muted">
-            Provider
-          </span>
-          <ProviderPicker providers={providers} value={value} onChange={onChange} />
+        <div className="flex shrink-0 items-center gap-2">
           <div className="inline-flex items-center gap-1.5 self-start rounded-control border border-success/25 bg-[var(--status-success-soft)] px-2 py-1 text-[10px] text-success">
             <ShieldCheck className="size-3" />
-            {provider?.available ? "Read-only mode" : "CLI not detected"}
+            {provider?.available ? `${provider.label} · read-only` : "CLI not detected"}
           </div>
+          <Button type="button" variant="secondary" size="sm" onClick={onToggleConfig}>
+            <Settings2 className="size-3.5" />
+            {showConfig ? "Hide config" : "Configure"}
+          </Button>
         </div>
       </div>
     </section>
+  );
+}
+
+function ConfigurationPanel({
+  provider,
+  providers,
+  value,
+  onChange,
+  onCopy,
+}: {
+  provider?: AiProviderStatus;
+  providers: AiProviderStatus[];
+  value: "codex" | "claude";
+  onChange: (value: "codex" | "claude") => void;
+  onCopy: () => void;
+}) {
+  return (
+    <SectionPanel className="grid gap-4 lg:grid-cols-[minmax(220px,320px)_minmax(0,1fr)]">
+      <div>
+        <div className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">
+          Provider
+        </div>
+        <ProviderPicker providers={providers} value={value} onChange={onChange} />
+      </div>
+      <div>
+        <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
+          <TerminalSquare className="size-3.5 text-accent-primary" />
+          Execution preview
+        </div>
+        <div className="rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-secondary">
+          {provider?.command_preview ?? "Select an AI provider"}
+          {provider?.path && <div className="text-text-muted">{provider.path}</div>}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-3 text-[12px] text-text-secondary">
+          <SafetyLine>Read-only execution</SafetyLine>
+          <SafetyLine>No cluster changes</SafetyLine>
+          <SafetyLine>Manual command approval</SafetyLine>
+        </div>
+        <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={onCopy}>
+          <Clipboard className="size-3.5" /> copy prompt
+        </Button>
+      </div>
+    </SectionPanel>
   );
 }
 
@@ -367,6 +417,7 @@ function QuestionPanel({
   notes,
   running,
   disabled,
+  actionLabel,
   onQuestionChange,
   onNotesChange,
   onRun,
@@ -376,6 +427,7 @@ function QuestionPanel({
   notes: string;
   running: boolean;
   disabled: boolean;
+  actionLabel: string;
   onQuestionChange: (value: string) => void;
   onNotesChange: (value: string) => void;
   onRun: () => void;
@@ -404,7 +456,7 @@ function QuestionPanel({
             ) : (
               <SendHorizontal className="size-4" />
             )}
-            {disabled ? "Review first" : "Ask"}
+            {actionLabel}
           </Button>
         </div>
       </div>
@@ -423,154 +475,118 @@ function QuestionPanel({
   );
 }
 
-function ReviewPanel({
-  tabs,
-  rows,
-  prompt,
-  redactions,
-  byteSize,
-  loading,
-}: {
-  tabs: Array<{ label: string; count: number }>;
-  rows: WorkloadSummary[];
-  prompt: string;
-  redactions: string[];
-  byteSize: number;
-  loading: boolean;
-}) {
-  const [view, setView] = useState<"summary" | "payload">("summary");
-  return (
-    <SectionPanel className="overflow-hidden p-0">
-      <div className="flex flex-col gap-3 border-b border-border-default p-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="rounded-control border border-success/30 bg-[var(--status-success-soft)] p-2 text-success">
-            <ShieldCheck className="size-5" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-text-primary">
-              Review before sending
-            </h2>
-            <p className="mt-1 text-[12px] text-text-secondary">
-              Lumen uses sampled cluster context and redacts sensitive values.
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-text-muted">
-            {byteSize.toLocaleString()} bytes
-          </span>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => setView(view === "summary" ? "payload" : "summary")}
-          >
-            <Settings2 className="size-3.5" />
-            {view === "summary" ? "View payload" : "View summary"}
-          </Button>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-2 border-b border-border-subtle px-4 py-3">
-        {tabs.map((tab) => (
-          <span
-            key={tab.label}
-            className="inline-flex items-center gap-2 rounded-control border border-border-default bg-elevated px-3 py-1.5 text-[11px] text-text-secondary"
-          >
-            {tab.label}
-            <span className="rounded bg-accent-primary-soft px-1.5 py-0.5 font-mono text-[10px] text-accent-primary">
-              {tab.count}
-            </span>
-          </span>
-        ))}
-      </div>
-      {view === "summary" ? (
-        <div className="p-4">
-          <div className="rounded-control border border-border-default bg-code-surface">
-            <div className="grid grid-cols-[minmax(160px,1.1fr)_90px_90px_90px_minmax(120px,0.9fr)] border-b border-border-subtle px-3 py-2 text-[10px] uppercase tracking-wide text-text-muted">
-              <span>Resource</span>
-              <span>Health</span>
-              <span>Ready</span>
-              <span>Restarts</span>
-              <span>Node</span>
-            </div>
-            {loading ? (
-              <div className="p-4 text-[12px] text-text-secondary">Sampling resources...</div>
-            ) : rows.length ? (
-              rows.map((row) => (
-                <div
-                  key={`${row.kind}/${row.namespace}/${row.name}`}
-                  className="grid grid-cols-[minmax(160px,1.1fr)_90px_90px_90px_minmax(120px,0.9fr)] border-b border-border-subtle px-3 py-2 text-[11px] last:border-b-0"
-                >
-                  <span className="truncate font-mono text-text-primary">
-                    {row.kind}/{row.name}
-                  </span>
-                  <span className={cn("capitalize", row.health === "healthy" ? "text-success" : "text-warning")}>
-                    {row.health}
-                  </span>
-                  <span className="font-mono text-text-secondary">{row.ready || "-"}</span>
-                  <span className="font-mono text-text-secondary">{row.restart_count ?? 0}</span>
-                  <span className="truncate font-mono text-text-muted">{row.node_name ?? "-"}</span>
-                </div>
-              ))
-            ) : (
-              <div className="p-4 text-[12px] text-text-secondary">
-                No unhealthy or restarted workloads in the sampled context.
-              </div>
-            )}
-          </div>
-          <div className="mt-3 rounded-control border border-danger/25 bg-[var(--status-error-soft)] px-3 py-2 text-[11px] text-danger">
-            {redactions.length
-              ? `Redacted: ${redactions.join(", ")}`
-              : "Secrets, tokens, and sensitive values are checked before sending."}
-          </div>
-        </div>
-      ) : (
-        <pre className="max-h-[420px] overflow-auto p-4 font-mono text-[11px] leading-relaxed text-text-secondary whitespace-pre-wrap">
-          {prompt}
-        </pre>
-      )}
-    </SectionPanel>
-  );
-}
-
-function ExecutionPreview({
-  provider,
-  approved,
-  onApprovedChange,
-  onCopy,
-}: {
-  provider?: AiProviderStatus;
+type ApprovalPanelProps = {
   approved: boolean;
   onApprovedChange: (value: boolean) => void;
+  prompt: string;
+  byteSize: number;
+  workloads: number;
+  unhealthy: number;
+  notes: number;
+  redactionCount: number;
+  redactions: string[];
   onCopy: () => void;
-}) {
+};
+
+const ApprovalPanel = forwardRef<HTMLDivElement, ApprovalPanelProps>(
+  function ApprovalPanel(
+    {
+      approved,
+      onApprovedChange,
+      prompt,
+      byteSize,
+      workloads,
+      unhealthy,
+      notes,
+      redactionCount,
+      redactions,
+      onCopy,
+    },
+    ref,
+  ) {
+    const [showPayload, setShowPayload] = useState(false);
+    return (
+      <div ref={ref}>
+        <SectionPanel className="space-y-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="rounded-control border border-success/30 bg-[var(--status-success-soft)] p-2 text-success">
+                <ShieldCheck className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-text-primary">
+                  Review and approve
+                </h2>
+                <p className="mt-1 text-[12px] text-text-secondary">
+                  Lumen sends only the redacted payload after you approve it.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-text-muted">
+                {byteSize.toLocaleString()} bytes
+              </span>
+              <Button type="button" variant="secondary" size="sm" onClick={onCopy}>
+                <Clipboard className="size-3.5" /> copy
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowPayload((open) => !open)}
+              >
+                <Settings2 className="size-3.5" />
+                {showPayload ? "Hide payload" : "View payload"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-4">
+            <ReviewStat label="workloads" value={workloads} />
+            <ReviewStat label="attention" value={unhealthy} />
+            <ReviewStat label="notes" value={notes} />
+            <ReviewStat label="redacted" value={redactionCount} />
+          </div>
+
+          <div
+            className={cn(
+              "rounded-control border px-3 py-2 text-[11px]",
+              redactions.length
+                ? "border-warning/35 bg-[var(--status-warning-soft)] text-warning"
+                : "border-success/30 bg-[var(--status-success-soft)] text-success",
+            )}
+          >
+            {redactions.length
+              ? `Redacted: ${redactions.join(", ")}`
+              : "No sensitive patterns detected. Secrets, tokens, and credentials are still checked before sending."}
+          </div>
+
+          {showPayload && (
+            <pre className="max-h-[300px] overflow-auto rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-relaxed text-text-secondary whitespace-pre-wrap">
+              {prompt}
+            </pre>
+          )}
+
+          <label className="flex items-start gap-2 border-t border-border-subtle pt-3 text-[12px] text-text-secondary">
+            <input
+              type="checkbox"
+              checked={approved}
+              onChange={(e) => onApprovedChange(e.target.checked)}
+              className="mt-0.5"
+            />
+            I reviewed the redacted payload and approve sending it to my local AI CLI.
+          </label>
+        </SectionPanel>
+      </div>
+    );
+  },
+);
+
+function ReviewStat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-panel border border-border-default bg-shell/80 p-4">
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-text-primary">
-        <TerminalSquare className="size-4 text-accent-primary" />
-        Execution preview
-      </div>
-      <div className="rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-secondary">
-        {provider?.command_preview ?? "Select an AI provider"}
-        {provider?.path && <div className="text-text-muted">{provider.path}</div>}
-      </div>
-      <div className="mt-3 space-y-2 text-[12px] text-text-secondary">
-        <SafetyLine>Read-only execution</SafetyLine>
-        <SafetyLine>No cluster changes</SafetyLine>
-        <SafetyLine>Commands require manual approval</SafetyLine>
-      </div>
-      <label className="mt-4 flex items-start gap-2 border-t border-border-subtle pt-3 text-[12px] text-text-secondary">
-        <input
-          type="checkbox"
-          checked={approved}
-          onChange={(e) => onApprovedChange(e.target.checked)}
-          className="mt-0.5"
-        />
-        I reviewed the redacted payload and approve sending it to my local AI CLI.
-      </label>
-      <Button type="button" variant="secondary" className="mt-3 w-full" onClick={onCopy}>
-        <Clipboard className="size-4" /> copy prompt
-      </Button>
+    <div className="rounded-control border border-border-default bg-elevated px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-text-muted">{label}</div>
+      <div className="mt-1 font-mono text-[13px] text-text-primary">{value}</div>
     </div>
   );
 }
@@ -712,34 +728,6 @@ function ProviderPicker({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function PreviewPane({
-  title,
-  content,
-  empty,
-  tone,
-}: {
-  title: string;
-  content?: string;
-  empty: string;
-  tone: "success" | "warning";
-}) {
-  return (
-    <div className="rounded-control border border-border-default bg-elevated p-3">
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
-        {tone === "success" ? (
-          <CheckCircle2 className="size-3 text-success" />
-        ) : (
-          <TriangleAlert className="size-3 text-warning" />
-        )}
-        {title}
-      </div>
-      <pre className="mt-2 min-h-[54px] whitespace-pre-wrap break-all font-mono text-[11px] text-text-secondary">
-        {content || empty}
-      </pre>
     </div>
   );
 }
