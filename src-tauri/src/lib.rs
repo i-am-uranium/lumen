@@ -17,7 +17,7 @@ pub fn run() {
                 // silence the crate-level spam by default. Users can still set
                 // RUST_LOG explicitly to debug.
                 tracing_subscriber::EnvFilter::new(
-                    "info,kube_client::client::builder=off,kube_client::client=warn",
+                    "info,kube_client::client::builder=off,kube_client::client=error",
                 )
             }),
         )

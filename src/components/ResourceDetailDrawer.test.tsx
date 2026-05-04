@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { ResourceDetailDrawer } from "./ResourceDetailDrawer";
 import { k8s } from "@/lib/k8s";
@@ -63,13 +64,15 @@ function renderDrawer() {
   });
 
   return render(
-    <QueryClientProvider client={qc}>
-      <ResourceDetailDrawer
-        ctx="dev"
-        resource={{ kind: "deployment", namespace: "default", name: "api" }}
-        onClose={vi.fn()}
-      />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <ResourceDetailDrawer
+          ctx="dev"
+          resource={{ kind: "deployment", namespace: "default", name: "api" }}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
