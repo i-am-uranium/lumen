@@ -220,3 +220,53 @@ import {
   …
 </DrawerPanel>
 ```
+
+## Contributor Examples
+
+Use these quick patterns to keep route code focused on behavior while shared primitives own visual consistency.
+
+### Empty and Error States
+
+```tsx
+import { EmptyState, ErrorPanel } from "@/components/lumen/feedback";
+
+if (error) {
+  return <ErrorPanel title="Unable to load pods" description={error.message} />;
+}
+
+if (!pods.length) {
+  return <EmptyState title="No pods found" description="Try switching namespace filters." />;
+}
+```
+
+### Action Rows and Confirmation Cards
+
+```tsx
+import { CommandRow } from "@/components/lumen/command-row";
+import { ConfirmActionCard } from "@/components/lumen/confirm-action-card";
+
+<CommandRow
+  label="Restart deployment"
+  description="Rolls all replicas in the selected namespace."
+  actions={<Button variant="danger">Restart</Button>}
+/>
+
+<ConfirmActionCard
+  title="Delete workload"
+  body="This removes the workload from the active cluster and namespace."
+  confirmLabel="Delete workload"
+/>
+```
+
+When a primitive does not exist yet, add it to `src/components/lumen` or `src/components/ui` and document usage here instead of repeating route-local style blocks.
+
+
+## Design Guard Workflow
+
+The design-system guard is baseline-driven to allow incremental cleanup without blocking unrelated work.
+
+- Run `npm run test:design-guard` to verify no new style regressions were introduced.
+- Run `npm run design-guard:refresh` only when intentionally accepting/removing legacy exceptions.
+- Treat baseline updates as design-review changes: explain why each new exception is needed, or why the count went down.
+
+This keeps enforcement strict for new drift while still allowing the codebase to migrate steadily toward tokenized styles.
