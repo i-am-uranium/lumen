@@ -23,10 +23,10 @@ function CardShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-term-border-soft bg-term-panel p-4">
-      <div className="flex items-center gap-1.5 text-term-subtle mb-2">
-        <span className="text-term-muted">{icon}</span>
-        <span className="text-[11px] uppercase tracking-wider text-term-muted">
+    <div className="rounded-panel border border-border-subtle bg-shell p-4">
+      <div className="flex items-center gap-1.5 text-text-muted mb-2">
+        <span className="text-text-secondary">{icon}</span>
+        <span className="text-[11px] uppercase tracking-wider text-text-secondary">
           {label}
         </span>
       </div>
@@ -45,7 +45,7 @@ function BigNumber({
   return (
     <div
       className={cn(
-        "text-[26px] leading-none font-semibold text-term-fg tabular-nums",
+        "text-[26px] leading-none font-semibold text-text-primary tabular-nums",
         className,
       )}
     >
@@ -56,7 +56,7 @@ function BigNumber({
 
 function SubLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-1.5 text-[11px] text-term-muted tabular-nums">
+    <div className="mt-1.5 text-[11px] text-text-secondary tabular-nums">
       {children}
     </div>
   );
@@ -64,17 +64,17 @@ function SubLabel({ children }: { children: React.ReactNode }) {
 
 function SkeletonCard() {
   return (
-    <div className="rounded-lg border border-term-border-soft bg-term-panel p-4 h-[96px] animate-pulse">
-      <div className="h-3 w-16 bg-term-panel-2 rounded mb-3" />
-      <div className="h-7 w-20 bg-term-panel-2 rounded" />
-      <div className="h-3 w-24 bg-term-panel-2 rounded mt-3" />
+    <div className="rounded-panel border border-border-subtle bg-shell p-4 h-[96px] animate-pulse">
+      <div className="h-3 w-16 bg-elevated rounded mb-3" />
+      <div className="h-7 w-20 bg-elevated rounded" />
+      <div className="h-3 w-24 bg-elevated rounded mt-3" />
     </div>
   );
 }
 
 function ErrorBody({ error }: { error: unknown }) {
   return (
-    <div className="text-[12px] text-term-red break-words">
+    <div className="text-[12px] text-danger break-words">
       {(error as Error)?.message ?? "failed to load"}
     </div>
   );
@@ -159,11 +159,11 @@ export function Overview() {
 
   return (
     <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 bg-term-bg/95 backdrop-blur border-b border-term-border-soft px-6 py-4">
-        <h1 className="mds-heading text-[20px] text-term-fg flex items-center gap-2">
+      <div className="sticky top-0 z-10 bg-app/95 backdrop-blur border-b border-border-subtle px-6 py-4">
+        <h1 className="mds-heading text-[20px] text-text-primary flex items-center gap-2">
           <Activity className="size-5" /> overview
         </h1>
-        <p className="text-[12px] text-term-muted">{context}</p>
+        <p className="text-[12px] text-text-secondary">{context}</p>
       </div>
 
       <div className="p-6">
@@ -182,8 +182,8 @@ export function Overview() {
                     <span
                       className={cn(
                         nodesReady < nodesTotal
-                          ? "text-amber-400"
-                          : "text-term-green",
+                          ? "text-warning"
+                          : "text-accent-primary",
                       )}
                     >
                       {nodesReady} ready
@@ -222,15 +222,15 @@ export function Overview() {
                 <>
                   <BigNumber value={workloadsTotal} />
                   <SubLabel>
-                    <span className="text-term-green">
+                    <span className="text-accent-primary">
                       {wlBreakdown.healthy} running
                     </span>
-                    <span className="text-term-subtle"> · </span>
-                    <span className="text-amber-400">
+                    <span className="text-text-muted"> · </span>
+                    <span className="text-warning">
                       {wlBreakdown.degraded} degraded
                     </span>
-                    <span className="text-term-subtle"> · </span>
-                    <span className="text-term-red">
+                    <span className="text-text-muted"> · </span>
+                    <span className="text-danger">
                       {wlBreakdown.failed} failed
                     </span>
                   </SubLabel>
@@ -248,21 +248,21 @@ export function Overview() {
                 <ErrorBody error={fleetQ.error} />
               ) : !pods ? (
                 <BigNumber
-                  value={<span className="text-term-subtle">—</span>}
+                  value={<span className="text-text-muted">—</span>}
                 />
               ) : (
                 <>
                   <BigNumber value={pods.pods_total} />
                   <SubLabel>
-                    <span className="text-term-green">
+                    <span className="text-accent-primary">
                       {pods.pods_ready} ready
                     </span>
-                    <span className="text-term-subtle"> · </span>
-                    <span className="text-amber-400">
+                    <span className="text-text-muted"> · </span>
+                    <span className="text-warning">
                       {pods.pods_pending} pending
                     </span>
-                    <span className="text-term-subtle"> · </span>
-                    <span className="text-term-red">
+                    <span className="text-text-muted"> · </span>
+                    <span className="text-danger">
                       {pods.pods_failed} failed
                     </span>
                   </SubLabel>
@@ -282,7 +282,7 @@ export function Overview() {
                 fleetCard?.cpu_percent === undefined ? (
                 <>
                   <BigNumber
-                    value={<span className="text-term-subtle">—</span>}
+                    value={<span className="text-text-muted">—</span>}
                   />
                   <SubLabel>metrics-server unavailable</SubLabel>
                 </>
@@ -309,7 +309,7 @@ export function Overview() {
                 fleetCard?.mem_percent === undefined ? (
                 <>
                   <BigNumber
-                    value={<span className="text-term-subtle">—</span>}
+                    value={<span className="text-text-muted">—</span>}
                   />
                   <SubLabel>metrics-server unavailable</SubLabel>
                 </>

@@ -144,7 +144,7 @@ function Highlighted({ text, q }: { text: string; q: string }) {
     out.push(
       <mark
         key={idx}
-        className="bg-term-green/30 text-term-fg rounded-sm px-0.5"
+        className="bg-accent-primary-soft text-text-primary rounded-sm px-0.5"
       >
         {text.slice(idx, idx + q.length)}
       </mark>,
@@ -172,15 +172,15 @@ export function LogLineRow({
   return (
     <div
       className={cn(
-        "group border-b border-term-border-soft/30 px-3 py-1 text-[12px] leading-[18px]",
+        "group border-b border-border-subtle/40 px-3 py-1 text-[12px] leading-[18px]",
         "font-mono [font-feature-settings:'liga'_0,'calt'_0] [font-variant-ligatures:none]",
-        hasExtras && "cursor-pointer hover:bg-term-panel-2",
+        hasExtras && "cursor-pointer hover:bg-hover",
       )}
       onClick={() => hasExtras && setOpen((o) => !o)}
     >
       <div className="flex items-start gap-2">
         {hasExtras ? (
-          <span className="shrink-0 text-term-subtle mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <span className="shrink-0 text-text-muted mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
           </span>
         ) : (
@@ -188,7 +188,7 @@ export function LogLineRow({
         )}
 
         {parsed.ts && (
-          <span className="shrink-0 w-[84px] text-term-subtle tabular-nums truncate">
+          <span className="shrink-0 w-[84px] text-text-muted tabular-nums truncate">
             {parsed.ts}
           </span>
         )}
@@ -197,7 +197,7 @@ export function LogLineRow({
           <span
             className={cn(
               "shrink-0 inline-flex items-center justify-center px-1.5 h-[16px] rounded border text-[10px] uppercase font-semibold tracking-wide leading-none",
-              levelTone || "text-term-muted bg-term-panel-2 border-term-border-soft",
+              levelTone || "text-text-secondary bg-elevated border-border-default",
             )}
           >
             {parsed.level}
@@ -211,24 +211,24 @@ export function LogLineRow({
           {line.pod}
         </span>
 
-        <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-term-fg">
+        <span className="flex-1 min-w-0 whitespace-pre-wrap break-words text-text-primary">
           <Highlighted text={parsed.message} q={highlight ?? ""} />
         </span>
       </div>
 
       {open && parsed.extras && (
         <div
-          className="mt-1.5 ml-[calc(12px+8px+84px+8px)] rounded border border-term-border-soft bg-term-bg/60 p-2 text-[11px]"
+          className="mt-1.5 ml-[calc(12px+8px+84px+8px)] rounded-control border border-border-default bg-shell/70 p-2 text-[11px]"
           onClick={(e) => e.stopPropagation()}
         >
           <table className="w-full">
             <tbody>
               {Object.entries(parsed.extras).map(([k, v]) => (
                 <tr key={k} className="align-top">
-                  <td className="pr-3 py-0.5 text-term-subtle w-[140px] font-semibold tabular-nums">
+                  <td className="pr-3 py-0.5 text-text-muted w-[140px] font-semibold tabular-nums">
                     {k}
                   </td>
-                  <td className="py-0.5 text-term-fg break-all whitespace-pre-wrap">
+                  <td className="py-0.5 text-text-primary break-all whitespace-pre-wrap">
                     {typeof v === "object"
                       ? JSON.stringify(v, null, 2)
                       : String(v)}

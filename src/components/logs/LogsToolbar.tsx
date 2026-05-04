@@ -3,6 +3,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { LogsContainerPills, type ContainerOption } from "./LogsContainerPills";
 import { LogsSearchBox, type SearchState } from "./LogsSearchBox";
+import { Button } from "@/components/ui/button";
 
 const RANGE_OPTIONS: { label: string; seconds: number | null }[] = [
   { label: "15m", seconds: 15 * 60 },
@@ -53,10 +54,10 @@ export function LogsToolbar({
   const rangeLabel = RANGE_OPTIONS.find((o) => o.seconds === rangeSeconds)?.label ?? "all";
 
   return (
-    <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-term-border-soft bg-term-panel-2">
+    <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border-default bg-elevated">
       <LogsContainerPills options={containers} selection={containerSelection} onChange={onContainerChange} />
 
-      <div className="h-4 w-px bg-term-border-soft mx-1" />
+      <div className="h-4 w-px bg-border-default mx-1" />
 
       <LogsSearchBox
         query={search.query}
@@ -79,8 +80,8 @@ export function LogsToolbar({
             className={cn(
               "px-1.5 py-0.5 rounded border text-[10px] uppercase tracking-wide",
               levels.has(l)
-                ? "bg-term-panel-2 text-term-fg border-term-border-soft"
-                : "border-term-border-soft/50 text-term-subtle line-through opacity-60",
+                ? "bg-surface text-text-primary border-border-default"
+                : "border-border-default/60 text-text-muted line-through opacity-60",
             )}
           >
             {l}
@@ -92,21 +93,21 @@ export function LogsToolbar({
         <button
           type="button"
           onClick={() => setRangeOpen((o) => !o)}
-          className="px-2 py-0.5 rounded text-[10px] border border-term-border-soft text-term-muted hover:text-term-fg flex items-center gap-1"
+          className="px-2 py-0.5 rounded text-[10px] border border-border-default text-text-secondary hover:text-text-primary flex items-center gap-1"
         >
           {rangeLabel}
           <ChevronDown className="size-2.5" />
         </button>
         {rangeOpen && (
-          <div className="absolute right-0 top-full mt-1 z-10 bg-term-panel border border-term-border-soft rounded shadow-lg py-1 min-w-[80px]">
+          <div className="absolute right-0 top-full mt-1 z-10 bg-surface border border-border-default rounded-control shadow-[var(--shadow-popover)] py-1 min-w-[80px]">
             {RANGE_OPTIONS.map((o) => (
               <button
                 key={o.label}
                 type="button"
                 onClick={() => { onRangeChange(o.seconds); setRangeOpen(false); }}
                 className={cn(
-                  "block w-full text-left px-2 py-1 text-[11px] hover:bg-term-panel-2",
-                  o.seconds === rangeSeconds ? "text-term-green" : "text-term-fg",
+                  "block w-full text-left px-2 py-1 text-[11px] hover:bg-hover",
+                  o.seconds === rangeSeconds ? "text-accent-primary" : "text-text-primary",
                 )}
               >
                 {o.label}
@@ -147,18 +148,20 @@ function IconBtn({
   disabled?: boolean;
 }) {
   return (
-    <button
+    <Button
       type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
+      variant="ghost"
+      size="icon"
       className={cn(
-        "p-1 rounded",
-        active ? "bg-term-green/20 text-term-green" : "text-term-muted hover:text-term-fg",
+        "size-7 rounded",
+        active && "bg-accent-primary-soft text-accent-primary",
         disabled && "opacity-40 cursor-not-allowed",
       )}
     >
       {children}
-    </button>
+    </Button>
   );
 }

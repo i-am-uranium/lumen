@@ -4,6 +4,18 @@ import { useQuery } from "@tanstack/react-query";
 import { Folders, RefreshCw, Search } from "lucide-react";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DataTableShell,
+  DataTable,
+  DataTableHeader,
+  DataTableBody,
+  DataTableRow,
+  DataTableHead,
+  DataTableCell,
+} from "@/components/ui/data-table";
+import { LumenPage, PageHeader } from "@/components/lumen/page";
 
 // `listNamespaces` returns string[] today — render a single-column table of
 // names. Clicking a row navigates to the workloads view filtered to that
@@ -30,86 +42,88 @@ export function NamespacesView() {
   }, [data, query]);
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 bg-term-bg/95 backdrop-blur border-b border-term-border-soft flex items-center justify-between px-6 py-4">
-        <div>
-          <h1 className="mds-heading text-[20px] text-term-fg flex items-center gap-2">
-            <Folders className="size-5" /> namespaces
-          </h1>
-          <p className="text-[12px] text-term-muted">
+    <LumenPage>
+      <PageHeader
+        eyebrow="Cluster scope"
+        title="namespaces"
+        icon={<Folders className="size-3.5" aria-hidden="true" />}
+        description={
+          <>
             {context} · {data?.length ?? 0} namespace
             {data?.length === 1 ? "" : "s"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+          </>
+        }
+        actions={
+          <div className="flex items-center gap-2">
           <div className="relative">
-            <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-term-subtle" />
-            <input
+            <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+            <Input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="filter…"
-              className="bg-term-panel border border-term-border-soft rounded text-[12px] text-term-fg placeholder:text-term-subtle pl-7 pr-2 py-1.5 min-h-[32px] w-[180px] focus:outline-none focus:border-term-green/60"
+              placeholder="filter..."
+              className="w-[180px] pl-7 text-xs"
             />
           </div>
-          <button
+          <Button
             onClick={() => refetch()}
-            className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
+            size="sm"
             disabled={isFetching}
           >
-            <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />{" "}
+            <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
             refresh
-          </button>
+          </Button>
         </div>
-      </div>
+        }
+      />
 
-      <div className="p-6">
+      <div>
         {error ? (
-          <div className="rounded-lg border border-term-red/40 bg-term-red/10 p-4 text-[13px] text-term-red">
+          <div className="rounded-control border border-danger/30 bg-[var(--status-error-soft)] p-4 text-[13px] text-danger">
             {(error as Error).message}
           </div>
         ) : isLoading ? (
-          <div className="text-[13px] text-term-muted">loading namespaces...</div>
+          <div className="text-[13px] text-text-muted">loading namespaces...</div>
         ) : filtered.length === 0 ? (
-          <div className="text-[13px] text-term-muted">
+          <div className="text-[13px] text-text-muted">
             {query ? "no namespaces match filter." : "no namespaces found."}
           </div>
         ) : (
-          <div className="rounded-lg border border-term-border-soft overflow-hidden">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-term-panel">
-                  <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-term-subtle">
+          <DataTableShell>
+            <DataTable>
+              <DataTableHeader>
+                <DataTableRow>
+                  <DataTableHead>
                     name
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
+                  </DataTableHead>
+                </DataTableRow>
+              </DataTableHeader>
+              <DataTableBody>
                 {filtered.map((ns) => (
-                  <tr
+                  <DataTableRow
                     key={ns}
                     onClick={() =>
                       nav(
                         `/cluster/${encodeURIComponent(context)}/workloads?ns=${encodeURIComponent(ns)}`,
                       )
                     }
-                    className="border-b border-term-border-soft hover:bg-term-panel-2 cursor-pointer last:border-b-0"
+                    className="cursor-pointer"
                   >
-                    <td className="px-3 py-2.5">
+                    <DataTableCell>
                       <div className="flex items-center gap-2">
-                        <span className="size-2 rounded-full bg-emerald-400" />
-                        <span className="text-[13px] text-term-fg font-medium">
+                        <span className="size-2 rounded-full bg-success" />
+                        <span className="text-[13px] text-text-primary font-medium">
                           {ns}
                         </span>
                       </div>
-                    </td>
-                  </tr>
+                    </DataTableCell>
+                  </DataTableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </DataTableBody>
+            </DataTable>
+          </DataTableShell>
         )}
       </div>
-    </div>
+    </LumenPage>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus, X, SplitSquareHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import type { Tab, TabId } from "@/state/logPanels";
 
 const COLOR_PALETTE = [
@@ -75,8 +76,8 @@ export function LogsTabStrip({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={cn(
-        "shrink-0 flex items-center border-b border-term-border-soft bg-term-panel-2 overflow-x-auto",
-        dragOver && "border border-term-green/60",
+        "shrink-0 flex items-center border-b border-border-default bg-elevated overflow-x-auto",
+        dragOver && "border border-accent-primary/60",
       )}
     >
       {tabs.map((t) => {
@@ -94,8 +95,8 @@ export function LogsTabStrip({
             }}
             onClick={() => onSelect(t.id)}
             className={cn(
-              "group flex items-center gap-1.5 px-2 py-1 border-r border-term-border-soft text-[11px] cursor-pointer shrink-0",
-              active ? "bg-term-panel text-term-fg" : "text-term-subtle hover:text-term-fg",
+              "group flex items-center gap-1.5 px-2 py-1 border-r border-border-default text-[11px] cursor-pointer shrink-0 transition-colors",
+              active ? "bg-surface text-text-primary" : "text-text-muted hover:text-text-primary",
             )}
           >
             <span className={cn("size-2 rounded-full shrink-0", podColorFor(t.podName))} />
@@ -104,7 +105,7 @@ export function LogsTabStrip({
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onClose(t.id); }}
-                className="opacity-0 group-hover:opacity-100 text-term-subtle hover:text-term-red transition-opacity"
+                className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-danger transition-opacity"
                 title="close tab"
               >
                 <X className="size-3" />
@@ -114,23 +115,25 @@ export function LogsTabStrip({
         );
       })}
       <div className="relative">
-        <button
+        <Button
           type="button"
           onClick={() => { setAddOpen((o) => !o); setSplitOpen(false); }}
           disabled={availablePods.length === 0}
-          className="px-2 py-1 text-term-muted hover:text-term-fg disabled:opacity-30"
+          variant="ghost"
+          size="icon"
+          className="size-7 rounded-none"
           title="add pod tab"
         >
           <Plus className="size-3.5" />
-        </button>
+        </Button>
         {addOpen && availablePods.length > 0 && (
-          <div className="absolute left-0 top-full mt-1 z-20 bg-term-panel border border-term-border-soft rounded shadow-lg py-1 max-h-60 overflow-y-auto min-w-[180px]">
+          <div className="absolute left-0 top-full mt-1 z-20 bg-surface border border-border-default rounded-control shadow-[var(--shadow-popover)] py-1 max-h-60 overflow-y-auto min-w-[180px]">
             {availablePods.map((p) => (
               <button
                 key={p}
                 type="button"
                 onClick={() => { onAddTab(p); setAddOpen(false); }}
-                className="block w-full text-left px-2 py-1 text-[11px] text-term-fg hover:bg-term-panel-2 font-mono"
+                className="block w-full text-left px-2 py-1 text-[11px] text-text-primary hover:bg-hover font-mono"
               >
                 {p}
               </button>
@@ -140,27 +143,29 @@ export function LogsTabStrip({
       </div>
       {canSplit && tabs.length > 1 && (
         <div className="relative">
-          <button
+          <Button
             type="button"
             onClick={() => { setSplitOpen((o) => !o); setAddOpen(false); }}
-            className="px-2 py-1 text-term-muted hover:text-term-fg"
+            variant="ghost"
+            size="icon"
+            className="size-7 rounded-none"
             title="split panel"
           >
             <SplitSquareHorizontal className="size-3.5" />
-          </button>
+          </Button>
           {splitOpen && (
-            <div className="absolute left-0 top-full mt-1 z-20 bg-term-panel border border-term-border-soft rounded shadow-lg py-1 min-w-[140px]">
+            <div className="absolute left-0 top-full mt-1 z-20 bg-surface border border-border-default rounded-control shadow-[var(--shadow-popover)] py-1 min-w-[140px]">
               <button
                 type="button"
                 onClick={() => { onSplit("h", activeTab); setSplitOpen(false); }}
-                className="block w-full text-left px-2 py-1 text-[11px] text-term-fg hover:bg-term-panel-2"
+                className="block w-full text-left px-2 py-1 text-[11px] text-text-primary hover:bg-hover"
               >
                 split right
               </button>
               <button
                 type="button"
                 onClick={() => { onSplit("v", activeTab); setSplitOpen(false); }}
-                className="block w-full text-left px-2 py-1 text-[11px] text-term-fg hover:bg-term-panel-2"
+                className="block w-full text-left px-2 py-1 text-[11px] text-text-primary hover:bg-hover"
               >
                 split down
               </button>

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 export type ContainerKind = "regular" | "init";
 
@@ -37,36 +38,40 @@ export function LogsContainerPills({
 
   return (
     <div className="flex items-center gap-1 flex-wrap">
-      <button
+      <Button
         type="button"
         onClick={() => onChange("all")}
+        variant="outline"
+        size="sm"
         className={cn(
-          "px-2 py-0.5 rounded text-[10px] border tabular-nums",
+          "h-6 px-2 rounded text-[10px] tabular-nums",
           isAll
-            ? "bg-term-green/20 text-term-green border-term-green/40"
-            : "border-term-border-soft text-term-muted hover:text-term-fg",
+            ? "bg-accent-primary-soft text-accent-primary border-accent-primary/40"
+            : "text-text-secondary",
         )}
       >
         all
-      </button>
+      </Button>
       {options.map((c) => {
         const active = isAll || selSet.has(c.name);
         return (
-          <button
+          <Button
             key={c.name}
             type="button"
             onClick={() => toggle(c.name)}
+            variant="outline"
+            size="sm"
             className={cn(
-              "px-2 py-0.5 rounded text-[10px] border tabular-nums",
+              "h-6 px-2 rounded text-[10px] tabular-nums",
               active
-                ? "bg-term-panel-2 text-term-fg border-term-border-soft"
-                : "border-term-border-soft/50 text-term-subtle hover:text-term-fg",
+                ? "bg-surface text-text-primary border-border-default"
+                : "border-border-default/60 text-text-muted hover:text-text-primary",
               c.kind === "init" && "italic opacity-70",
             )}
             title={c.kind === "init" ? `init container: ${c.name}` : c.name}
           >
             {c.name}
-          </button>
+          </Button>
         );
       })}
     </div>

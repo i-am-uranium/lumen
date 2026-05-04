@@ -34,7 +34,7 @@ const SEV_COLOR: Record<Severity, { bg: string; border: string; text: string; fi
   medium: {
     bg: "bg-amber-500/10",
     border: "border-amber-500/40",
-    text: "text-amber-400",
+    text: "text-warning",
     fill: "bg-amber-500",
   },
   low: {
@@ -122,13 +122,13 @@ export function SecurityView() {
 
   return (
     <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 bg-term-bg/95 backdrop-blur border-b border-term-border-soft">
+      <div className="sticky top-0 z-10 bg-app/95 backdrop-blur border-b border-border-subtle">
         <div className="flex items-center justify-between px-6 py-4">
           <div>
-            <h1 className="mds-heading text-[20px] text-term-fg flex items-center gap-2">
+            <h1 className="mds-heading text-[20px] text-text-primary flex items-center gap-2">
               <ShieldAlert className="size-5" /> devsec
             </h1>
-            <p className="text-[12px] text-term-muted">
+            <p className="text-[12px] text-text-secondary">
               {context} · {data?.resources_scanned ?? 0} resources scanned ·{" "}
               {data ? new Date(data.scanned_at_ms).toLocaleTimeString() : "—"}
             </p>
@@ -145,7 +145,7 @@ export function SecurityView() {
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-5 border-t border-term-border-soft">
+        <div className="grid grid-cols-5 border-t border-border-subtle">
           {SEVERITIES.map((s) => {
             const count = data?.counts_by_severity?.[s] ?? 0;
             const on = active.has(s);
@@ -154,17 +154,17 @@ export function SecurityView() {
                 key={s}
                 onClick={() => toggleSev(s)}
                 className={cn(
-                  "flex items-center gap-3 px-6 py-3 border-r border-term-border-soft last:border-r-0 text-left transition-colors",
-                  on ? SEV_COLOR[s].bg : "hover:bg-term-panel-2",
+                  "flex items-center gap-3 px-6 py-3 border-r border-border-subtle last:border-r-0 text-left transition-colors",
+                  on ? SEV_COLOR[s].bg : "hover:bg-elevated",
                 )}
               >
                 <span className={cn("shrink-0", SEV_COLOR[s].text)}>{sevIcon(s)}</span>
                 <div className="flex flex-col min-w-0">
-                  <span className="text-[10px] uppercase tracking-wider text-term-subtle">{s}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-text-muted">{s}</span>
                   <span
                     className={cn(
                       "text-[16px] font-semibold tabular-nums",
-                      on ? SEV_COLOR[s].text : "text-term-fg",
+                      on ? SEV_COLOR[s].text : "text-text-primary",
                     )}
                   >
                     {count}
@@ -174,17 +174,17 @@ export function SecurityView() {
             );
           })}
         </div>
-        <div className="flex items-center gap-2 px-6 py-3 border-t border-term-border-soft">
-          <div className="flex items-center gap-2 h-8 px-2 rounded-md bg-term-bg border border-term-border-soft flex-1 max-w-md">
-            <Search className="size-3.5 text-term-subtle" />
+        <div className="flex items-center gap-2 px-6 py-3 border-t border-border-subtle">
+          <div className="flex items-center gap-2 h-8 px-2 rounded-control bg-app border border-border-subtle flex-1 max-w-md">
+            <Search className="size-3.5 text-text-muted" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="filter by rule, resource, or namespace..."
-              className="flex-1 bg-transparent outline-none text-[12px] text-term-fg placeholder:text-term-subtle"
+              className="flex-1 bg-transparent outline-none text-[12px] text-text-primary placeholder:text-text-muted"
             />
           </div>
-          <span className="text-[11px] text-term-subtle">
+          <span className="text-[11px] text-text-muted">
             {filtered.length} of {findings.length} shown
           </span>
         </div>
@@ -192,19 +192,19 @@ export function SecurityView() {
 
       <div className="p-6 space-y-3">
         {error ? (
-          <div className="rounded-lg border border-term-red/40 bg-term-red/10 p-4 text-[13px] text-term-red">
+          <div className="rounded-panel border border-danger/30 bg-[var(--status-error-soft)] p-4 text-[13px] text-danger">
             {(error as Error).message}
           </div>
         ) : isLoading ? (
-          <div className="text-[13px] text-term-muted flex items-center gap-2">
+          <div className="text-[13px] text-text-secondary flex items-center gap-2">
             <RefreshCw className="size-4 animate-spin" />
             scanning cluster...
           </div>
         ) : grouped.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <ShieldCheck className="size-10 text-emerald-400 mb-3" />
-            <p className="text-[14px] text-term-fg">no findings for the active filters.</p>
-            <p className="text-[12px] text-term-muted mt-1">
+            <ShieldCheck className="size-10 text-success mb-3" />
+            <p className="text-[14px] text-text-primary">no findings for the active filters.</p>
+            <p className="text-[12px] text-text-secondary mt-1">
               Enable lower severities above to see less urgent issues.
             </p>
           </div>
@@ -216,7 +216,7 @@ export function SecurityView() {
               <div
                 key={ruleId}
                 className={cn(
-                  "rounded-lg border",
+                  "rounded-panel border",
                   SEV_COLOR[sev].border,
                   SEV_COLOR[sev].bg,
                 )}
@@ -233,27 +233,27 @@ export function SecurityView() {
                       <span className={cn("text-[11px] font-mono uppercase tracking-wide", SEV_COLOR[sev].text)}>
                         {sev}
                       </span>
-                      <span className="text-[11px] text-term-subtle font-mono">{ruleId}</span>
-                      <span className="text-[11px] text-term-subtle">·</span>
-                      <span className="text-[11px] text-term-subtle">{group[0].category}</span>
+                      <span className="text-[11px] text-text-muted font-mono">{ruleId}</span>
+                      <span className="text-[11px] text-text-muted">·</span>
+                      <span className="text-[11px] text-text-muted">{group[0].category}</span>
                     </div>
-                    <div className="mt-1 text-[13px] text-term-fg">
+                    <div className="mt-1 text-[13px] text-text-primary">
                       {group[0].title.replace(/ '.*'/, "")}
                     </div>
-                    <div className="mt-0.5 text-[12px] text-term-muted">
+                    <div className="mt-0.5 text-[12px] text-text-secondary">
                       {group.length} affected resource{group.length === 1 ? "" : "s"}
                     </div>
                   </div>
                   {expanded ? (
-                    <ChevronDown className="size-4 text-term-subtle mt-1" />
+                    <ChevronDown className="size-4 text-text-muted mt-1" />
                   ) : (
-                    <ChevronRight className="size-4 text-term-subtle mt-1" />
+                    <ChevronRight className="size-4 text-text-muted mt-1" />
                   )}
                 </button>
                 {expanded && (
                   <div className="px-4 pb-4">
-                    <div className="mb-3 p-3 rounded bg-term-panel border border-term-border-soft text-[12px] text-term-muted">
-                      <div className="text-[10px] uppercase tracking-wider text-term-subtle mb-1">
+                    <div className="mb-3 p-3 rounded bg-shell border border-border-subtle text-[12px] text-text-secondary">
+                      <div className="text-[10px] uppercase tracking-wider text-text-muted mb-1">
                         remediation
                       </div>
                       {group[0].remediation}
@@ -262,16 +262,16 @@ export function SecurityView() {
                       {group.map((f, i) => (
                         <div
                           key={i}
-                          className="flex items-start gap-3 p-2 rounded border border-term-border-soft bg-term-panel/60 text-[12px]"
+                          className="flex items-start gap-3 p-2 rounded border border-border-subtle bg-shell/60 text-[12px]"
                         >
-                          <span className="text-term-subtle font-mono w-[86px] shrink-0 uppercase text-[10px]">
+                          <span className="text-text-muted font-mono w-[86px] shrink-0 uppercase text-[10px]">
                             {f.resource_kind}
                           </span>
-                          <span className="text-term-fg shrink-0">{f.resource_name}</span>
+                          <span className="text-text-primary shrink-0">{f.resource_name}</span>
                           {f.namespace && (
-                            <span className="text-term-subtle">· ns/{f.namespace}</span>
+                            <span className="text-text-muted">· ns/{f.namespace}</span>
                           )}
-                          <span className="flex-1 text-term-muted truncate" title={f.detail}>
+                          <span className="flex-1 text-text-secondary truncate" title={f.detail}>
                             {f.detail}
                           </span>
                         </div>
@@ -292,16 +292,16 @@ function ScoreBadge({ score }: { score: number }) {
   const tone = score >= 90 ? "good" : score >= 70 ? "ok" : score >= 50 ? "warn" : "bad";
   const cls =
     tone === "good"
-      ? "text-emerald-400 border-emerald-500/40 bg-emerald-500/10"
+      ? "text-success border-emerald-500/40 bg-success/10"
       : tone === "ok"
-        ? "text-term-green border-term-green/40 bg-term-green-soft"
+        ? "text-accent-primary border-accent-primary/40 bg-accent-primary/10"
         : tone === "warn"
-          ? "text-amber-400 border-amber-500/40 bg-amber-500/10"
+          ? "text-warning border-amber-500/40 bg-amber-500/10"
           : "text-red-400 border-red-500/40 bg-red-500/10";
   return (
     <div
       className={cn(
-        "flex items-center gap-2 px-3 py-1.5 rounded-md border text-[12px] font-semibold tabular-nums",
+        "flex items-center gap-2 px-3 py-1.5 rounded-control border text-[12px] font-semibold tabular-nums",
         cls,
       )}
     >

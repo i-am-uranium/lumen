@@ -18,7 +18,7 @@ describe("LogsSearchBox", () => {
         onNext={() => {}}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText("search…"), { target: { value: "abc" } });
+    fireEvent.change(screen.getByPlaceholderText("search..."), { target: { value: "abc" } });
     expect(onChange).toHaveBeenCalledWith({ query: "abc", regex: false, caseSensitive: false });
     fireEvent.click(screen.getByTitle("regex"));
     expect(onChange).toHaveBeenCalledWith({ query: "", regex: true, caseSensitive: false });
@@ -43,7 +43,7 @@ describe("LogsSearchBox", () => {
         onNext={onNext}
       />,
     );
-    const input = screen.getByPlaceholderText("search…");
+    const input = screen.getByPlaceholderText("search...");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onNext).toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
@@ -80,6 +80,6 @@ describe("LogsSearchBox", () => {
         onNext={() => {}}
       />,
     );
-    expect(screen.getByPlaceholderText("search…").className).toMatch(/border-term-red/);
+    expect(screen.getByPlaceholderText("search...").className).toMatch(/border-danger/);
   });
 });

@@ -1,40 +1,222 @@
-# Lumen Design Notes
+# Lumen Design System
 
-Lumen is a dense Kubernetes operations workbench. The interface should stay compact, readable, and optimized for repeated cluster triage rather than marketing presentation.
+Lumen is an enterprise-grade, multi-cluster Kubernetes operations console. The UI must feel technical, fast, dense, calm, secure, multi-cluster first, and AI-assisted without making AI the center of every workflow.
 
-## Product Feel
+This document is part of the public contributor contract. New screens should reuse these tokens and primitives rather than introducing local one-off styling.
 
-- Dark terminal-style surfaces with clear borders and restrained color.
-- Monospace text for resource names, namespaces, labels, YAML, logs, and command output.
-- Green for active or healthy state, amber for caution, red for destructive or failed state.
-- Full-height operational layouts over card-heavy pages.
-- Stable row heights, fixed toolbars, and virtualized high-volume data.
+## Product Direction
 
-## Core Screens
+Lumen is built for engineers operating real infrastructure. Prioritize operational confidence over marketing polish.
 
-- Fleet: kubeconfig contexts, reachability, cluster health, node and workload totals.
-- Cluster workspace: left rail for resource groups and a main route surface.
-- Workloads: searchable, filterable Kubernetes resource lists.
-- Resource drawer: YAML, events, logs, actions, and pod details.
-- Logs: virtualized multi-source streams with bounded buffers.
-- Shell dock: xterm.js pod attach sessions with tab management.
-- Helm: release browser and action dialogs.
-- Access control: optional Kubernetes RBAC helper for generated service-account access.
+Reference qualities:
 
-## Implementation Stack
+- HashiCorp-style enterprise infrastructure clarity.
+- Linear-style command palette polish.
+- Lens-style Kubernetes resource density.
+- Datadog/Grafana-style observability surfaces.
 
-- React 19 + TypeScript + Vite.
-- Tauri 2 desktop shell.
-- Rust command layer using kube-rs.
-- Tailwind CSS with custom terminal tokens in `src/index.css`.
-- TanStack Query for cache coordination.
-- TanStack Virtual for large log/list rendering.
-- xterm.js for interactive pod shells.
+Avoid playful SaaS visuals, decorative gradients, oversized empty space, card-heavy marketing layouts, and AI-first surfaces that distract from cluster context.
+
+## UX Principles
+
+### Context Always Visible
+
+Every resource screen must make these visible before any destructive or AI-assisted action:
+
+- Active cluster
+- Namespace
+- Resource kind
+- Resource name
+- Status
+
+### Dense But Scannable
+
+Use compact rows, clear hierarchy, stable panel dimensions, and fixed toolbars. Use monospace text for resource names, namespaces, labels, YAML, logs, commands, and IDs.
+
+### AI Is Contextual
+
+GPT features belong beside logs, events, resource details, alerts, and incident summaries. Before sending infrastructure context to AI, redact secrets, tokens, kubeconfigs, and sensitive environment values. Show a context preview when possible.
+
+### Secure By Default
+
+Destructive actions require clear scope and confirmation. Status must use text and color, never color alone. Logs and YAML must remain selectable.
+
+## Tokens
+
+Global tokens live in `src/index.css` and Tailwind mappings live in `tailwind.config.js`.
+
+Use semantic tokens:
+
+- Background: `bg-app`, `bg-shell`, `bg-surface`, `bg-elevated`, `bg-hover`
+- Borders: `border-border-subtle`, `border-border-default`, `border-border-strong`
+- Text: `text-text-primary`, `text-text-secondary`, `text-text-muted`, `text-text-disabled`
+- Accent: `text-accent-primary`, `bg-accent-primary`, `bg-accent-primary-soft`
+- Status: `text-success`, `text-warning`, `text-danger`, `text-info`
+
+Do not add raw hex colors in route components. Add a token first if a new color is genuinely required.
+
+## Typography
+
+Interface text uses Inter. Operational text uses JetBrains Mono.
+
+Recommended sizes:
+
+- Sidebar labels: `text-xs`
+- Table body: `text-xs` or `text-sm`
+- Table headers: `text-[11px] uppercase`
+- Panel titles: `text-sm` to `text-base`
+- Dashboard numbers: `text-2xl`
+- Logs, YAML, resource names, IDs: `font-mono text-xs`
+
+## Layout
+
+Desktop:
+
+- Persistent sidebar.
+- Main content surface.
+- Optional right detail drawer, 420-560px.
+- Top toolbar height near 56px.
+- Table rows near 42-46px.
+- Panel radius uses `rounded-panel`.
+
+Responsive:
+
+- Tablet: collapsible navigation and overlay drawer.
+- Mobile: bottom navigation, stacked cards, full-screen details.
+- Do not hide critical functionality on mobile; adapt it.
+
+## Shared Primitives
+
+Use these before creating new local UI:
+
+- `src/components/ui/button.tsx`
+- `src/components/ui/input.tsx`
+- `src/components/ui/badge.tsx`
+- `src/components/ui/card.tsx`
+- `src/components/ui/data-table.tsx`
+- `src/components/ui/status-badge.tsx`
+- `src/components/lumen/page.tsx`
+- `src/components/lumen/metric-card.tsx`
+- `src/components/lumen/resource-name.tsx`
+
+Route components may compose layout, data, and behavior, but repeated visual surfaces belong in `src/components/ui` or `src/components/lumen`.
+
+## Screen Requirements
+
+### Global Dashboard
+
+Required:
+
+- Cluster scope and search entry.
+- Metric cards for clusters, nodes, pods, workloads, CPU, memory, alerts.
+- Cluster health table.
+- Top resource pressure.
+- Recent alerts or signals.
+- GPT entry as an assistive action, not the primary surface.
+
+### Resource Explorer
+
+Required filters:
+
+- Cluster
+- Namespace
+- Resource kind
+- Status
+- Labels
+- Search
+
+Use `StatusBadge`, `ResourceName`, and `DataTable` primitives.
+
+### Resource Detail
+
+Required tabs:
+
+- Overview
+- YAML
+- Logs
+- Events
+- Metrics
+- Related
+
+Required actions:
+
+- Copy resource name.
+- Copy `kubectl describe` command.
+- Restart rollout where applicable.
+- View logs.
+- Ask Lumen GPT with redacted context.
+- Delete with confirmation.
+
+### Logs
+
+Required:
+
+- Virtualized logs.
+- Level filter.
+- Time range selector.
+- Namespace and container filters.
+- Insights panel.
+- GPT actions for selected line, recent summary, root cause, and incident summary.
+
+### Settings / AI Assistant
+
+Required:
+
+- Account connection status.
+- Connect/disconnect.
+- Default model preference.
+- Redaction mode.
+- Context preview setting.
+- Usage transparency.
+
+## Accessibility
+
+- Every interactive element must have a keyboard focus state.
+- Use labels or accessible names for icon-only buttons.
+- Drawer and modal focus must be trapped.
+- Escape closes overlays.
+- Color cannot be the only status indicator.
+- Truncated Kubernetes names need `title` or tooltip support.
 
 ## Performance Rules
 
-- Do not render unbounded arrays directly in React.
+- Do not render unbounded arrays directly.
 - Keep log append paths coalesced and capped.
-- Use Kubernetes watches for freshness where available, with query invalidation as the UI contract.
+- Use virtualization for high-volume lists.
 - Avoid fleet-wide blocking calls on the UI thread.
-- Treat unreachable contexts as partial failures, not global failures.
+- Treat unreachable contexts as partial failures.
+- Keep route chunks within the bundle budget enforced by `npm run perf:bundle`.
+
+
+### `src/components/lumen/drawer.tsx`
+
+Resizable side-drawer primitives — compose these instead of writing raw `aside`/`div` shells.
+
+| Export | Purpose |
+|---|---|
+| `DrawerBackdrop` | Fixed semi-transparent scrim (`bg-black/30`), clickable to dismiss |
+| `DrawerPanel` | Fixed right-docked `<aside>` with `bg-shell border-l border-border-default shadow-[var(--shadow-popover)]`; accepts `width?: number` |
+| `DrawerResizeHandle` | 4 px drag target on left edge; shows `bg-accent-primary` line on hover |
+| `DrawerHeader` | `min-h-14 border-b border-border-default bg-shell` header row |
+| `DrawerTabs` | `border-b border-border-default bg-elevated` tab strip container |
+| `DrawerTabButton` | Tab button with `border-b-2` active indicator (`border-accent-primary`) |
+
+**Usage:**
+```tsx
+import {
+  DrawerBackdrop, DrawerPanel, DrawerResizeHandle,
+  DrawerHeader, DrawerTabs, DrawerTabButton,
+} from "@/components/lumen/drawer";
+
+<DrawerBackdrop onClick={onClose} />
+<DrawerPanel width={width} role="dialog">
+  <DrawerResizeHandle onPointerDown={startResize} />
+  <DrawerHeader>…</DrawerHeader>
+  <DrawerTabs>
+    <DrawerTabButton active={tab === "props"} onClick={() => setTab("props")}>
+      properties
+    </DrawerTabButton>
+  </DrawerTabs>
+  …
+</DrawerPanel>
+```
