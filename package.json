@@ -18,7 +18,9 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "perf:bundle": "node scripts/check-bundle-budget.mjs",
-    "bump": "node scripts/bump-version.mjs"
+    "bump": "node scripts/bump-version.mjs",
+    "test:design-guard": "vitest run src/lib/designSystemGuard.test.ts",
+    "design-guard:refresh": "node scripts/update-design-system-guard-baseline.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
