@@ -2,6 +2,7 @@ use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
+    ffi::OsStr,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -418,14 +419,49 @@ fn chrono_like_millis() -> u128 {
 }
 
 fn find_on_path(command: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
-    for dir in env::split_paths(&path_var) {
+    let path_var = env::var_os("PATH");
+    let fallback_dirs = fallback_executable_dirs();
+    find_in_path_or_fallbacks(command, path_var.as_deref(), &fallback_dirs)
+}
+
+fn find_in_path_or_fallbacks(
+    command: &str,
+    path_var: Option<&OsStr>,
+    fallback_dirs: &[PathBuf],
+) -> Option<PathBuf> {
+    for dir in path_var.into_iter().flat_map(env::split_paths) {
+        let candidate = dir.join(command);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    for dir in fallback_dirs {
         let candidate = dir.join(command);
         if is_executable(&candidate) {
             return Some(candidate);
         }
     }
     None
+}
+
+fn fallback_executable_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+        PathBuf::from("/opt/local/bin"),
+    ];
+    if let Some(home_dir) = dirs::home_dir() {
+        dirs.extend([
+            home_dir.join(".volta").join("bin"),
+            home_dir.join(".npm-global").join("bin"),
+            home_dir.join(".local").join("bin"),
+            home_dir.join(".bun").join("bin"),
+            home_dir.join(".cargo").join("bin"),
+        ]);
+    }
+    dirs
 }
 
 #[cfg(unix)]
@@ -486,4 +522,44 @@ mod tests {
         let err = parse_ai_command("kubectl get pods | grep CrashLoop", Some("ctx")).unwrap_err();
         assert!(err.to_string().contains("shell operators"));
     }
+
+    #[test]
+    fn finds_cli_in_fallback_dir_when_path_misses_user_install_location() {
+        let root = unique_test_dir("lumen-cli-fallback");
+        let path_dir = root.join("system-bin");
+        let fallback_dir = root.join("home").join(".local").join("bin");
+        std::fs::create_dir_all(&path_dir).expect("path dir should be created");
+        std::fs::create_dir_all(&fallback_dir).expect("fallback dir should be created");
+
+        let executable = fallback_dir.join("codex");
+        std::fs::write(&executable, "#!/bin/sh\n").expect("executable should be written");
+        make_executable(&executable);
+
+        let found = find_in_path_or_fallbacks(
+            "codex",
+            Some(path_dir.as_os_str()),
+            std::slice::from_ref(&fallback_dir),
+        );
+
+        assert_eq!(found, Some(executable));
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{name}-{}", chrono_like_millis()))
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(path)
+            .expect("metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("permissions should be set");
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) {}
 }

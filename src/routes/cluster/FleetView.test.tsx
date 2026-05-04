@@ -11,10 +11,12 @@ import {
   type FleetCard,
   type FleetHealth,
 } from "@/lib/k8s";
+import { useClusterStore } from "@/state/cluster";
 
 vi.mock("@/lib/k8s", () => ({
   k8s: {
     listContexts: vi.fn(),
+    setContext: vi.fn(),
     probeFleetContext: vi.fn(),
     disconnectContext: vi.fn(),
     deleteContext: vi.fn(),
@@ -84,6 +86,11 @@ function renderFleet(cards: FleetCard[]) {
   let trash: DeletedContextSummary[] = [];
   vi.mocked(k8s.listContexts).mockImplementation(async () => contexts);
   vi.mocked(k8s.listDeletedContexts).mockImplementation(async () => trash);
+  vi.mocked(k8s.setContext).mockImplementation(async (name: string) => {
+    const context = contexts.find((context) => context.name === name);
+    if (!context) throw new Error(`missing context ${name}`);
+    return context;
+  });
   vi.mocked(k8s.probeFleetContext).mockImplementation(async (name: string) => {
     const card = cards.find((c) => c.context.name === name);
     if (!card) throw new Error(`missing card ${name}`);
@@ -141,6 +148,11 @@ describe("FleetView", () => {
     vi.resetAllMocks();
     window.sessionStorage.clear();
     window.localStorage.clear();
+    useClusterStore.setState({
+      contextName: null,
+      namespace: null,
+      lastNamespaceByContext: {},
+    });
   });
 
   it("orders cluster cards by operator risk", async () => {
@@ -214,6 +226,9 @@ describe("FleetView", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /connect persisted-prod/i }));
     expect(await screen.findByRole("button", { name: /disconnect persisted-prod/i })).toBeInTheDocument();
+    expect(k8s.setContext).toHaveBeenCalledWith("persisted-prod");
+    expect(useClusterStore.getState().contextName).toBe("persisted-prod");
+    expect(window.localStorage.getItem("lumen-cluster")).toContain("persisted-prod");
 
     await userEvent.click(screen.getByRole("button", { name: /triage persisted-prod/i }));
     expect(screen.getByTestId("location")).toHaveTextContent(
