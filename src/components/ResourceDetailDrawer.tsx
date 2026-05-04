@@ -1,11 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
+  Check,
+  Copy,
   Download,
+  Eye,
+  FlaskConical,
   Loader2,
+  Minus,
   Pencil,
+  Plus,
+  RotateCw,
   ScrollText,
   TerminalSquare,
   Trash2,
@@ -40,6 +47,25 @@ import {
 
 type Resource = { kind: string; namespace: string; name: string };
 type DrawerTab = "overview" | "logs" | "events" | "yaml";
+type PendingResourceAction =
+  | { kind: "restart" }
+  | { kind: "scale"; replicas: number };
+
+function isRestartableKind(kind: string | undefined): boolean {
+  return kind === "deployment" || kind === "statefulset" || kind === "daemonset";
+}
+
+function isScalableKind(kind: string | undefined): boolean {
+  return kind === "deployment" || kind === "statefulset";
+}
+
+function desiredReplicasFromReady(ready: string | undefined): number | null {
+  if (!ready) return null;
+  const match = ready.match(/^\d+\/(\d+)$/);
+  if (!match) return null;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 export function ResourceDetailDrawer({
   ctx,
@@ -57,8 +83,13 @@ export function ResourceDetailDrawer({
   const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingResourceAction | null>(null);
   const { openSession } = useShellDock();
   const qc = useQueryClient();
+  const resourceKind = resource?.kind as WorkloadKind | undefined;
+  const restartable = isRestartableKind(resource?.kind);
+  const scalable = isScalableKind(resource?.kind);
 
   // Pre-load pod-details so the Shell action can pick a default container
   // synchronously. SeverityStrip already runs the same query, so this is a
@@ -69,6 +100,27 @@ export function ResourceDetailDrawer({
     enabled: isPod && !!resource,
     staleTime: 10_000,
   });
+
+  const actionResource = useQuery({
+    queryKey: [
+      "k8s",
+      "resource-action-meta",
+      ctx,
+      resource?.namespace,
+      resource?.kind,
+      resource?.name,
+    ],
+    queryFn: () =>
+      k8s.getResource(
+        resource!.namespace,
+        resourceKind!,
+        resource!.name,
+        ctx || undefined,
+      ),
+    enabled: !!resource && !!resourceKind && (restartable || scalable),
+    staleTime: 10_000,
+  });
+  const desiredReplicas = desiredReplicasFromReady(actionResource.data?.summary.ready);
 
   function openShell() {
     if (!resource || !isPod) return;
@@ -87,6 +139,7 @@ export function ResourceDetailDrawer({
     if (resource) {
       setActiveTab("overview");
       setDeleteConfirmOpen(false);
+      setPendingAction(null);
     }
   }, [resource?.kind, resource?.namespace, resource?.name]);
 
@@ -147,6 +200,39 @@ export function ResourceDetailDrawer({
       toast.error((e as Error).message ?? String(e));
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function handleResourceAction() {
+    if (!resource || !resourceKind || !pendingAction || actionBusy) return;
+    setActionBusy(true);
+    try {
+      if (pendingAction.kind === "restart") {
+        await k8s.restartWorkload(
+          resource.namespace,
+          resourceKind,
+          resource.name,
+          ctx || undefined,
+        );
+        toast.success(`restart triggered for ${resource.kind}/${resource.name}`);
+      } else {
+        await k8s.scaleWorkload(
+          resource.namespace,
+          resourceKind,
+          resource.name,
+          pendingAction.replicas,
+          ctx || undefined,
+        );
+        toast.success(`scaled ${resource.kind}/${resource.name} to ${pendingAction.replicas}`);
+      }
+      setPendingAction(null);
+      await qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
+      await qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
+      await qc.invalidateQueries({ queryKey: ["k8s", "resource-action-meta"] });
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -254,6 +340,20 @@ export function ResourceDetailDrawer({
           onDownloadLogs={handleDownloadLogs}
           onShellExec={openShell}
           onEditYaml={() => setActiveTab("yaml")}
+          restartable={restartable}
+          scalable={scalable}
+          currentReplicas={desiredReplicas}
+          actionBusy={actionBusy}
+          actionMetaLoading={actionResource.isLoading}
+          onRestart={() => setPendingAction({ kind: "restart" })}
+          onScaleDown={() =>
+            desiredReplicas !== null &&
+            setPendingAction({ kind: "scale", replicas: Math.max(0, desiredReplicas - 1) })
+          }
+          onScaleUp={() =>
+            desiredReplicas !== null &&
+            setPendingAction({ kind: "scale", replicas: desiredReplicas + 1 })
+          }
           deleting={deleting}
           onDelete={() => setDeleteConfirmOpen(true)}
           onClose={onClose}
@@ -286,6 +386,27 @@ export function ResourceDetailDrawer({
           busy={deleting}
           onCancel={() => setDeleteConfirmOpen(false)}
           onConfirm={handleDelete}
+        />
+      )}
+      {resource && pendingAction && (
+        <ConfirmActionDialog
+          open
+          title={
+            pendingAction.kind === "restart"
+              ? `restart ${resource.kind}`
+              : `scale ${resource.kind}`
+          }
+          description={
+            pendingAction.kind === "restart"
+              ? `This will trigger a rolling restart for ${resource.kind}/${resource.name}. Kubernetes will replace pods according to the controller strategy.`
+              : `This will set replicas for ${resource.kind}/${resource.name} to ${pendingAction.replicas}.`
+          }
+          target={`${resource.namespace || "cluster"}/${resource.name}`}
+          confirmLabel={pendingAction.kind === "restart" ? "restart" : "scale"}
+          intent="warning"
+          busy={actionBusy}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={handleResourceAction}
         />
       )}
     </>
@@ -332,6 +453,14 @@ function Header({
   onDownloadLogs,
   onShellExec,
   onEditYaml,
+  restartable,
+  scalable,
+  currentReplicas,
+  actionBusy,
+  actionMetaLoading,
+  onRestart,
+  onScaleDown,
+  onScaleUp,
   deleting,
   onDelete,
   onClose,
@@ -345,6 +474,14 @@ function Header({
   onDownloadLogs: () => void;
   onShellExec: () => void;
   onEditYaml: () => void;
+  restartable: boolean;
+  scalable: boolean;
+  currentReplicas: number | null;
+  actionBusy: boolean;
+  actionMetaLoading: boolean;
+  onRestart: () => void;
+  onScaleDown: () => void;
+  onScaleUp: () => void;
   deleting: boolean;
   onDelete: () => void;
   onClose: () => void;
@@ -434,6 +571,46 @@ function Header({
           onClick={onShellExec}
         />
         <ActionIcon
+          icon={
+            actionBusy ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RotateCw className="size-3.5" />
+            )
+          }
+          label="restart"
+          disabled={!restartable || actionBusy}
+          onClick={onRestart}
+        />
+        <ActionIcon
+          icon={<Minus className="size-3.5" />}
+          label={
+            currentReplicas === null
+              ? "scale down"
+              : `scale down from ${currentReplicas}`
+          }
+          disabled={
+            !scalable ||
+            actionBusy ||
+            actionMetaLoading ||
+            currentReplicas === null ||
+            currentReplicas <= 0
+          }
+          onClick={onScaleDown}
+        />
+        <ActionIcon
+          icon={<Plus className="size-3.5" />}
+          label={
+            currentReplicas === null
+              ? "scale up"
+              : `scale up from ${currentReplicas}`
+          }
+          disabled={
+            !scalable || actionBusy || actionMetaLoading || currentReplicas === null
+          }
+          onClick={onScaleUp}
+        />
+        <ActionIcon
           icon={<Pencil className="size-3.5" />}
           label="yaml"
           hint="Y"
@@ -481,6 +658,7 @@ function ActionIcon({
 }) {
   return (
     <Button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       title={hint ? `${label} (${hint})` : label}
@@ -1468,11 +1646,108 @@ function ContainerCard({ container: c }: { container: ContainerInfo }) {
 
 function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
   const kind = resource.kind as Parameters<typeof k8s.getResource>[1];
+  const qc = useQueryClient();
+  const [mode, setMode] = useState<"read" | "edit">("read");
+  const [draft, setDraft] = useState("");
+  const [dryRunOutput, setDryRunOutput] = useState<string | null>(null);
+  const [applyErr, setApplyErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sensitive = resource.kind === "secret";
   const { data, isLoading, error } = useQuery({
     queryKey: ["k8s", "resource-yaml", ctx, resource.namespace, kind, resource.name],
     queryFn: () => k8s.getResource(resource.namespace, kind, resource.name, ctx),
     staleTime: 30_000,
   });
+  const updateAccess = useQuery({
+    queryKey: [
+      "k8s",
+      "access",
+      ctx,
+      resource.namespace,
+      resource.kind,
+      resource.name,
+      "update",
+    ],
+    queryFn: () =>
+      k8s.checkAccess(
+        {
+          kind,
+          verb: "update",
+          namespace: resource.namespace || null,
+          name: resource.name,
+        },
+        ctx || undefined,
+      ),
+    enabled: !sensitive,
+    staleTime: 15_000,
+  });
+
+  useEffect(() => {
+    setMode("read");
+    setDraft("");
+    setDryRunOutput(null);
+    setApplyErr(null);
+    setApplyConfirmOpen(false);
+  }, [ctx, resource.kind, resource.namespace, resource.name]);
+
+  useEffect(() => {
+    if (mode === "edit" && data?.yaml && !draft) setDraft(data.yaml);
+  }, [mode, data?.yaml, draft]);
+
+  const canEdit = !sensitive && updateAccess.data?.allowed === true;
+  const dirty = mode === "edit" && draft !== (data?.yaml ?? "");
+
+  async function copyYaml() {
+    const text = mode === "edit" ? draft : (data?.yaml ?? "");
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    toast.success("YAML copied");
+  }
+
+  async function runApply(dryRun: boolean) {
+    if (!canEdit || !data || !dirty || busy) return;
+    setBusy(true);
+    setApplyErr(null);
+    setDryRunOutput(null);
+    try {
+      const out = await k8s.applyResource(
+        resource.namespace,
+        kind,
+        resource.name,
+        draft,
+        dryRun,
+        ctx || undefined,
+      );
+      if (dryRun) {
+        setDryRunOutput(out.yaml);
+        toast.success("dry-run ok — server validated");
+      } else {
+        toast.success(`applied ${resource.kind}/${resource.name}`);
+        setDraft(out.yaml);
+        setMode("read");
+        setDryRunOutput(null);
+        await qc.invalidateQueries({
+          queryKey: [
+            "k8s",
+            "resource-yaml",
+            ctx,
+            resource.namespace,
+            kind,
+            resource.name,
+          ],
+        });
+        await qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
+        await qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
+      }
+    } catch (e) {
+      setApplyErr((e as Error).message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="p-4 text-[12px] text-text-secondary flex items-center gap-2">
@@ -1489,9 +1764,139 @@ function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
     );
   }
   return (
-    <pre className="p-4 m-0 text-[11px] font-mono whitespace-pre-wrap break-all bg-code-surface text-text-primary">
-      {data.yaml}
-    </pre>
+    <div className="flex h-full min-h-0 flex-col bg-code-surface">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
+        <div className="min-w-0 flex-1 text-[11px] text-text-muted">
+          server-side apply as <span className="font-mono text-text-secondary">lumen</span>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!canEdit || updateAccess.isLoading}
+          title={
+            sensitive
+              ? "secrets are read-only in the drawer"
+              : updateAccess.data?.allowed === false
+                ? "edit denied by RBAC"
+                : undefined
+          }
+          onClick={() => {
+            if (!canEdit) return;
+            if (mode === "read") {
+              setDraft(data.yaml ?? "");
+              setMode("edit");
+              requestAnimationFrame(() => textareaRef.current?.focus());
+            } else {
+              setMode("read");
+              setDryRunOutput(null);
+              setApplyErr(null);
+            }
+          }}
+          className="h-7 gap-1.5 text-[11px]"
+        >
+          {mode === "read" ? (
+            <>
+              <Pencil className="size-3" /> edit
+            </>
+          ) : (
+            <>
+              <Eye className="size-3" /> view
+            </>
+          )}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!data.yaml && !draft}
+          onClick={() => void copyYaml()}
+          className="h-7 gap-1.5 text-[11px]"
+        >
+          <Copy className="size-3" /> copy
+        </Button>
+        {mode === "edit" && (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy || !dirty || !canEdit}
+              onClick={() => void runApply(true)}
+              className="h-7 gap-1.5 text-[11px]"
+            >
+              <FlaskConical className="size-3" /> dry-run
+            </Button>
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              disabled={busy || !dirty || !canEdit}
+              onClick={() => setApplyConfirmOpen(true)}
+              className="h-7 gap-1.5 text-[11px]"
+            >
+              {busy ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Check className="size-3" />
+              )}
+              apply
+            </Button>
+          </>
+        )}
+      </div>
+
+      {sensitive && (
+        <div className="shrink-0 border-b border-warning/30 bg-[var(--status-warning-soft)] px-3 py-2 text-[11px] text-warning">
+          sensitive values are redacted and this YAML is read-only.
+        </div>
+      )}
+
+      {mode === "edit" ? (
+        <textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          spellCheck={false}
+          className="min-h-0 flex-1 resize-none bg-code-surface p-4 font-mono text-[11px] leading-relaxed text-text-primary outline-none [font-feature-settings:'liga'_0,'calt'_0]"
+        />
+      ) : (
+        <pre className="m-0 min-h-0 flex-1 overflow-auto p-4 font-mono text-[11px] leading-relaxed text-text-primary whitespace-pre">
+          {data.yaml}
+        </pre>
+      )}
+
+      {applyErr && (
+        <div className="shrink-0 border-t border-danger/40 bg-[var(--status-error-soft)] px-3 py-2 text-[11px] text-danger whitespace-pre-wrap">
+          {applyErr}
+        </div>
+      )}
+      {dryRunOutput && (
+        <details className="shrink-0 border-t border-border-subtle bg-surface">
+          <summary className="cursor-pointer select-none px-3 py-2 text-[11px] text-success">
+            dry-run output
+          </summary>
+          <pre className="max-h-[220px] overflow-auto p-3 font-mono text-[11px] text-text-secondary whitespace-pre">
+            {dryRunOutput}
+          </pre>
+        </details>
+      )}
+
+      <ConfirmActionDialog
+        open={applyConfirmOpen}
+        title={`apply ${resource.kind}`}
+        description={`This server-side apply can create or update ${resource.kind}/${resource.name} in ${resource.namespace || "cluster scope"}. Dry-run first if you only want validation.`}
+        target={`${resource.namespace || "cluster"}/${resource.name}`}
+        confirmLabel="apply"
+        intent="warning"
+        busy={busy}
+        onCancel={() => setApplyConfirmOpen(false)}
+        onConfirm={() => {
+          setApplyConfirmOpen(false);
+          void runApply(false);
+        }}
+      />
+    </div>
   );
 }
 
