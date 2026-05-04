@@ -134,6 +134,29 @@ pub struct ResourceDetail {
     pub owner_refs: Vec<OwnerRefLite>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RbacRuleDetail {
+    pub api_groups: Vec<String>,
+    pub resources: Vec<String>,
+    pub resource_names: Vec<String>,
+    pub non_resource_urls: Vec<String>,
+    pub verbs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RbacSubjectDetail {
+    pub kind: String,
+    pub name: String,
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RbacDetail {
+    pub role_ref: Option<String>,
+    pub subjects: Vec<RbacSubjectDetail>,
+    pub rules: Vec<RbacRuleDetail>,
+}
+
 // ─── Fleet ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]

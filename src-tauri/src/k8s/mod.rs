@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod portforward;
 pub mod rbac;
 pub mod rbac_admin;
+pub mod rbac_details;
 pub mod registry;
 pub mod resources;
 pub mod security;

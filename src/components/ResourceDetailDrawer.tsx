@@ -845,10 +845,149 @@ function NonPodPropertiesTab({
           </div>
         </Section>
       )}
+      {isRbacKind(s.kind) && (
+        <RbacDetailsSection ctx={ctx} resource={resource} kind={s.kind} />
+      )}
       <Section title="labels">
         <LabelPills entries={s.labels} max={8} />
       </Section>
     </div>
+  );
+}
+
+function isRbacKind(kind: WorkloadKind): boolean {
+  return (
+    kind === "role" ||
+    kind === "clusterrole" ||
+    kind === "rolebinding" ||
+    kind === "clusterrolebinding"
+  );
+}
+
+function RbacDetailsSection({
+  ctx,
+  resource,
+  kind,
+}: {
+  ctx: string;
+  resource: Resource;
+  kind: WorkloadKind;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["k8s", "rbac-details", ctx, resource.namespace, kind, resource.name],
+    queryFn: () =>
+      k8s.getRbacDetails(resource.namespace, kind, resource.name, ctx || undefined),
+    staleTime: 10_000,
+  });
+
+  if (isLoading) {
+    return (
+      <Section title="rbac">
+        <div className="text-[12px] text-term-muted flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading RBAC details…
+        </div>
+      </Section>
+    );
+  }
+  if (error || !data) {
+    return (
+      <Section title="rbac">
+        <div className="text-[12px] text-term-red flex items-center gap-2">
+          <AlertTriangle className="size-3.5" /> failed to load RBAC details
+        </div>
+      </Section>
+    );
+  }
+
+  return (
+    <>
+      {(data.role_ref || data.subjects.length > 0) && (
+        <Section title="binding">
+          <Dl>
+            {data.role_ref && <DlRow label="role ref" value={data.role_ref} mono />}
+            {data.subjects.length > 0 && (
+              <DlRow
+                label="subjects"
+                value={
+                  <div className="space-y-1">
+                    {data.subjects.map((subject) => (
+                      <div
+                        key={`${subject.kind}/${subject.namespace ?? ""}/${subject.name}`}
+                        className="font-mono text-[11px] text-term-fg"
+                      >
+                        <span className="text-term-subtle">{subject.kind}</span>{" "}
+                        {subject.namespace ? `${subject.namespace}/` : ""}
+                        {subject.name}
+                      </div>
+                    ))}
+                  </div>
+                }
+              />
+            )}
+          </Dl>
+        </Section>
+      )}
+      <Section title="rules">
+        {data.rules.length === 0 ? (
+          <div className="text-[11px] text-term-subtle">
+            no readable policy rules found
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {data.rules.map((rule, index) => (
+              <div
+                key={index}
+                className="rounded border border-term-border-soft bg-term-panel-2 px-2.5 py-2"
+              >
+                <div className="flex flex-wrap gap-1">
+                  {rule.verbs.map((verb) => (
+                    <span
+                      key={verb}
+                      className={cn(
+                        "px-1.5 py-0.5 rounded border text-[10px] font-mono",
+                        verb === "*" || verb === "delete" || verb === "deletecollection"
+                          ? "border-term-red/40 bg-term-red/10 text-term-red"
+                          : verb === "create" || verb === "patch" || verb === "update"
+                            ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+                            : "border-term-border-soft bg-term-panel text-term-muted",
+                      )}
+                    >
+                      {verb}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
+                  <span className="text-term-subtle">api groups</span>
+                  <span className="font-mono text-term-muted break-all">
+                    {rule.api_groups.join(", ")}
+                  </span>
+                  <span className="text-term-subtle">resources</span>
+                  <span className="font-mono text-term-fg break-all">
+                    {rule.resources.join(", ")}
+                  </span>
+                  {rule.resource_names.length > 0 && (
+                    <>
+                      <span className="text-term-subtle">names</span>
+                      <span className="font-mono text-term-muted break-all">
+                        {rule.resource_names.join(", ")}
+                      </span>
+                    </>
+                  )}
+                  {rule.non_resource_urls.length > 0 && (
+                    <>
+                      <span className="text-term-subtle">urls</span>
+                      <span className="font-mono text-term-muted break-all">
+                        {rule.non_resource_urls.join(", ")}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </>
   );
 }
 

@@ -1,10 +1,10 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
     actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
-    registry, resources, security,
+    rbac_details, registry, resources, security,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
-        PodDetails, ResourceDetail, SecurityReport, WorkloadKind, WorkloadSummary,
+        PodDetails, RbacDetail, ResourceDetail, SecurityReport, WorkloadKind, WorkloadSummary,
     },
 };
 use crate::state::AppState;
@@ -19,6 +19,7 @@ use k8s_openapi::api::{
     },
     networking::v1::{Ingress, IngressClass, NetworkPolicy},
     policy::v1::PodDisruptionBudget,
+    rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding},
     scheduling::v1::PriorityClass,
     storage::v1::StorageClass,
 };
@@ -889,6 +890,102 @@ pub async fn get_resource(
             })
         }
         registered => get_dynamic_resource(client, &namespace, &registered, &name).await,
+    }
+}
+
+#[tauri::command]
+pub async fn get_rbac_details(
+    namespace: String,
+    kind: WorkloadKind,
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<RbacDetail> {
+    let client = client_for(&state, context.as_deref()).await?;
+    match kind {
+        WorkloadKind::Role => {
+            let api: Api<Role> = Api::namespaced(client, &namespace);
+            let role = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(RbacDetail {
+                role_ref: None,
+                subjects: vec![],
+                rules: rbac_details::rule_details(role.rules.as_ref()),
+            })
+        }
+        WorkloadKind::ClusterRole => {
+            let api: Api<ClusterRole> = Api::all(client);
+            let role = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(RbacDetail {
+                role_ref: None,
+                subjects: vec![],
+                rules: rbac_details::rule_details(role.rules.as_ref()),
+            })
+        }
+        WorkloadKind::RoleBinding => {
+            let api: Api<RoleBinding> = Api::namespaced(client.clone(), &namespace);
+            let binding = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            let rules = match binding.role_ref.kind.as_str() {
+                "Role" => {
+                    let role_api: Api<Role> = Api::namespaced(client, &namespace);
+                    role_api
+                        .get(&binding.role_ref.name)
+                        .await
+                        .ok()
+                        .map(|role| rbac_details::rule_details(role.rules.as_ref()))
+                        .unwrap_or_default()
+                }
+                "ClusterRole" => {
+                    let role_api: Api<ClusterRole> = Api::all(client);
+                    role_api
+                        .get(&binding.role_ref.name)
+                        .await
+                        .ok()
+                        .map(|role| rbac_details::rule_details(role.rules.as_ref()))
+                        .unwrap_or_default()
+                }
+                _ => vec![],
+            };
+            Ok(RbacDetail {
+                role_ref: Some(rbac_details::role_ref_label(&binding.role_ref)),
+                subjects: rbac_details::subject_details(binding.subjects.as_ref()),
+                rules,
+            })
+        }
+        WorkloadKind::ClusterRoleBinding => {
+            let api: Api<ClusterRoleBinding> = Api::all(client.clone());
+            let binding = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            let rules = if binding.role_ref.kind == "ClusterRole" {
+                let role_api: Api<ClusterRole> = Api::all(client);
+                role_api
+                    .get(&binding.role_ref.name)
+                    .await
+                    .ok()
+                    .map(|role| rbac_details::rule_details(role.rules.as_ref()))
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            Ok(RbacDetail {
+                role_ref: Some(rbac_details::role_ref_label(&binding.role_ref)),
+                subjects: rbac_details::subject_details(binding.subjects.as_ref()),
+                rules,
+            })
+        }
+        other => Err(AppError::Internal(format!(
+            "RBAC details are not available for {other:?}"
+        ))),
     }
 }
 

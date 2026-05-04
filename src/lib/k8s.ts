@@ -131,6 +131,26 @@ export type ResourceDetail = {
   owner_refs: OwnerRefLite[];
 };
 
+export type RbacRuleDetail = {
+  api_groups: string[];
+  resources: string[];
+  resource_names: string[];
+  non_resource_urls: string[];
+  verbs: string[];
+};
+
+export type RbacSubjectDetail = {
+  kind: string;
+  name: string;
+  namespace: string | null;
+};
+
+export type RbacDetail = {
+  role_ref: string | null;
+  subjects: RbacSubjectDetail[];
+  rules: RbacRuleDetail[];
+};
+
 // ─── Fleet ────────────────────────────────────────────────────────────────
 
 export type FleetHealth = {
@@ -439,6 +459,12 @@ export const k8s = {
     invoke<SecurityReport>("security_scan", { context }),
   checkAccess: (request: AccessReviewRequest, context?: string) =>
     invoke<AccessReviewResult>("check_access", { request, context }),
+  getRbacDetails: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) => invoke<RbacDetail>("get_rbac_details", { namespace, kind, name, context }),
   listCrds: (context?: string) => invoke<CrdSummary[]>("list_crds", { context }),
   listCrInstances: (
     group: string,
