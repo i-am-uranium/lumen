@@ -7,11 +7,9 @@ import {
   Clipboard,
   Database,
   FileText,
-  History,
   ListChecks,
   LockKeyhole,
   Loader2,
-  MessageSquare,
   Play,
   Search,
   SendHorizontal,
@@ -24,7 +22,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useParams, useSearchParams } from "react-router-dom";
-import { ai, type AiProviderStatus, type AiRunResult } from "@/lib/ai";
+import { ai, type AiCommandRunResult, type AiProviderStatus, type AiRunResult } from "@/lib/ai";
 import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { redactForAi } from "@/lib/aiRedaction";
 import { cn } from "@/lib/utils";
@@ -85,6 +83,34 @@ const TASKS: Array<{
 ];
 
 const CONTEXT_KINDS: WorkloadKind[] = ["pod", "deployment", "statefulset", "daemonset", "job"];
+const AI_SETTINGS_STORAGE_KEY = "lumen:ai-assistant:settings";
+
+type AiAssistantSettings = {
+  provider: "codex" | "claude";
+  model: string;
+  detailsOpen: boolean;
+};
+
+function readAiAssistantSettings(): AiAssistantSettings {
+  if (typeof window === "undefined") {
+    return { provider: "codex", model: "", detailsOpen: false };
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(AI_SETTINGS_STORAGE_KEY) ?? "{}") as Partial<AiAssistantSettings>;
+    return {
+      provider: parsed.provider === "claude" ? "claude" : "codex",
+      model: typeof parsed.model === "string" ? parsed.model : "",
+      detailsOpen: parsed.detailsOpen === true,
+    };
+  } catch {
+    return { provider: "codex", model: "", detailsOpen: false };
+  }
+}
+
+function writeAiAssistantSettings(settings: AiAssistantSettings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
 
 export function AiAssistant() {
   const params = useParams();
@@ -108,10 +134,14 @@ export function AiAssistant() {
       TASKS.find((t) => t.id === initialTask)!.prompt,
   );
   const [notes, setNotes] = useState(focusText);
-  const [provider, setProvider] = useState<"codex" | "claude">("codex");
-  const [model, setModel] = useState("");
+  const [provider, setProvider] = useState<"codex" | "claude">(
+    () => readAiAssistantSettings().provider,
+  );
+  const [model, setModel] = useState(() => readAiAssistantSettings().model);
   const [approved, setApproved] = useState(false);
-  const [showConfig, setShowConfig] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(
+    () => readAiAssistantSettings().detailsOpen,
+  );
   const [promptEdited, setPromptEdited] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<AiRunResult | null>(null);
@@ -178,10 +208,9 @@ export function AiAssistant() {
     if (nextModel !== model) setModel(nextModel);
   }, [model, selectedProvider]);
 
-  async function copyPrompt() {
-    await navigator.clipboard.writeText(prompt);
-    toast.success("AI prompt copied");
-  }
+  useEffect(() => {
+    writeAiAssistantSettings({ provider, model, detailsOpen });
+  }, [provider, model, detailsOpen]);
 
   async function runProvider() {
     if (!approved || !selectedProvider?.available || running) return;
@@ -204,76 +233,53 @@ export function AiAssistant() {
 
   function handleQuestionAction() {
     if (!selectedProvider?.available) {
-      setShowConfig(true);
+      setDetailsOpen(true);
       return;
     }
     if (!approved) {
-      toast.message("Approve the redacted payload beside the Ask button first");
+      toast.message("Select the approval checkbox before asking Lumen");
       return;
     }
     void runProvider();
   }
 
   return (
-    <LumenPage className="max-w-[1880px] gap-3">
-      <div className="grid gap-3 2xl:grid-cols-[300px_minmax(0,1fr)_460px]">
-        <AiSessionRail
-          ctx={ctx}
-          task={selectedTask}
-          provider={selectedProvider}
-          model={selectedModel}
-          redactionCount={redactionCount}
-          unhealthyCount={unhealthyCount}
-          resourceFocus={resourceFocus}
-        />
-
+    <LumenPage className="max-w-[1760px] gap-3">
+      <div className="grid min-h-0 gap-3 xl:grid-cols-[minmax(460px,1fr)_minmax(380px,480px)]">
         <div className="space-y-3">
-          <ContextStrip
-            items={contextSignals}
-            loading={loadingContext}
-            provider={selectedProvider}
-            showConfig={showConfig}
-            onToggleConfig={() => setShowConfig((open) => !open)}
-          />
-          {showConfig && (
-            <ConfigurationPanel
-              provider={selectedProvider}
-              providers={providers.data ?? []}
-              value={provider}
-              model={selectedModel}
-              prompt={prompt}
-              promptEdited={promptEdited}
-              onChange={(nextProvider) => {
-                setProvider(nextProvider);
-                setApproved(false);
-              }}
-              onModelChange={(nextModel) => {
-                setModel(nextModel);
-                setApproved(false);
-              }}
-              onPromptChange={(nextPrompt) => {
-                setPromptDraft(nextPrompt);
-                setPromptEdited(nextPrompt !== basePrompt);
-                setApproved(false);
-              }}
-              onResetPrompt={() => {
-                setPromptDraft(basePrompt);
-                setPromptEdited(false);
-                setApproved(false);
-              }}
-              onCopy={() => void copyPrompt()}
-            />
-          )}
           <ApprovalPanel
-            approved={approved}
+            contextItems={contextSignals}
+            loadingContext={loadingContext}
+            provider={selectedProvider}
+            providers={providers.data ?? []}
+            providerValue={provider}
+            model={selectedModel}
+            detailsOpen={detailsOpen}
+            onToggleDetails={() => setDetailsOpen((open) => !open)}
+            onProviderChange={(nextProvider) => {
+              setProvider(nextProvider);
+              setApproved(false);
+            }}
+            onModelChange={(nextModel) => {
+              setModel(nextModel);
+              setApproved(false);
+            }}
             prompt={prompt}
+            promptEdited={promptEdited}
             byteSize={new Blob([prompt]).size}
-            workloads={workloads.length}
-            unhealthy={unhealthyCount}
             notes={notes.trim() ? 1 : 0}
             redactionCount={redactionCount}
             redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
-            onCopy={() => void copyPrompt()}
+            onPromptChange={(nextPrompt) => {
+              setPromptDraft(nextPrompt);
+              setPromptEdited(nextPrompt !== basePrompt);
+              setApproved(false);
+            }}
+            onResetPrompt={() => {
+              setPromptDraft(basePrompt);
+              setPromptEdited(false);
+              setApproved(false);
+            }}
           />
           <TaskChooser
             task={task}
@@ -338,329 +344,66 @@ function parseAiTask(value: string | null): AiTask | null {
   return TASKS.some((task) => task.id === value) ? (value as AiTask) : null;
 }
 
-function AiSessionRail({
-  ctx,
-  task,
-  provider,
-  model,
-  redactionCount,
-  unhealthyCount,
-  resourceFocus,
-}: {
-  ctx: string;
-  task: (typeof TASKS)[number];
-  provider?: AiProviderStatus;
-  model: string;
-  redactionCount: number;
-  unhealthyCount: number;
-  resourceFocus: { kind: string; namespace: string; name: string };
-}) {
-  const focus = resourceFocus.name
-    ? `${resourceFocus.kind}/${resourceFocus.name}`
-    : "cluster-wide";
-  return (
-    <aside className="space-y-3 2xl:sticky 2xl:top-4 2xl:self-start">
-      <SectionPanel className="space-y-3 p-3">
-        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
-          <MessageSquare className="size-3.5" />
-          AI workspace
-        </div>
-        <div className="rounded-control border border-accent-primary/35 bg-accent-primary-soft p-3">
-          <div className="text-[12px] font-semibold text-text-primary">
-            {task.label}
-          </div>
-          <div className="mt-1 text-[11px] leading-4 text-text-secondary">
-            {focus} on {ctx || "unknown"}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <WorkspaceMetric label="signals" value={unhealthyCount} tone="warning" />
-          <WorkspaceMetric label="redacted" value={redactionCount} tone="success" />
-        </div>
-      </SectionPanel>
-
-      <SectionPanel className="space-y-3 p-3">
-        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
-          <Bot className="size-3.5" />
-          Provider profile
-        </div>
-        <div className="rounded-control border border-border-default bg-elevated p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[12px] font-semibold text-text-primary">
-                {provider?.label ?? "No provider"}
-              </div>
-              <div className="mt-1 font-mono text-[11px] text-text-muted">
-                {model || "default model"}
-              </div>
-            </div>
-            <span
-              className={cn(
-                "rounded-full border px-2 py-0.5 text-[10px]",
-                provider?.available
-                  ? "border-success/25 bg-[var(--status-success-soft)] text-success"
-                  : "border-warning/30 bg-[var(--status-warning-soft)] text-warning",
-              )}
-            >
-              {provider?.available ? "ready" : "missing"}
-            </span>
-          </div>
-          <div className="mt-3 grid gap-2 text-[11px] text-text-secondary">
-            <SafetyLine>Local CLI subscription</SafetyLine>
-            <SafetyLine>Read-only assistant execution</SafetyLine>
-            <SafetyLine>Commands require confirmation</SafetyLine>
-          </div>
-        </div>
-      </SectionPanel>
-
-      <SectionPanel className="space-y-3 p-3">
-        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
-          <History className="size-3.5" />
-          Sessions
-        </div>
-        <SessionRow
-          active
-          title={task.label}
-          meta={focus}
-          status="draft"
-        />
-        <SessionRow
-          title="Failed cleanup jobs"
-          meta="dev · 3 commands"
-          status="reviewed"
-        />
-        <SessionRow
-          title="Node memory pressure"
-          meta="prod · runbook"
-          status="closed"
-        />
-      </SectionPanel>
-    </aside>
-  );
-}
-
-function WorkspaceMetric({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: "success" | "warning";
-}) {
-  return (
-    <div className="rounded-control border border-border-default bg-elevated px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-text-muted">{label}</div>
-      <div
-        className={cn(
-          "mt-1 font-mono text-[14px]",
-          tone === "success" ? "text-success" : "text-warning",
-        )}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function SessionRow({
-  title,
-  meta,
-  status,
-  active,
-}: {
-  title: string;
-  meta: string;
-  status: string;
-  active?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        "w-full rounded-control border px-3 py-2 text-left transition-colors",
-        active
-          ? "border-accent-primary/40 bg-accent-primary-soft"
-          : "border-border-default bg-elevated hover:bg-hover",
-      )}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-[12px] font-medium text-text-primary">
-          {title}
-        </span>
-        <span className="rounded-full border border-border-subtle px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-text-muted">
-          {status}
-        </span>
-      </div>
-      <div className="mt-1 truncate text-[10px] text-text-muted">{meta}</div>
-    </button>
-  );
-}
-
 function ConfigurationPanel({
   provider,
   providers,
   value,
   model,
-  prompt,
-  promptEdited,
   onChange,
   onModelChange,
-  onPromptChange,
-  onResetPrompt,
-  onCopy,
 }: {
   provider?: AiProviderStatus;
   providers: AiProviderStatus[];
   value: "codex" | "claude";
   model: string;
-  prompt: string;
-  promptEdited: boolean;
   onChange: (value: "codex" | "claude") => void;
   onModelChange: (value: string) => void;
-  onPromptChange: (value: string) => void;
-  onResetPrompt: () => void;
-  onCopy: () => void;
 }) {
   const install = getProviderInstallHelp(value);
   return (
-    <SectionPanel className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-[minmax(260px,360px)_minmax(0,1fr)]">
-        <div className="space-y-3">
-          <div>
-            <div className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">
-              Provider
-            </div>
-            <ProviderPicker providers={providers} value={value} onChange={onChange} />
-          </div>
-
-          <label className="block">
-            <span className="mb-2 block text-[10px] uppercase tracking-wide text-text-muted">
-              Model
-            </span>
-            <select
-              value={model}
-              disabled={!provider?.models.length}
-              onChange={(event) => onModelChange(event.target.value)}
-              className="h-9 w-full rounded-control border border-border-default bg-elevated px-3 text-[12px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {(provider?.models.length ? provider.models : [""]).map((item) => (
-                <option key={item || "none"} value={item}>
-                  {item || "No models detected"}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {!provider?.available && (
-            <div className="rounded-control border border-warning/35 bg-[var(--status-warning-soft)] p-3">
-              <div className="flex items-center gap-2 text-[12px] font-semibold text-warning">
-                <TriangleAlert className="size-3.5" />
-                {install.title}
-              </div>
-              <p className="mt-1 text-[11px] leading-4 text-text-secondary">
-                {install.description}
-              </p>
-              <pre className="mt-2 overflow-x-auto rounded border border-border-subtle bg-code-surface p-2 font-mono text-[10px] leading-4 text-text-secondary">
-                {install.commands.join("\n")}
-              </pre>
-            </div>
-          )}
-        </div>
-
+    <div className="space-y-4 rounded-control border border-border-default bg-elevated p-3">
+      <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
-            <TerminalSquare className="size-3.5 text-accent-primary" />
-            Execution preview
+          <div className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">
+            Provider
           </div>
-          <div className="rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-secondary">
-            {(provider?.command_preview ?? "Select an AI provider").replace(
-              "<model>",
-              model || provider?.default_model || "model",
-            )}
-            {provider?.path && <div className="text-text-muted">{provider.path}</div>}
-          </div>
-          <div className="mt-3 flex flex-wrap gap-3 text-[12px] text-text-secondary">
-            <SafetyLine>Read-only execution</SafetyLine>
-            <SafetyLine>No cluster changes</SafetyLine>
-            <SafetyLine>Manual command approval</SafetyLine>
-          </div>
+          <ProviderPicker providers={providers} value={value} onChange={onChange} />
         </div>
-      </div>
 
-      <label className="block">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-[10px] uppercase tracking-wide text-text-muted">
-            Prompt
+        <label className="block">
+          <span className="mb-2 block text-[10px] uppercase tracking-wide text-text-muted">
+            Model
           </span>
-          <div className="flex items-center gap-2">
-            {promptEdited && (
-              <span className="text-[10px] uppercase tracking-wide text-warning">
-                customized
-              </span>
-            )}
-            <Button type="button" variant="ghost" size="sm" onClick={onResetPrompt}>
-              Reset
-            </Button>
-            <Button type="button" variant="secondary" size="sm" onClick={onCopy}>
-              <Clipboard className="size-3.5" /> copy prompt
-            </Button>
-          </div>
-        </div>
-        <textarea
-          value={prompt}
-          onChange={(event) => onPromptChange(event.target.value)}
-          className="min-h-[180px] w-full resize-y rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
-          spellCheck={false}
-        />
-      </label>
-    </SectionPanel>
-  );
-}
-
-function ContextStrip({
-  items,
-  loading,
-  provider,
-  showConfig,
-  onToggleConfig,
-}: {
-  items: Array<{ label: string; value: string }>;
-  loading: boolean;
-  provider?: AiProviderStatus;
-  showConfig: boolean;
-  onToggleConfig: () => void;
-}) {
-  return (
-    <section className="rounded-panel border border-border-default bg-shell/80 p-3">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          {items.map((item) => (
-            <div
-              key={item.label}
-              className="min-w-0 border-border-subtle px-3 py-2 sm:border-l first:border-l-0"
-            >
-              <div className="text-[10px] uppercase tracking-wide text-text-muted">
-                {item.label}
-              </div>
-              <div className="mt-1 truncate font-mono text-[12px] text-text-primary">
-                {loading && item.label === "Resources" ? "sampling..." : item.value}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2 px-3">
-          <div className="inline-flex items-center gap-1.5 rounded-control border border-success/25 bg-[var(--status-success-soft)] px-2 py-1 text-[10px] text-success">
-            <ShieldCheck className="size-3" />
-            {provider?.available ? `${provider.label} · read-only` : "CLI not detected"}
-          </div>
-          <Button type="button" variant="secondary" size="sm" onClick={onToggleConfig}>
-            <Settings2 className="size-3.5" />
-            {showConfig ? "Hide config" : "Configure"}
-          </Button>
-        </div>
+          <select
+            value={model}
+            disabled={!provider?.models.length}
+            onChange={(event) => onModelChange(event.target.value)}
+            className="h-9 w-full rounded-control border border-border-default bg-elevated px-3 text-[12px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {(provider?.models.length ? provider.models : [""]).map((item) => (
+              <option key={item || "none"} value={item}>
+                {item || "No models detected"}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
-    </section>
+
+      {!provider?.available && (
+        <div className="rounded-control border border-warning/35 bg-[var(--status-warning-soft)] p-3">
+          <div className="flex items-center gap-2 text-[12px] font-semibold text-warning">
+            <TriangleAlert className="size-3.5" />
+            {install.title}
+          </div>
+          <p className="mt-1 text-[11px] leading-4 text-text-secondary">
+            {install.description}
+          </p>
+          <pre className="mt-2 overflow-x-auto rounded border border-border-subtle bg-code-surface p-2 font-mono text-[10px] leading-4 text-text-secondary">
+            {install.commands.join("\n")}
+          </pre>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -760,7 +503,7 @@ function QuestionPanel({
         />
         <div className="flex flex-col gap-2 border-t border-border-subtle pt-2 md:flex-row md:items-center md:justify-between">
           <span className="px-2 text-[10px] text-text-muted">
-            Answers are advisory; commands are not auto-executed.
+            Answers are advisory; generated kubectl commands require an explicit Run click.
           </span>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <label className="flex items-center gap-2 rounded-control border border-accent-primary/30 bg-accent-primary-soft px-3 py-2 text-[12px] text-text-primary">
@@ -799,99 +542,153 @@ function QuestionPanel({
 }
 
 type ApprovalPanelProps = {
-  approved: boolean;
+  contextItems: Array<{ label: string; value: string }>;
+  loadingContext: boolean;
+  provider?: AiProviderStatus;
+  providers: AiProviderStatus[];
+  providerValue: "codex" | "claude";
+  model: string;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+  onProviderChange: (value: "codex" | "claude") => void;
+  onModelChange: (value: string) => void;
   prompt: string;
+  promptEdited: boolean;
   byteSize: number;
-  workloads: number;
-  unhealthy: number;
   notes: number;
   redactionCount: number;
   redactions: string[];
-  onCopy: () => void;
+  onPromptChange: (value: string) => void;
+  onResetPrompt: () => void;
 };
 
 function ApprovalPanel({
-  approved,
+  contextItems,
+  loadingContext,
+  provider,
+  providers,
+  providerValue,
+  model,
+  detailsOpen,
+  onToggleDetails,
+  onProviderChange,
+  onModelChange,
   prompt,
+  promptEdited,
   byteSize,
-  workloads,
-  unhealthy,
   notes,
   redactionCount,
   redactions,
-  onCopy,
+  onPromptChange,
+  onResetPrompt,
 }: ApprovalPanelProps) {
-    const [showPayload, setShowPayload] = useState(false);
-    return (
-      <div>
-        <SectionPanel className="space-y-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="rounded-control border border-success/30 bg-[var(--status-success-soft)] p-2 text-success">
-                <ShieldCheck className="size-5" />
-              </div>
-              <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-text-primary">
-                  Review and approve
-                </h2>
-                <p className="mt-1 text-[12px] text-text-secondary">
-                  Lumen sends only the redacted payload after you approve it.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] text-text-muted">
-                {byteSize.toLocaleString()} bytes
-              </span>
-              <Button type="button" variant="secondary" size="sm" onClick={onCopy}>
-                <Clipboard className="size-3.5" /> copy
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => setShowPayload((open) => !open)}
+  return (
+    <div>
+      <SectionPanel className="space-y-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {contextItems.map((item) => (
+              <div
+                key={item.label}
+                className="min-w-0 border-border-subtle px-3 py-2 sm:border-l first:border-l-0"
               >
-                <Settings2 className="size-3.5" />
-                {showPayload ? "Hide payload" : "View payload"}
-              </Button>
+                <div className="text-[10px] uppercase tracking-wide text-text-muted">
+                  {item.label}
+                </div>
+                <div className="mt-1 truncate font-mono text-[12px] text-text-primary">
+                  {loadingContext && item.label === "Resources" ? "sampling..." : item.value}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 px-3">
+            <div className="inline-flex items-center gap-1.5 rounded-control border border-success/25 bg-[var(--status-success-soft)] px-2 py-1 text-[10px] text-success">
+              <ShieldCheck className="size-3" />
+              {provider?.available ? `${provider.label} · read-only` : "CLI not detected"}
+            </div>
+            <Button type="button" variant="secondary" size="sm" onClick={onToggleDetails}>
+              <Settings2 className="size-3.5" />
+              {detailsOpen ? "Hide settings" : "Settings"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="border-t border-border-subtle" />
+
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="rounded-control border border-success/30 bg-[var(--status-success-soft)] p-2 text-success">
+              <ShieldCheck className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-text-primary">
+                Review and approve
+              </h2>
+              <p className="mt-1 text-[12px] text-text-secondary">
+                Lumen sends only the redacted payload after you approve it.
+              </p>
             </div>
           </div>
-
-          <div className="grid gap-2 sm:grid-cols-4">
-            <ReviewStat label="workloads" value={workloads} />
-            <ReviewStat label="attention" value={unhealthy} />
-            <ReviewStat label="notes" value={notes} />
-            <ReviewStat label="redacted" value={redactionCount} />
-          </div>
-
-          <div
-            className={cn(
-              "rounded-control border px-3 py-2 text-[11px]",
-              redactions.length
-                ? "border-warning/35 bg-[var(--status-warning-soft)] text-warning"
-                : "border-success/30 bg-[var(--status-success-soft)] text-success",
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-text-muted">
+              {byteSize.toLocaleString()} bytes
+            </span>
+            {promptEdited && (
+              <span className="text-[10px] uppercase tracking-wide text-warning">
+                customized
+              </span>
             )}
-          >
-            {redactions.length
-              ? `Redacted: ${redactions.join(", ")}`
-              : "No sensitive patterns detected. Secrets, tokens, and credentials are still checked before sending."}
+            <Button type="button" variant="ghost" size="sm" onClick={onResetPrompt}>
+              Reset
+            </Button>
           </div>
+        </div>
 
-          {showPayload && (
-            <pre className="max-h-[300px] overflow-auto rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-relaxed text-text-secondary whitespace-pre-wrap">
-              {prompt}
-            </pre>
+        {detailsOpen && (
+          <div className="grid gap-3 xl:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]">
+            <ConfigurationPanel
+              provider={provider}
+              providers={providers}
+              value={providerValue}
+              model={model}
+              onChange={onProviderChange}
+              onModelChange={onModelChange}
+            />
+            <label className="block">
+              <div className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">
+                Prompt
+              </div>
+              <textarea
+                value={prompt}
+                onChange={(event) => onPromptChange(event.target.value)}
+                className="min-h-[220px] w-full resize-y rounded-control border border-border-default bg-code-surface p-3 font-mono text-[11px] leading-5 text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+                spellCheck={false}
+              />
+            </label>
+          </div>
+        )}
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <ReviewStat label="notes" value={notes} />
+          <ReviewStat label="redacted" value={redactionCount} />
+        </div>
+
+        <div
+          className={cn(
+            "rounded-control border px-3 py-2 text-[11px]",
+            redactions.length
+              ? "border-warning/35 bg-[var(--status-warning-soft)] text-warning"
+              : "border-success/30 bg-[var(--status-success-soft)] text-success",
           )}
+        >
+          {redactions.length
+            ? `Redacted: ${redactions.join(", ")}`
+            : "No sensitive patterns detected. Secrets, tokens, and credentials are still checked before sending."}
+        </div>
 
-          <div className="border-t border-border-subtle pt-3 text-[12px] text-text-secondary">
-            {approved
-              ? "Approved. The next run can send this redacted payload to your local AI CLI."
-              : "Approve the redacted payload beside the Ask button before running the assistant."}
-          </div>
-        </SectionPanel>
-      </div>
-    );
+      </SectionPanel>
+    </div>
+  );
 }
 
 function ReviewStat({ label, value }: { label: string; value: number }) {
@@ -926,7 +723,7 @@ function AnswerPanel({
   running: boolean;
 }) {
   return (
-    <aside className="min-h-[560px] rounded-panel border border-border-default bg-shell/90 p-4 shadow-[var(--shadow-panel)] 2xl:sticky 2xl:top-4 2xl:max-h-[calc(100vh-7rem)] 2xl:overflow-auto">
+    <aside className="min-h-[520px] rounded-panel border border-border-default bg-shell/90 p-4 shadow-[var(--shadow-panel)] xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-auto">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-semibold text-text-primary">Answer</h2>
@@ -966,7 +763,7 @@ function AnswerPanel({
               <div className="rounded-control border border-accent-primary/25 bg-accent-primary-soft p-2 text-accent-primary">
                 <Sparkles className="size-4" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-[13px] font-semibold text-text-primary">
                   Waiting for an approved question
                 </div>
@@ -986,7 +783,7 @@ function AnswerPanel({
               <div className="rounded-control border border-success/25 bg-[var(--status-success-soft)] p-2 text-success">
                 <Loader2 className="size-4 animate-spin" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-[13px] font-semibold text-text-primary">
                   Analyzing redacted context
                 </div>
@@ -1052,7 +849,7 @@ function AiActionQueue({
     {
       icon: <Play className="size-4" />,
       title: "Run commands",
-      meta: "Every command opens confirmation first",
+      meta: "Safe kubectl commands run inline; risky commands require confirmation",
       state: "locked",
     },
   ] as const;
@@ -1368,12 +1165,47 @@ function CommandActionRow({
   label: string;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<AiCommandRunResult | null>(null);
   const cleaned = cleanCommand(command);
+  const params = useParams();
+  const ctx = decodeURIComponent(params.ctx ?? "");
+
   async function copyCommand() {
     await navigator.clipboard.writeText(cleaned);
     toast.success("Command copied");
     setConfirming(false);
   }
+
+  async function runCommand() {
+    if (running) return;
+    setRunning(true);
+    setResult(null);
+    try {
+      const out = await ai.runCommand(cleaned, ctx || undefined);
+      setResult(out);
+      if (out.exit_code === 0 && !out.timed_out) {
+        toast.success("Command completed");
+      } else {
+        toast.error("Command returned a non-zero result");
+      }
+    } catch (e) {
+      const message = (e as Error).message ?? String(e);
+      setResult({
+        command: cleaned,
+        stdout: "",
+        stderr: message,
+        exit_code: null,
+        timed_out: false,
+      });
+      toast.error(message);
+    } finally {
+      setRunning(false);
+      setConfirming(false);
+    }
+  }
+
+  const isSafeCopy = intent === "primary";
   return (
     <>
       <div className="rounded-control border border-border-subtle bg-code-surface p-2">
@@ -1386,27 +1218,67 @@ function CommandActionRow({
             variant="secondary"
             size="sm"
             className="shrink-0"
-            onClick={() => setConfirming(true)}
+            onClick={() => {
+              if (isSafeCopy) {
+                void runCommand();
+              } else {
+                setConfirming(true);
+              }
+            }}
+            disabled={running}
           >
-            <TerminalSquare className="size-3.5" /> {label}
+            {running ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <TerminalSquare className="size-3.5" />
+            )}
+            {isSafeCopy ? "Run" : label}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="shrink-0 px-2"
+            onClick={() => void copyCommand()}
+          >
+            <Clipboard className="size-3.5" />
           </Button>
         </div>
+        {result && (
+          <div className="mt-2 overflow-hidden rounded-control border border-border-subtle bg-shell">
+            <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-2 py-1.5 font-mono text-[10px] text-text-muted">
+              <span>exit {result.exit_code ?? "n/a"}</span>
+              {result.timed_out && <span className="text-warning">timed out</span>}
+            </div>
+            {result.stdout && (
+              <pre className="max-h-56 overflow-auto p-2 font-mono text-[11px] leading-5 text-text-primary whitespace-pre-wrap">
+                {result.stdout}
+              </pre>
+            )}
+            {result.stderr && (
+              <pre className="max-h-40 overflow-auto border-t border-border-subtle p-2 font-mono text-[11px] leading-5 text-warning whitespace-pre-wrap">
+                {result.stderr}
+              </pre>
+            )}
+            {!result.stdout && !result.stderr && (
+              <div className="p-2 text-[11px] text-text-muted">No output returned.</div>
+            )}
+          </div>
+        )}
       </div>
-      <ConfirmActionDialog
-        open={confirming}
-        title={intent === "warning" ? "Confirm generated command" : "Confirm read-only command"}
-        description={
-          intent === "warning"
-            ? "This command may change cluster state. Lumen will copy it only after confirmation; review it before running in your terminal."
-            : "This command is AI-generated. Lumen will copy it only after confirmation; review it before running in your terminal."
-        }
-        target={cleaned}
-        confirmLabel="copy command"
-        intent={intent}
-        confirmText={intent === "warning" ? cleaned : "copy"}
-        onCancel={() => setConfirming(false)}
-        onConfirm={() => void copyCommand()}
-      />
+      {!isSafeCopy && (
+        <ConfirmActionDialog
+          open={confirming}
+          title="Confirm generated command"
+          description="This command may change cluster state. Lumen will attempt to run only commands that pass its safety checks."
+          target={cleaned}
+          confirmLabel="run command"
+          intent={intent}
+          confirmText={cleaned}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => void runCommand()}
+        />
+      )}
     </>
   );
 }
@@ -1421,7 +1293,7 @@ function normalizeSectionLines(content: string): string[] {
 }
 
 function isCommandLine(line: string): boolean {
-  return /^(?:[-*]\s*)?(?:`{0,3})?(?:kubectl|helm|k9s)\b/i.test(line);
+  return /^(?:[-*]\s*)?(?:`{0,3})?kubectl\b/i.test(line);
 }
 
 function cleanListMarker(line: string): string {
@@ -1657,7 +1529,7 @@ function buildPrompt(task: AiTask, question: string, context: string): string {
 
 Rules:
 - Be concise, technical, and evidence-driven.
-- Do not execute commands or imply that commands were executed.
+- Lumen may execute safe read-only kubectl commands only after the user clicks Run.
 - Only suggest destructive or mutating commands in a separate "Requires confirmation" section.
 - Prefer read-only kubectl commands for investigation.
 - If evidence is insufficient, say exactly what is missing.
@@ -1681,7 +1553,7 @@ Formatting rules:
 - Keep Summary to 1-3 short sentences.
 - Make Evidence a bullet list of concrete signals.
 - Make Next checks and Remediation suggestions actionable bullet lists.
-- Put one command per line in Safe kubectl commands.
+- Put one kubectl command per line in Safe kubectl commands.
 - Put mutating commands only in Requires confirmation, one command per line.
 - If a section has nothing useful, write "None."
 

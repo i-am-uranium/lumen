@@ -46,11 +46,20 @@ export function ConfirmActionDialog({
     if (open) setTyped("");
   }, [open, confirmText]);
 
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !busy) onCancel();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, onCancel, open]);
+
   if (!open) return null;
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 px-4"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4"
       onClick={onCancel}
     >
       <div
@@ -58,7 +67,7 @@ export function ConfirmActionDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
-        className="w-full max-w-[440px] rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-[520px] flex-col overflow-hidden rounded-panel border border-border-strong bg-surface shadow-[var(--shadow-popover)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3 border-b border-border-default px-4 py-3">
@@ -75,7 +84,7 @@ export function ConfirmActionDialog({
             <X className="size-4" />
           </button>
         </div>
-        <div className="space-y-4 p-4">
+        <div className="min-h-0 space-y-4 overflow-auto p-4">
           <p id={descId} className="text-[12px] leading-5 text-text-secondary">
             {description}
           </p>
@@ -83,7 +92,7 @@ export function ConfirmActionDialog({
             <div className="text-[10px] uppercase tracking-wider text-text-muted">
               target
             </div>
-            <div className="mt-1 break-all font-mono text-[12px] text-text-primary">
+            <div className="mt-1 max-h-32 overflow-auto break-all font-mono text-[12px] text-text-primary">
               {target}
             </div>
           </div>
@@ -99,7 +108,7 @@ export function ConfirmActionDialog({
               autoFocus
             />
           </label>
-          <div className="flex justify-end gap-2">
+          <div className="sticky bottom-0 -mx-4 -mb-4 flex justify-end gap-2 border-t border-border-subtle bg-surface px-4 py-3">
             <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={onCancel}>
               cancel
             </Button>

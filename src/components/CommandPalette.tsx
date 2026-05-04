@@ -214,7 +214,7 @@ export function CommandPalette() {
           <div className="flex items-center gap-2 border-b border-term-border px-4">
             <Search className="size-4 text-term-muted" aria-hidden="true" />
             <CommandInput
-              placeholder="jump to resource, namespace, logs, or command..."
+              placeholder="jump to resource, namespace, logs, AI, or command..."
               value={q}
               onValueChange={setQ}
               className="bg-transparent text-[14px] placeholder:text-term-subtle border-0"

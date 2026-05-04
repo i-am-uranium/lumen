@@ -19,8 +19,20 @@ export type AiRunResult = {
   timed_out: boolean;
 };
 
+export type AiCommandRunResult = {
+  command: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  timed_out: boolean;
+};
+
 export const ai = {
   detectProviders: () => invoke<AiProviderStatus[]>("detect_ai_providers"),
   runPrompt: (provider: string, prompt: string, model?: string) =>
     invoke<AiRunResult>("run_ai_prompt", { request: { provider, prompt, model } }),
+  runCommand: (command: string, context?: string) =>
+    invoke<AiCommandRunResult>("run_ai_command", {
+      request: { command, context },
+    }),
 };

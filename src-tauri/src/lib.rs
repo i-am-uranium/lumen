@@ -33,6 +33,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ai::detect_ai_providers,
             commands::ai::run_ai_prompt,
+            commands::ai::run_ai_command,
             commands::k8s::list_contexts,
             commands::k8s::set_context,
             commands::k8s::delete_context,
