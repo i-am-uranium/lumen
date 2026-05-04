@@ -851,6 +851,9 @@ function NonPodPropertiesTab({
       {isStorageKind(s.kind) && (
         <StorageDetailsSection ctx={ctx} resource={resource} kind={s.kind} />
       )}
+      {hasResourceInsights(s.kind) && (
+        <ResourceInsightsSection ctx={ctx} resource={resource} kind={s.kind} />
+      )}
       <Section title="labels">
         <LabelPills entries={s.labels} max={8} />
       </Section>
@@ -872,6 +875,18 @@ function isStorageKind(kind: WorkloadKind): boolean {
     kind === "persistentvolumeclaim" ||
     kind === "persistentvolume" ||
     kind === "storageclass"
+  );
+}
+
+function hasResourceInsights(kind: WorkloadKind): boolean {
+  return (
+    kind === "service" ||
+    kind === "ingress" ||
+    kind === "networkpolicy" ||
+    kind === "horizontalpodautoscaler" ||
+    kind === "poddisruptionbudget" ||
+    kind === "resourcequota" ||
+    kind === "limitrange"
   );
 }
 
@@ -1087,6 +1102,70 @@ function StorageDetailsSection({
         )}
       </Dl>
     </Section>
+  );
+}
+
+function ResourceInsightsSection({
+  ctx,
+  resource,
+  kind,
+}: {
+  ctx: string;
+  resource: Resource;
+  kind: WorkloadKind;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["k8s", "resource-insights", ctx, resource.namespace, kind, resource.name],
+    queryFn: () =>
+      k8s.getResourceInsights(
+        resource.namespace,
+        kind,
+        resource.name,
+        ctx || undefined,
+      ),
+    staleTime: 10_000,
+  });
+
+  if (isLoading) {
+    return (
+      <Section title="insights">
+        <div className="text-[12px] text-term-muted flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading insights…
+        </div>
+      </Section>
+    );
+  }
+  if (error || !data) {
+    return (
+      <Section title="insights">
+        <div className="text-[12px] text-term-red flex items-center gap-2">
+          <AlertTriangle className="size-3.5" /> failed to load insights
+        </div>
+      </Section>
+    );
+  }
+
+  return (
+    <>
+      {data.sections.map((insight) => (
+        <Section key={insight.title} title={insight.title}>
+          {insight.rows.length === 0 ? (
+            <div className="text-[11px] text-term-subtle">no details reported</div>
+          ) : (
+            <Dl>
+              {insight.rows.map((row) => (
+                <DlRow
+                  key={`${insight.title}-${row.label}`}
+                  label={row.label}
+                  value={row.value || "—"}
+                  mono
+                />
+              ))}
+            </Dl>
+          )}
+        </Section>
+      ))}
+    </>
   );
 }
 

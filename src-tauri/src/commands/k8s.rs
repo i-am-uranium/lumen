@@ -1,11 +1,11 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
     actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
-    rbac_details, registry, resources, security, storage_details,
+    rbac_details, registry, resource_insights, resources, security, storage_details,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
-        PodDetails, RbacDetail, ResourceDetail, SecurityReport, StorageDetail, WorkloadKind,
-        WorkloadSummary,
+        PodDetails, RbacDetail, ResourceDetail, ResourceInsights, SecurityReport, StorageDetail,
+        WorkloadKind, WorkloadSummary,
     },
 };
 use crate::state::AppState;
@@ -1026,6 +1026,78 @@ pub async fn get_storage_details(
         }
         other => Err(AppError::Internal(format!(
             "storage details are not available for {other:?}"
+        ))),
+    }
+}
+
+#[tauri::command]
+pub async fn get_resource_insights(
+    namespace: String,
+    kind: WorkloadKind,
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<ResourceInsights> {
+    let client = client_for(&state, context.as_deref()).await?;
+    match kind {
+        WorkloadKind::Service => {
+            let api: Api<Service> = Api::namespaced(client, &namespace);
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(resource_insights::service_insights(&obj))
+        }
+        WorkloadKind::Ingress => {
+            let api: Api<Ingress> = Api::namespaced(client, &namespace);
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(resource_insights::ingress_insights(&obj))
+        }
+        WorkloadKind::NetworkPolicy => {
+            let api: Api<NetworkPolicy> = Api::namespaced(client, &namespace);
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(resource_insights::network_policy_insights(&obj))
+        }
+        WorkloadKind::HorizontalPodAutoscaler => {
+            let api: Api<HorizontalPodAutoscaler> = Api::namespaced(client, &namespace);
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(resource_insights::hpa_insights(&obj))
+        }
+        WorkloadKind::PodDisruptionBudget => {
+            let api: Api<PodDisruptionBudget> = Api::namespaced(client, &namespace);
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(resource_insights::pdb_insights(&obj))
+        }
+        WorkloadKind::ResourceQuota => {
+            let api: Api<ResourceQuota> = Api::namespaced(client, &namespace);
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(resource_insights::quota_insights(&obj))
+        }
+        WorkloadKind::LimitRange => {
+            let api: Api<LimitRange> = Api::namespaced(client, &namespace);
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(resource_insights::limit_range_insights(&obj))
+        }
+        other => Err(AppError::Internal(format!(
+            "resource insights are not available for {other:?}"
         ))),
     }
 }

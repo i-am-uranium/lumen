@@ -41,6 +41,7 @@ pub fn run() {
             commands::k8s::get_resource,
             commands::k8s::get_rbac_details,
             commands::k8s::get_storage_details,
+            commands::k8s::get_resource_insights,
             commands::k8s::stream_events,
             commands::k8s::stop_stream,
             commands::k8s::watch_nodes,

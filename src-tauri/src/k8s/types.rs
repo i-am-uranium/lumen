@@ -172,6 +172,23 @@ pub struct StorageDetail {
     pub parameters: std::collections::BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceInsightRow {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceInsightSection {
+    pub title: String,
+    pub rows: Vec<ResourceInsightRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceInsights {
+    pub sections: Vec<ResourceInsightSection>,
+}
+
 // ─── Fleet ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]

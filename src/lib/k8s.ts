@@ -165,6 +165,20 @@ export type StorageDetail = {
   parameters: Record<string, string>;
 };
 
+export type ResourceInsightRow = {
+  label: string;
+  value: string;
+};
+
+export type ResourceInsightSection = {
+  title: string;
+  rows: ResourceInsightRow[];
+};
+
+export type ResourceInsights = {
+  sections: ResourceInsightSection[];
+};
+
 // ─── Fleet ────────────────────────────────────────────────────────────────
 
 export type FleetHealth = {
@@ -486,6 +500,18 @@ export const k8s = {
     context?: string,
   ) =>
     invoke<StorageDetail>("get_storage_details", {
+      namespace,
+      kind,
+      name,
+      context,
+    }),
+  getResourceInsights: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) =>
+    invoke<ResourceInsights>("get_resource_insights", {
       namespace,
       kind,
       name,
