@@ -262,7 +262,7 @@ export function EventsView() {
                     severity === s
                       ? s === "Warning"
                         ? "bg-amber-500/15 text-warning"
-                        : "bg-term-green-soft text-term-green"
+                        : "bg-accent-primary/10 text-accent-primary"
                       : "text-text-secondary hover:bg-elevated",
                   )}
                 >
@@ -300,7 +300,7 @@ export function EventsView() {
         {paused && visibleEvents.length > 0 && (
           <button
             onClick={jumpToTop}
-            className="absolute left-1/2 -translate-x-1/2 top-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-accent-primary/40 bg-term-green/10 text-[11px] text-term-green hover:bg-term-green/20 transition-colors shadow-md"
+            className="absolute left-1/2 -translate-x-1/2 top-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-accent-primary/40 bg-accent-primary/10 text-[11px] text-accent-primary hover:bg-accent-primary/20 transition-colors shadow-md"
           >
             <ArrowUp className="size-3" /> jump to newest
           </button>

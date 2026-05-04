@@ -23,7 +23,7 @@ function formatCpu(milli: number): string {
 
 function barColor(pct: number): string {
   if (pct < 50) return "bg-success/70";
-  if (pct < 75) return "bg-term-green/80";
+  if (pct < 75) return "bg-success/80";
   if (pct < 90) return "bg-warning";
   return "bg-danger";
 }

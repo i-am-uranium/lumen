@@ -294,7 +294,7 @@ function ScoreBadge({ score }: { score: number }) {
     tone === "good"
       ? "text-success border-emerald-500/40 bg-success/10"
       : tone === "ok"
-        ? "text-term-green border-accent-primary/40 bg-term-green-soft"
+        ? "text-accent-primary border-accent-primary/40 bg-accent-primary/10"
         : tone === "warn"
           ? "text-warning border-amber-500/40 bg-amber-500/10"
           : "text-red-400 border-red-500/40 bg-red-500/10";
