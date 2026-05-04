@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
@@ -8,12 +8,14 @@ import {
   Pencil,
   ScrollText,
   TerminalSquare,
+  Trash2,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import { PinButton } from "@/components/PinButton";
 import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
-import { k8s, type ContainerInfo } from "@/lib/k8s";
+import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 
 // ─── Lumen-distinct touches vs Lens ────────────────────────────────────
@@ -42,7 +44,9 @@ export function ResourceDetailDrawer({
   const showLogsTab = isPod || ["deployment", "statefulset", "daemonset", "replicaset", "job"].includes(resource?.kind ?? "");
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
   const [downloading, setDownloading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { openSession } = useShellDock();
+  const qc = useQueryClient();
 
   // Pre-load pod-details so the Shell action can pick a default container
   // synchronously. SeverityStrip already runs the same query, so this is a
@@ -109,6 +113,30 @@ export function ResourceDetailDrawer({
     setActiveTab("logs");
   }
 
+  async function handleDelete() {
+    if (!resource || deleting) return;
+    const ok = window.confirm(
+      `Delete ${resource.kind}/${resource.name} from ${resource.namespace || "cluster scope"} in ${ctx}?`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await k8s.deleteResource(
+        resource.namespace,
+        resource.kind as WorkloadKind,
+        resource.name,
+        ctx,
+      );
+      toast.success(`deleted ${resource.kind}/${resource.name}`);
+      await qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
+      await qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   async function handleDownloadLogs() {
     if (!resource || downloading) return;
@@ -230,6 +258,8 @@ export function ResourceDetailDrawer({
           onDownloadLogs={handleDownloadLogs}
           onShellExec={openShell}
           onEditYaml={() => setActiveTab("yaml")}
+          deleting={deleting}
+          onDelete={handleDelete}
           onClose={onClose}
         />
         <Tabs activeTab={activeTab} onChange={setActiveTab} showLogsTab={showLogsTab} />
@@ -293,6 +323,8 @@ function Header({
   onDownloadLogs,
   onShellExec,
   onEditYaml,
+  deleting,
+  onDelete,
   onClose,
 }: {
   titleId: string;
@@ -304,9 +336,37 @@ function Header({
   onDownloadLogs: () => void;
   onShellExec: () => void;
   onEditYaml: () => void;
+  deleting: boolean;
+  onDelete: () => void;
   onClose: () => void;
 }) {
+  const kind = resource?.kind as WorkloadKind | undefined;
+  const canDelete = useQuery({
+    queryKey: [
+      "k8s",
+      "access",
+      ctx,
+      resource?.namespace,
+      resource?.kind,
+      resource?.name,
+      "delete",
+    ],
+    queryFn: () =>
+      k8s.checkAccess(
+        {
+          kind: kind!,
+          verb: "delete",
+          namespace: resource!.namespace || null,
+          name: resource!.name,
+        },
+        ctx,
+      ),
+    enabled: !!resource && !!kind,
+    staleTime: 15_000,
+  });
   if (!resource) return null;
+  const deleteDisabled =
+    deleting || canDelete.isLoading || canDelete.data?.allowed !== true;
   return (
     <div className="min-h-12 px-3 py-2 flex items-center gap-2 border-b border-term-border-soft shrink-0 bg-term-panel">
       <div className="flex flex-col min-w-0 flex-1">
@@ -369,6 +429,22 @@ function Header({
           label="yaml"
           hint="Y"
           onClick={onEditYaml}
+        />
+        <ActionIcon
+          icon={
+            deleting ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="size-3.5" />
+            )
+          }
+          label={
+            canDelete.data?.allowed === false
+              ? "delete denied by RBAC"
+              : "delete"
+          }
+          disabled={deleteDisabled}
+          onClick={onDelete}
         />
         <ActionIcon
           icon={<X className="size-4" />}

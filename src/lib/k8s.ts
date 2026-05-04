@@ -530,6 +530,12 @@ export const k8s = {
     }),
   deletePod: (namespace: string, name: string, context?: string) =>
     invoke<void>("delete_pod", { namespace, name, context }),
+  deleteResource: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) => invoke<void>("delete_resource", { namespace, kind, name, context }),
   listPodContainers: (namespace: string, pod: string, context?: string) =>
     invoke<PodContainerInfo[]>("list_pod_containers", { namespace, pod, context }),
   startPortForward: (opts: {

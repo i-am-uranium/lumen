@@ -1307,6 +1307,18 @@ pub async fn delete_pod(
     act::delete_pod(&client, &namespace, &name).await
 }
 
+#[tauri::command]
+pub async fn delete_resource(
+    namespace: String,
+    kind: WorkloadKind,
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    act::delete_resource(&client, &namespace, kind, &name).await
+}
+
 // ─── Port-forward ─────────────────────────────────────────────────────────
 
 use crate::k8s::portforward;

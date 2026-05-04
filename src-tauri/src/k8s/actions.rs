@@ -159,6 +159,26 @@ pub async fn delete_pod(client: &Client, namespace: &str, name: &str) -> AppResu
         .map_err(|e| AppError::K8s(e.to_string()))
 }
 
+pub async fn delete_resource(
+    client: &Client,
+    namespace: &str,
+    kind: WorkloadKind,
+    name: &str,
+) -> AppResult<()> {
+    let definition = registry::get_resource_definition(&kind)
+        .ok_or_else(|| AppError::Internal(format!("resource kind {kind:?} is not registered")))?;
+    let ar = api_resource_for(&kind)?;
+    let api: Api<kube::api::DynamicObject> = if definition.namespaced {
+        Api::namespaced_with(client.clone(), namespace, &ar)
+    } else {
+        Api::all_with(client.clone(), &ar)
+    };
+    api.delete(name, &DeleteParams::default())
+        .await
+        .map(|_| ())
+        .map_err(|e| AppError::K8s(e.to_string()))
+}
+
 // ─── YAML apply ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
