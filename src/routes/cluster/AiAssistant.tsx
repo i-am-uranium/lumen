@@ -3,6 +3,7 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   Bot,
   CheckCircle2,
+  ChevronDown,
   Clipboard,
   Database,
   FileText,
@@ -698,7 +699,8 @@ const ANSWER_SECTION_META: Record<
 };
 
 function StructuredAnswer({ stdout }: { stdout: string }) {
-  const sections = useMemo(() => parseAnswerSections(stdout), [stdout]);
+  const answerText = useMemo(() => extractAssistantAnswer(stdout), [stdout]);
+  const sections = useMemo(() => parseAnswerSections(answerText), [answerText]);
   if (!stdout.trim()) {
     return (
       <div className="rounded-control border border-border-default bg-code-surface p-4 text-[12px] text-text-muted">
@@ -709,9 +711,14 @@ function StructuredAnswer({ stdout }: { stdout: string }) {
 
   return (
     <div className="space-y-3">
-      {sections.map((section) => (
-        <AnswerSectionCard key={section.title} section={section} />
-      ))}
+      {sections.length ? (
+        sections.map((section) => (
+          <AnswerSectionCard key={section.title} section={section} />
+        ))
+      ) : (
+        <MissingStructuredAnswer />
+      )}
+      <RawTranscript stdout={stdout} />
     </div>
   );
 }
@@ -800,6 +807,79 @@ function parseAnswerSections(stdout: string): AnswerSection[] {
       };
     })
     .filter((section) => section.content.length > 0);
+}
+
+function extractAssistantAnswer(stdout: string): string {
+  const text = stripAnsi(stdout).trim();
+  if (!text) return "";
+  const assistantMarkers = [
+    /\nassistant\s*\n+/gi,
+    /\nassistant response\s*:?\s*\n+/gi,
+    /\nfinal answer\s*:?\s*\n+/gi,
+  ];
+  for (const marker of assistantMarkers) {
+    const matches = Array.from(text.matchAll(marker));
+    const last = matches[matches.length - 1];
+    if (last?.index !== undefined) {
+      const answer = text.slice(last.index + last[0].length).trim();
+      if (answer && !looksLikePromptEcho(answer)) return answer;
+    }
+  }
+  return looksLikePromptEcho(text) ? "" : text;
+}
+
+function looksLikePromptEcho(text: string): boolean {
+  return (
+    text.includes("You are Lumen's local Kubernetes assistant.") &&
+    text.includes("Redacted context:") &&
+    text.includes("Return this structure:")
+  );
+}
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function MissingStructuredAnswer() {
+  return (
+    <section className="rounded-control border border-warning/30 bg-[var(--status-warning-soft)] p-3">
+      <div className="flex items-start gap-2">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+        <div>
+          <h3 className="text-[13px] font-semibold text-text-primary">
+            No structured assistant answer detected
+          </h3>
+          <p className="mt-1 text-[12px] leading-5 text-text-secondary">
+            The AI CLI returned a transcript or prompt echo instead of the requested
+            answer sections. Expand the raw transcript below to inspect the provider output.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RawTranscript({
+  stdout,
+}: {
+  stdout: string;
+}) {
+  return (
+    <details
+      className="group rounded-control border border-border-default bg-shell/75"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-[12px] text-text-secondary">
+        <span className="font-medium text-text-primary">Raw transcript</span>
+        <span className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
+          collapsed by default
+          <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
+        </span>
+      </summary>
+      <pre className="max-h-[360px] overflow-auto border-t border-border-subtle bg-code-surface p-3 font-mono text-[11px] leading-relaxed text-text-secondary whitespace-pre-wrap">
+        {stripAnsi(stdout)}
+      </pre>
+    </details>
+  );
 }
 
 function ProviderPicker({
