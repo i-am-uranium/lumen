@@ -685,8 +685,10 @@ pub async fn get_resource(
                 .await
                 .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::secret_summary(&obj);
-            let yaml =
+            let raw_yaml =
                 serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml = resources::redact_secret_yaml(&raw_yaml)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
             Ok(ResourceDetail {
                 summary,

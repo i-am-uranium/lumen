@@ -1114,6 +1114,7 @@ function InspectorPanel({
           yaml={yamlQuery.data?.yaml}
           loading={yamlQuery.isLoading}
           error={yamlQuery.error ? (yamlQuery.error as Error).message : null}
+          sensitive={node.kind === "secret"}
           onClose={() => setShowYaml(false)}
           pinSlot={
             <PinButton
@@ -1126,7 +1127,7 @@ function InspectorPanel({
             />
           }
           editable={
-            workloadKind && node.namespace
+            workloadKind && node.namespace && node.kind !== "secret"
               ? {
                   namespace: node.namespace,
                   kind: workloadKind,

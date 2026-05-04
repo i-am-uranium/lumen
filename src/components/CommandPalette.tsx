@@ -15,7 +15,10 @@ import { useClusterStore } from "@/state/cluster";
 import { useUi } from "@/state/ui";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { k8s, type WorkloadKind } from "@/lib/k8s";
-import { resourceKindToSlug } from "@/lib/k8s/resourceRegistry";
+import {
+  listResourceDefinitions,
+  resourceKindToSlug,
+} from "@/lib/k8s/resourceRegistry";
 import {
   Boxes,
   FileText,
@@ -28,19 +31,8 @@ import {
   UserPlus,
 } from "lucide-react";
 
-const JUMP_KINDS: WorkloadKind[] = [
-  "pod",
-  "deployment",
-  "statefulset",
-  "daemonset",
-  "service",
-  "ingress",
-  "configmap",
-  "secret",
-  "persistentvolumeclaim",
-  "horizontalpodautoscaler",
-  "networkpolicy",
-];
+export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
+  listResourceDefinitions().map((definition) => definition.kind);
 
 type Jumpable = { kind: WorkloadKind; name: string; namespace: string };
 
@@ -63,6 +55,7 @@ export function CommandPalette() {
     .replace(/^ns\s+/i, "switch namespace: ")
     .replace(/^ctx\s+/i, "switch context: ")
     .replace(/^logs\s+/i, "view logs: ");
+  const shouldSearchResources = normalizedQuery.trim().length >= 2;
 
   const { data: contexts = [] } = useQuery({
     queryKey: ["k8s", "contexts"],
@@ -77,11 +70,11 @@ export function CommandPalette() {
     staleTime: 30_000,
   });
   const resourceQueries = useQueries({
-    queries: JUMP_KINDS.map((kind) => ({
+    queries: COMMAND_PALETTE_RESOURCE_KINDS.map((kind) => ({
       queryKey: ["k8s", "workloads", currentCtx, currentNs, kind] as const,
       queryFn: () =>
         k8s.listWorkloads(currentNs ?? "", kind, currentCtx ?? undefined),
-      enabled: paletteOpen && !!currentNs,
+      enabled: paletteOpen && !!currentNs && shouldSearchResources,
       staleTime: 10_000,
     })),
   });
@@ -90,7 +83,7 @@ export function CommandPalette() {
   const allResources: Jumpable[] = useMemo(() => {
     const out: Jumpable[] = [];
     resourceQueries.forEach((query, i) => {
-      const kind = JUMP_KINDS[i];
+      const kind = COMMAND_PALETTE_RESOURCE_KINDS[i];
       for (const workload of query.data ?? []) {
         out.push({
           kind,

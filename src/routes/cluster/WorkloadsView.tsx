@@ -741,13 +741,18 @@ export function WorkloadsView() {
           yaml={yamlQuery.data?.yaml}
           loading={yamlQuery.isLoading}
           error={yamlQuery.error ? (yamlQuery.error as Error).message : null}
+          sensitive={selected.kind === "secret"}
           onClose={() => setSelected(null)}
-          editable={{
-            namespace: selected.namespace,
-            kind: selected.kind,
-            name: selected.name,
-            context: context || undefined,
-          }}
+          editable={
+            selected.kind === "secret"
+              ? undefined
+              : {
+                  namespace: selected.namespace,
+                  kind: selected.kind,
+                  name: selected.name,
+                  context: context || undefined,
+                }
+          }
           pinSlot={
             <PinButton
               ctx={context}

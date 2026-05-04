@@ -86,6 +86,21 @@ pub fn dynamic_summary(obj: &DynamicObject, definition: &ResourceDefinition) -> 
     }
 }
 
+pub fn redact_secret_yaml(yaml: &str) -> Result<String, serde_yaml::Error> {
+    let mut value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+    if let serde_yaml::Value::Mapping(root) = &mut value {
+        for section in ["data", "stringData", "binaryData"] {
+            let key = serde_yaml::Value::String(section.to_string());
+            if let Some(serde_yaml::Value::Mapping(entries)) = root.get_mut(&key) {
+                for value in entries.values_mut() {
+                    *value = serde_yaml::Value::String("<redacted>".to_string());
+                }
+            }
+        }
+    }
+    serde_yaml::to_string(&value)
+}
+
 pub fn deployment_summary(d: &Deployment) -> WorkloadSummary {
     let spec_replicas = d.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
     let ready_replicas = d
@@ -911,5 +926,32 @@ mod tests {
         let s = configmap_summary(&cm);
         assert_eq!(s.name, "env");
         assert_eq!(s.namespace, "prod");
+    }
+
+    #[test]
+    fn redacts_secret_yaml_data_without_dropping_keys() {
+        let yaml = r#"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-creds
+data:
+  username: YWRtaW4=
+  password: c2VjcmV0
+stringData:
+  token: cleartext
+binaryData:
+  cert: AQID
+"#;
+
+        let redacted = redact_secret_yaml(yaml).unwrap();
+
+        assert!(redacted.contains("username: <redacted>"));
+        assert!(redacted.contains("password: <redacted>"));
+        assert!(redacted.contains("token: <redacted>"));
+        assert!(redacted.contains("cert: <redacted>"));
+        assert!(!redacted.contains("YWRtaW4="));
+        assert!(!redacted.contains("cleartext"));
+        assert!(!redacted.contains("AQID"));
     }
 }

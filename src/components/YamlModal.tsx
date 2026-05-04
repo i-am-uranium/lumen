@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Copy, Eye, FlaskConical, Pencil, X } from "lucide-react";
+import { Check, Copy, Eye, FlaskConical, Pencil, ShieldOff, X } from "lucide-react";
 import { toast } from "sonner";
 import { k8s, type ApplyOutcome, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
@@ -29,6 +29,8 @@ type Props = {
    * Callers typically pass a <PinButton /> so the resource can be pinned
    * without leaving the modal. */
   pinSlot?: React.ReactNode;
+  /** The YAML has had sensitive fields removed and must not be applied back. */
+  sensitive?: boolean;
 };
 
 /** YAML inspector with optional server-side-apply editing. */
@@ -41,6 +43,7 @@ export function YamlModal({
   onClose,
   editable,
   pinSlot,
+  sensitive = false,
 }: Props) {
   const [mode, setMode] = useState<"read" | "edit">("read");
   const [draft, setDraft] = useState<string>("");
@@ -68,10 +71,11 @@ export function YamlModal({
         },
         editable!.context,
       ),
-    enabled: !!editable,
+    enabled: !!editable && !sensitive,
     staleTime: 15_000,
   });
-  const canEdit = !editable || updateAccess.data?.allowed === true;
+  const editCapability = sensitive ? undefined : editable;
+  const canEdit = !editCapability || updateAccess.data?.allowed === true;
 
   // Seed the draft when yaml loads / we enter edit mode.
   useEffect(() => {
@@ -160,7 +164,7 @@ export function YamlModal({
           </div>
           <div className="flex items-center gap-2">
             {pinSlot}
-            {editable && (
+            {editCapability && (
               <button
                 onClick={() => {
                   if (!canEdit) return;
@@ -224,6 +228,12 @@ export function YamlModal({
               {yaml}
             </pre>
           )}
+          {sensitive && mode === "read" && !loading && !error && (
+            <div className="px-4 py-2 text-[12px] text-amber-300 border-t border-amber-500/30 bg-amber-500/10 flex items-center gap-2">
+              <ShieldOff className="size-3.5 shrink-0" />
+              <span>sensitive values are redacted and this YAML is read-only.</span>
+            </div>
+          )}
           {applyErr && (
             <div className="px-4 py-2 text-[12px] text-term-red border-t border-term-red/40 bg-term-red/10 whitespace-pre-wrap">
               {applyErr}
@@ -241,7 +251,7 @@ export function YamlModal({
           )}
         </div>
 
-        {editable && mode === "edit" && (
+        {editCapability && mode === "edit" && (
           <div className="px-4 py-3 border-t border-term-border-soft flex justify-end gap-2 shrink-0">
             <span className="mr-auto text-[11px] text-term-subtle self-center">
               Server-side apply as field manager{" "}
