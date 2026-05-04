@@ -36,7 +36,9 @@ import { usePinnedResources, type PinnedRef } from "@/hooks/usePinnedResources";
 import { useRecentResources } from "@/hooks/useRecentResources";
 
 const RAIL_W = 220;
-const RAIL_W_COLLAPSED = 48;
+const RAIL_W_COLLAPSED = 56;
+const COLLAPSED_ROW =
+  "mx-auto flex size-10 items-center justify-center rounded-control border text-text-secondary transition-colors";
 
 type LeafItem = {
   kind: "leaf";
@@ -193,8 +195,8 @@ const SECTIONS: Item[] = [
 
 const navRow = ({ isActive }: { isActive: boolean }, collapsed: boolean) =>
   cn(
-    "group relative flex items-center gap-2 h-7 rounded-md text-[12px] transition-colors border",
-    collapsed ? "justify-center px-0 mx-1.5" : "px-2 mx-1.5",
+    "group relative flex items-center gap-2 rounded-md text-[12px] transition-colors border",
+    collapsed ? COLLAPSED_ROW : "h-7 px-2 mx-1.5",
     isActive
       ? "bg-accent-primary-soft text-accent-primary border-accent-primary/40"
       : "text-text-secondary hover:text-text-primary hover:bg-hover border-transparent",
@@ -263,7 +265,7 @@ function Header({
     return (
       <button
         onClick={onBack}
-        className="h-12 w-full flex items-center justify-center text-text-secondary hover:text-text-primary border-b border-border-default"
+        className="flex h-12 w-full items-center justify-center border-b border-border-default text-text-secondary hover:text-text-primary"
         title={`back to fleet · ${context}`}
         aria-label="back to fleet"
       >
@@ -339,7 +341,8 @@ function GroupHeader({
       <button
         onClick={onToggle}
         className={cn(
-          "group flex items-center justify-center h-7 rounded-md mx-1.5 text-text-secondary hover:text-text-primary hover:bg-hover",
+          COLLAPSED_ROW,
+          "border-transparent hover:bg-hover hover:text-text-primary",
         )}
         title={label}
         aria-label={label}
@@ -398,7 +401,7 @@ function StubRow({
   if (collapsed) {
     return (
       <div
-        className="flex items-center justify-center h-7 mx-1.5 text-text-muted/60 cursor-not-allowed"
+        className={cn(COLLAPSED_ROW, "cursor-not-allowed border-transparent text-text-muted/60")}
         title={`${label} — coming soon`}
         aria-disabled="true"
       >
@@ -436,9 +439,9 @@ function PinnedSection({
   const { items, unpin } = usePinnedResources(ctx);
   if (collapsed) {
     return (
-      <div className="py-1">
+      <div className="py-1.5">
         <div
-          className="flex items-center justify-center h-7 mx-1.5 text-text-muted"
+          className={cn(COLLAPSED_ROW, "border-transparent text-text-muted")}
           title={`pinned (${items.length})`}
         >
           <Star className="size-3.5" />
@@ -543,9 +546,9 @@ function RecentSection({
 
   if (collapsed) {
     return (
-      <div className="py-1">
+      <div className="py-1.5">
         <div
-          className="flex items-center justify-center h-7 mx-1.5 text-text-muted"
+          className={cn(COLLAPSED_ROW, "border-transparent text-text-muted")}
           title={`recent (${items.length})`}
         >
           <Clock className="size-3.5" />
@@ -652,13 +655,16 @@ export function ClusterWorkspace() {
           onBack={() => nav("/cluster")}
         />
 
-        <nav className="flex-1 min-h-0 overflow-y-auto py-1.5">
+        <nav className={cn("flex-1 min-h-0 overflow-y-auto", collapsed ? "py-2" : "py-1.5")}>
           {SECTIONS.map((item, idx) => {
             if (item.kind === "divider") {
               return (
                 <div
                   key={`div-${idx}`}
-                  className="my-1.5 border-t border-border-default"
+                  className={cn(
+                    "border-t border-border-default",
+                    collapsed ? "my-2" : "my-1.5",
+                  )}
                 />
               );
             }
@@ -717,7 +723,7 @@ export function ClusterWorkspace() {
             );
           })}
 
-          <div className="my-1.5 border-t border-border-default" />
+          <div className={cn("border-t border-border-default", collapsed ? "my-2" : "my-1.5")} />
 
           <PinnedSection
             ctx={context}
@@ -743,13 +749,16 @@ export function ClusterWorkspace() {
           >
             {!collapsed && <PortForwardsChip />}
             {collapsed && (
-              <div className="flex items-center justify-center">
+              <div className="flex size-10 items-center justify-center">
                 <PortForwardsChip />
               </div>
             )}
             <button
               onClick={rail.toggleCollapsed}
-              className="inline-flex items-center justify-center size-7 rounded-md text-text-muted hover:text-text-primary hover:bg-hover"
+              className={cn(
+                "inline-flex items-center justify-center rounded-md text-text-muted hover:bg-hover hover:text-text-primary",
+                collapsed ? "size-10" : "size-7",
+              )}
               title={collapsed ? "expand rail" : "collapse rail"}
               aria-label={collapsed ? "expand rail" : "collapse rail"}
             >
