@@ -186,3 +186,37 @@ Required:
 - Avoid fleet-wide blocking calls on the UI thread.
 - Treat unreachable contexts as partial failures.
 - Keep route chunks within the bundle budget enforced by `npm run perf:bundle`.
+
+
+### `src/components/lumen/drawer.tsx`
+
+Resizable side-drawer primitives — compose these instead of writing raw `aside`/`div` shells.
+
+| Export | Purpose |
+|---|---|
+| `DrawerBackdrop` | Fixed semi-transparent scrim (`bg-black/30`), clickable to dismiss |
+| `DrawerPanel` | Fixed right-docked `<aside>` with `bg-shell border-l border-border-default shadow-[var(--shadow-popover)]`; accepts `width?: number` |
+| `DrawerResizeHandle` | 4 px drag target on left edge; shows `bg-accent-primary` line on hover |
+| `DrawerHeader` | `min-h-14 border-b border-border-default bg-shell` header row |
+| `DrawerTabs` | `border-b border-border-default bg-elevated` tab strip container |
+| `DrawerTabButton` | Tab button with `border-b-2` active indicator (`border-accent-primary`) |
+
+**Usage:**
+```tsx
+import {
+  DrawerBackdrop, DrawerPanel, DrawerResizeHandle,
+  DrawerHeader, DrawerTabs, DrawerTabButton,
+} from "@/components/lumen/drawer";
+
+<DrawerBackdrop onClick={onClose} />
+<DrawerPanel width={width} role="dialog">
+  <DrawerResizeHandle onPointerDown={startResize} />
+  <DrawerHeader>…</DrawerHeader>
+  <DrawerTabs>
+    <DrawerTabButton active={tab === "props"} onClick={() => setTab("props")}>
+      properties
+    </DrawerTabButton>
+  </DrawerTabs>
+  …
+</DrawerPanel>
+```
