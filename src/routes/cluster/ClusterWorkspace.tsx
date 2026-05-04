@@ -101,6 +101,7 @@ const SECTIONS: Item[] = [
       { to: "workloads/jobs", label: "jobs" },
       { to: "workloads/cronjobs", label: "cronjobs" },
       { to: "workloads/jobsets", label: "job sets" },
+      { to: "workloads/podtemplates", label: "pod templates" },
     ],
   },
   // Config / Network / Storage groups — list views are routed through
@@ -153,6 +154,8 @@ const SECTIONS: Item[] = [
       { to: "workloads/pvcs", label: "pvcs" },
       { to: "workloads/pvs", label: "persistent volumes" },
       { to: "workloads/storageclasses", label: "storage classes" },
+      { to: "workloads/csidrivers", label: "csi drivers" },
+      { to: "workloads/csinodes", label: "csi nodes" },
       { to: "workloads/volumeattributesclasses", label: "volume attributes" },
     ],
   },
@@ -177,8 +180,13 @@ const SECTIONS: Item[] = [
     label: "cluster metadata",
     icon: FileBox,
     children: [
+      { to: "workloads/nodes", label: "nodes" },
+      { to: "workloads/namespaces", label: "namespaces" },
+      { to: "workloads/events", label: "events" },
       { to: "workloads/leases", label: "leases" },
       { to: "workloads/controllerrevisions", label: "controller revisions" },
+      { to: "workloads/apiservices", label: "api services" },
+      { to: "workloads/certificatesigningrequests", label: "certificate requests" },
     ],
   },
 

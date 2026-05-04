@@ -14,6 +14,9 @@ pub struct ContextInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkloadKind {
+    Node,
+    Namespace,
+    Event,
     Deployment,
     StatefulSet,
     DaemonSet,
@@ -42,8 +45,14 @@ pub enum WorkloadKind {
     PersistentVolume,
     #[serde(rename = "storageclass")]
     StorageClass,
+    #[serde(rename = "csidriver")]
+    CsiDriver,
+    #[serde(rename = "csinode")]
+    CsiNode,
     #[serde(rename = "volumeattributesclass")]
     VolumeAttributesClass,
+    #[serde(rename = "podtemplate")]
+    PodTemplate,
     #[serde(rename = "ingressclass")]
     IngressClass,
     // Namespaced.
@@ -78,6 +87,10 @@ pub enum WorkloadKind {
     GrpcRoute,
     #[serde(rename = "jobset")]
     JobSet,
+    #[serde(rename = "apiservice")]
+    ApiService,
+    #[serde(rename = "certificatesigningrequest")]
+    CertificateSigningRequest,
     #[serde(rename = "customresourcedefinition")]
     CustomResourceDefinition,
 }

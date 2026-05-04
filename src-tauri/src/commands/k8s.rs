@@ -75,7 +75,7 @@ async fn list_dynamic_resources(
     let definition = registry::get_resource_definition(kind)
         .ok_or_else(|| AppError::Internal(format!("resource kind {kind:?} is not registered")))?;
     let ar = api_resource_for(definition);
-    let api: Api<DynamicObject> = if definition.namespaced {
+    let api: Api<DynamicObject> = if definition.namespaced && !namespace.is_empty() {
         Api::namespaced_with(client, namespace, &ar)
     } else {
         Api::all_with(client, &ar)
@@ -102,7 +102,7 @@ async fn get_dynamic_resource(
     let definition = registry::get_resource_definition(kind)
         .ok_or_else(|| AppError::Internal(format!("resource kind {kind:?} is not registered")))?;
     let ar = api_resource_for(definition);
-    let api: Api<DynamicObject> = if definition.namespaced {
+    let api: Api<DynamicObject> = if definition.namespaced && !namespace.is_empty() {
         Api::namespaced_with(client, namespace, &ar)
     } else {
         Api::all_with(client, &ar)

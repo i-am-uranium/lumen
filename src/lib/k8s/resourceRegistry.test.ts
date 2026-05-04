@@ -10,6 +10,9 @@ describe("resourceRegistry", () => {
   it("contains the v1 desktop parity resource kinds without duplicate slugs", () => {
     const kinds = ALL_RESOURCE_DEFINITIONS.map((definition) => definition.kind);
     expect(kinds).toEqual([
+      "node",
+      "namespace",
+      "event",
       "pod",
       "deployment",
       "statefulset",
@@ -34,7 +37,10 @@ describe("resourceRegistry", () => {
       "persistentvolumeclaim",
       "persistentvolume",
       "storageclass",
+      "csidriver",
+      "csinode",
       "volumeattributesclass",
+      "podtemplate",
       "resourcequota",
       "horizontalpodautoscaler",
       "verticalpodautoscaler",
@@ -51,6 +57,8 @@ describe("resourceRegistry", () => {
       "httproute",
       "grpcroute",
       "jobset",
+      "apiservice",
+      "certificatesigningrequest",
       "customresourcedefinition",
     ]);
 
@@ -83,6 +91,13 @@ describe("resourceRegistry", () => {
       category: "network",
       optional: true,
     });
+    expect(getResourceDefinition("node")).toMatchObject({
+      apiGroup: "",
+      version: "v1",
+      plural: "nodes",
+      namespaced: false,
+      category: "cluster",
+    });
   });
 
   it("returns ordered definitions by category without exposing internal arrays", () => {
@@ -96,11 +111,12 @@ describe("resourceRegistry", () => {
       "replicationcontroller",
       "job",
       "cronjob",
+      "podtemplate",
       "jobset",
     ]);
 
     workloads.pop();
-    expect(listResourceDefinitions({ category: "workloads" })).toHaveLength(9);
+    expect(listResourceDefinitions({ category: "workloads" })).toHaveLength(10);
   });
 
   it("maps resource kinds to stable URL slugs", () => {
