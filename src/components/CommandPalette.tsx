@@ -27,6 +27,7 @@ import {
   Search,
   Server,
   ShieldAlert,
+  Sparkles,
   Terminal,
   UserPlus,
 } from "lucide-react";
@@ -54,7 +55,10 @@ export function CommandPalette() {
   const normalizedQuery = q
     .replace(/^ns\s+/i, "switch namespace: ")
     .replace(/^ctx\s+/i, "switch context: ")
-    .replace(/^logs\s+/i, "view logs: ");
+    .replace(/^logs\s+/i, "view logs: ")
+    .replace(/^ai$/i, "go: AI assistant")
+    .replace(/^ask$/i, "go: AI assistant")
+    .replace(/^assistant$/i, "go: AI assistant");
   const shouldSearchResources = normalizedQuery.trim().length >= 2;
 
   const { data: contexts = [] } = useQuery({
@@ -237,6 +241,7 @@ export function CommandPalette() {
                   <NavItem value="go: helm" icon={Boxes} onSelect={() => pickTab("helm")} />
                   <NavItem value="go: access" icon={UserPlus} onSelect={() => pickTab("access")} />
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
+                  <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                 </>
               )}
             </CommandGroup>
