@@ -52,6 +52,9 @@ const NamespacesView = lazy(() =>
 const EventsView = lazy(() =>
   import("@/routes/cluster/EventsView").then(named("EventsView")),
 );
+const AiAssistant = lazy(() =>
+  import("@/routes/cluster/AiAssistant").then(named("AiAssistant")),
+);
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
@@ -136,6 +139,7 @@ function Shell() {
                 <Route path="helm" element={<HelmBrowser />} />
                 <Route path="access" element={<TeamAccess />} />
                 <Route path="logs" element={<LogsTab />} />
+                <Route path="ai" element={<AiAssistant />} />
               </Route>
               <Route path="*" element={<Navigate to="/cluster" replace />} />
             </Routes>
