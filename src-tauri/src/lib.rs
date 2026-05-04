@@ -52,6 +52,7 @@ pub fn run() {
             commands::k8s::list_nodes,
             commands::k8s::cloud_map,
             commands::k8s::security_scan,
+            commands::k8s::check_access,
             commands::k8s::list_crds,
             commands::k8s::list_cr_instances,
             commands::k8s::get_cr_yaml,

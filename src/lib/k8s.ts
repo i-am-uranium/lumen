@@ -245,6 +245,21 @@ export type SecurityReport = {
   resources_scanned: number;
 };
 
+export type AccessReviewRequest = {
+  kind: WorkloadKind;
+  verb: string;
+  namespace?: string | null;
+  name?: string | null;
+  subresource?: string | null;
+};
+
+export type AccessReviewResult = {
+  allowed: boolean;
+  denied: boolean;
+  reason: string | null;
+  evaluation_error: string | null;
+};
+
 // ─── CRD Browser ──────────────────────────────────────────────────────────
 
 export type CrdSummary = {
@@ -422,6 +437,8 @@ export const k8s = {
     invoke<CloudMap>("cloud_map", { context, namespace }),
   securityScan: (context?: string) =>
     invoke<SecurityReport>("security_scan", { context }),
+  checkAccess: (request: AccessReviewRequest, context?: string) =>
+    invoke<AccessReviewResult>("check_access", { request, context }),
   listCrds: (context?: string) => invoke<CrdSummary[]>("list_crds", { context }),
   listCrInstances: (
     group: string,

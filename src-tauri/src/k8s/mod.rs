@@ -11,6 +11,7 @@ pub mod kubeconfig;
 pub mod logs;
 pub mod metrics;
 pub mod portforward;
+pub mod rbac;
 pub mod rbac_admin;
 pub mod registry;
 pub mod resources;

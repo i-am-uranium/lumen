@@ -1,7 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
-    actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac_admin, registry,
-    resources, security,
+    actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
+    registry, resources, security,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
         PodDetails, ResourceDetail, SecurityReport, WorkloadKind, WorkloadSummary,
@@ -251,6 +251,16 @@ pub async fn security_scan(
     let ctx = state.k8s.resolve_context(context.as_deref()).await?;
     let client = state.k8s.client_for(&ctx).await?;
     security::scan(&client, ctx).await
+}
+
+#[tauri::command]
+pub async fn check_access(
+    request: rbac::AccessReviewRequest,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<rbac::AccessReviewResult> {
+    let client = client_for(&state, context.as_deref()).await?;
+    rbac::check_access(&client, request).await
 }
 
 // ─── Workloads ────────────────────────────────────────────────────────────
