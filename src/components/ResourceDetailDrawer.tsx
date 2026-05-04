@@ -17,6 +17,16 @@ import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/status-badge";
+import {
+  DrawerBackdrop,
+  DrawerHeader,
+  DrawerPanel,
+  DrawerResizeHandle,
+  DrawerTabButton,
+  DrawerTabs,
+} from "@/components/lumen/drawer";
 
 // ─── Lumen-distinct touches vs Lens ────────────────────────────────────
 //   • Side-docked panel (not floating modal); main view stays visible.
@@ -220,33 +230,17 @@ export function ResourceDetailDrawer({
     <>
       {/* Backdrop — softer than a full-screen modal so the table behind stays
           visible. Clickable to dismiss. */}
-      <div
-        className="fixed inset-0 z-40 bg-black/30 transition-opacity duration-150"
-        onClick={onClose}
-      />
+      <DrawerBackdrop onClick={onClose} />
       {/* Side-docked panel */}
-      <aside
-        className={cn(
-          "fixed top-0 right-0 z-50 h-full max-w-[100vw]",
-          "bg-term-panel border-l border-term-border-soft",
-          "flex flex-col",
-          "transition-transform duration-200 ease-out",
-          "translate-x-0",
-        )}
-        style={{ width }}
+      <DrawerPanel
+        width={width}
         role="dialog"
         aria-labelledby={titleId}
       >
         {/* Resize handle — invisible 4px strip on the left edge that grows
             into a 1px term-green line on hover/drag. Lumen-distinct: keeps
             the chrome minimal until interacted with. */}
-        <div
-          onPointerDown={startResize}
-          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 group"
-          title="drag to resize"
-        >
-          <div className="absolute inset-y-0 left-0 w-px bg-transparent group-hover:bg-term-green/60 transition-colors" />
-        </div>
+        <DrawerResizeHandle onPointerDown={startResize} />
         <SeverityStrip resource={resource} ctx={ctx} />
         <Header
           titleId={titleId}
@@ -278,7 +272,7 @@ export function ResourceDetailDrawer({
             />
           )}
         </div>
-      </aside>
+      </DrawerPanel>
     </>
   );
 }
@@ -294,18 +288,18 @@ function SeverityStrip({ resource, ctx }: { resource: Resource | null; ctx: stri
     staleTime: 10_000,
   });
   const color = (() => {
-    if (!isPod || !data) return "bg-term-border-soft";
+    if (!isPod || !data) return "bg-border-subtle";
     switch (data.status) {
       case "Running":
-        return data.containers.every((c) => c.ready) ? "bg-emerald-500" : "bg-amber-400";
+        return data.containers.every((c) => c.ready) ? "bg-success" : "bg-warning";
       case "Succeeded":
-        return "bg-emerald-500";
+        return "bg-success";
       case "Pending":
-        return "bg-amber-400";
+        return "bg-warning";
       case "Failed":
-        return "bg-term-red";
+        return "bg-danger";
       default:
-        return "bg-term-border-soft";
+        return "bg-border-subtle";
     }
   })();
   return <div className={cn("h-[3px] shrink-0", color)} />;
@@ -368,21 +362,21 @@ function Header({
   const deleteDisabled =
     deleting || canDelete.isLoading || canDelete.data?.allowed !== true;
   return (
-    <div className="min-h-12 px-3 py-2 flex items-center gap-2 border-b border-term-border-soft shrink-0 bg-term-panel">
+    <DrawerHeader>
       <div className="flex flex-col min-w-0 flex-1">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[11px] uppercase tracking-wide text-term-subtle">
+          <span className="text-[11px] uppercase tracking-wide text-text-muted">
             {resource.kind}
           </span>
-          <span className="text-term-subtle">/</span>
+          <span className="text-text-muted">/</span>
           <span
             id={titleId}
-            className="text-[13px] text-term-fg font-medium font-mono truncate"
+            className="text-[13px] text-text-primary font-medium font-mono truncate"
           >
             {resource.name}
           </span>
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-term-subtle min-w-0">
+        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-text-muted min-w-0">
           <span className="font-mono truncate">{resource.namespace}</span>
           <span>/</span>
           <span className="font-mono truncate">ctx: {ctx}</span>
@@ -453,7 +447,7 @@ function Header({
           onClick={onClose}
         />
       </div>
-    </div>
+    </DrawerHeader>
   );
 }
 
@@ -471,20 +465,17 @@ function ActionIcon({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Button
       onClick={onClick}
       disabled={disabled}
       title={hint ? `${label} (${hint})` : label}
-      className={cn(
-        "size-7 inline-flex items-center justify-center rounded",
-        "text-term-muted hover:text-term-fg hover:bg-term-panel-2",
-        "disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-term-muted",
-        "transition-colors",
-      )}
+      variant="ghost"
+      size="icon"
+      className="size-7 rounded text-text-secondary hover:text-text-primary"
+      aria-label={hint ? `${label} (${hint})` : label}
     >
       {icon}
-    </button>
+    </Button>
   );
 }
 
@@ -506,25 +497,18 @@ function Tabs({
     ["yaml", "yaml", true],
   ];
   return (
-    <div className="flex items-center gap-0 border-b border-term-border-soft bg-term-panel-2 shrink-0 px-2">
+    <DrawerTabs>
       {tabs.map(([id, label, enabled]) => (
-        <button
+        <DrawerTabButton
           key={id}
-          type="button"
           disabled={!enabled}
           onClick={() => enabled && onChange(id)}
-          className={cn(
-            "h-9 px-3 text-[12px] border-b-2 transition-colors",
-            activeTab === id && enabled
-              ? "border-term-green text-term-fg"
-              : "border-transparent text-term-muted hover:text-term-fg",
-            !enabled && "opacity-30 cursor-not-allowed",
-          )}
+          active={activeTab === id && enabled}
         >
           {label}
-        </button>
+        </DrawerTabButton>
       ))}
-    </div>
+    </DrawerTabs>
   );
 }
 
@@ -550,14 +534,14 @@ function PropertiesTab({
   }
   if (isLoading) {
     return (
-      <div className="p-6 text-[12px] text-term-muted flex items-center gap-2">
-        <Loader2 className="size-3.5 animate-spin" /> loading pod details…
+      <div className="p-6 text-[12px] text-text-secondary flex items-center gap-2">
+        <Loader2 className="size-3.5 animate-spin" /> loading pod details...
       </div>
     );
   }
   if (error || !data) {
     return (
-      <div className="p-6 text-[12px] text-term-red flex items-center gap-2">
+      <div className="p-6 text-[12px] text-danger flex items-center gap-2">
         <AlertTriangle className="size-3.5" />
         failed to load pod details
       </div>
@@ -605,13 +589,13 @@ function PropertiesTab({
             <ConditionPill key={c.type} type={c.type} status={c.status} />
           ))}
           {data.conditions.length === 0 && (
-            <span className="text-[11px] text-term-subtle">no conditions reported</span>
+            <span className="text-[11px] text-text-muted">no conditions reported</span>
           )}
         </div>
       </Section>
       {data.tolerations > 0 && (
         <Section title="tolerations">
-          <div className="text-[12px] text-term-muted">
+          <div className="text-[12px] text-text-secondary">
             {data.tolerations} {data.tolerations === 1 ? "toleration" : "tolerations"}
           </div>
         </Section>
@@ -622,15 +606,15 @@ function PropertiesTab({
       {Object.keys(data.annotations).length > 0 && (
         <Section title="annotations">
           <details className="group">
-            <summary className="cursor-pointer text-[11px] text-term-muted hover:text-term-fg">
+            <summary className="cursor-pointer text-[11px] text-text-secondary hover:text-text-primary">
               {Object.keys(data.annotations).length} annotations · click to expand
             </summary>
             <div className="mt-2 space-y-0.5">
               {Object.entries(data.annotations).map(([k, v]) => (
                 <div key={k} className="text-[11px] font-mono break-all">
-                  <span className="text-term-subtle">{k}</span>
-                  <span className="text-term-muted">=</span>
-                  <span className="text-term-fg">{v}</span>
+                  <span className="text-text-muted">{k}</span>
+                  <span className="text-text-secondary">=</span>
+                  <span className="text-text-primary">{v}</span>
                 </div>
               ))}
             </div>
@@ -661,7 +645,7 @@ function PodEvidenceSummary({
     {
       label: "restarts",
       value: restarts,
-      tone: restarts > 0 ? "text-amber-400" : "text-term-fg",
+      tone: restarts > 0 ? "text-warning" : "text-text-primary",
     },
     { label: "age", value: formatRelative(data.created_at_ms) },
     { label: "node", value: data.node_name ?? "-" },
@@ -672,14 +656,14 @@ function PodEvidenceSummary({
         {cells.map((cell) => (
           <div
             key={cell.label}
-            className="rounded border border-term-border-soft bg-term-panel-2 px-2.5 py-2 min-w-0"
+            className="rounded-control border border-border-default bg-elevated px-2.5 py-2 min-w-0"
           >
-            <div className="text-[10px] uppercase tracking-wide text-term-subtle">
+            <div className="text-[10px] uppercase tracking-wide text-text-muted">
               {cell.label}
             </div>
             <div
               className={cn(
-                "mt-1 text-[12px] font-mono text-term-fg truncate",
+                "mt-1 text-[12px] font-mono text-text-primary truncate",
                 cell.tone,
               )}
               title={String(cell.value)}
@@ -730,8 +714,8 @@ function RecentEventsSection({
           <div
             key={i}
             className={cn(
-              "rounded border border-term-border-soft bg-term-panel-2 px-2 py-1.5 text-[11px]",
-              e.type_ === "Warning" && "border-l-2 border-l-amber-400",
+              "rounded-control border border-border-default bg-elevated px-2 py-1.5 text-[11px]",
+              e.type_ === "Warning" && "border-l-2 border-l-warning",
             )}
           >
             <div className="flex items-center gap-2 mb-0.5">
@@ -739,25 +723,25 @@ function RecentEventsSection({
                 className={cn(
                   "inline-flex px-1 rounded text-[10px] border tabular-nums",
                   e.type_ === "Warning"
-                    ? "text-amber-400 border-amber-400/40 bg-amber-400/10"
-                    : "text-term-muted border-term-border-soft",
+                    ? "text-warning border-warning/40 bg-[var(--status-warning-soft)]"
+                    : "text-text-secondary border-border-default",
                 )}
               >
                 {e.type_}
               </span>
-              <span className="text-term-fg font-mono">{e.reason}</span>
-              <span className="ml-auto text-term-subtle font-mono">
+              <span className="text-text-primary font-mono">{e.reason}</span>
+              <span className="ml-auto text-text-muted font-mono">
                 {e.ts ? formatRelative(Date.parse(e.ts)) : "—"}
               </span>
             </div>
-            <div className="text-term-muted line-clamp-2" title={e.message}>
+            <div className="text-text-secondary line-clamp-2" title={e.message}>
               {e.message}
             </div>
           </div>
         ))}
         {more > 0 && (
-          <div className="text-[10px] text-term-subtle pt-1">
-            + {more} more — see <span className="text-term-muted">events</span> tab
+          <div className="text-[10px] text-text-muted pt-1">
+            + {more} more — see <span className="text-text-secondary">events</span> tab
           </div>
         )}
       </div>
@@ -795,27 +779,19 @@ function NonPodPropertiesTab({
   });
   if (isLoading) {
     return (
-      <div className="p-6 text-[12px] text-term-muted flex items-center gap-2">
-        <Loader2 className="size-3.5 animate-spin" /> loading details…
+      <div className="p-6 text-[12px] text-text-secondary flex items-center gap-2">
+        <Loader2 className="size-3.5 animate-spin" /> loading details...
       </div>
     );
   }
   if (error || !data) {
     return (
-      <div className="p-6 text-[12px] text-term-red flex items-center gap-2">
+      <div className="p-6 text-[12px] text-danger flex items-center gap-2">
         <AlertTriangle className="size-3.5" /> failed to load details
       </div>
     );
   }
   const s = data.summary;
-  const healthClass =
-    s.health === "healthy"
-      ? "text-emerald-400"
-      : s.health === "degraded"
-        ? "text-amber-400"
-        : s.health === "failed"
-          ? "text-term-red"
-          : "text-term-muted";
   return (
     <div className="p-4 space-y-5">
       <Section title="properties">
@@ -829,7 +805,7 @@ function NonPodPropertiesTab({
           <DlRow label="ready" value={s.ready || "—"} mono />
           <DlRow
             label="health"
-            value={<span className={healthClass}>{s.health}</span>}
+            value={<StatusBadge status={s.health} />}
           />
         </Dl>
       </Section>
@@ -838,8 +814,8 @@ function NonPodPropertiesTab({
           <div className="space-y-0.5">
             {data.owner_refs.map((o) => (
               <div key={`${o.kind}/${o.name}`} className="text-[11px] font-mono">
-                <span className="text-term-subtle">{o.kind}</span>{" "}
-                <span className="text-term-fg">{o.name}</span>
+                <span className="text-text-muted">{o.kind}</span>{" "}
+                <span className="text-text-primary">{o.name}</span>
               </div>
             ))}
           </div>
@@ -909,8 +885,8 @@ function RbacDetailsSection({
   if (isLoading) {
     return (
       <Section title="rbac">
-        <div className="text-[12px] text-term-muted flex items-center gap-2">
-          <Loader2 className="size-3.5 animate-spin" /> loading RBAC details…
+        <div className="text-[12px] text-text-secondary flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading RBAC details...
         </div>
       </Section>
     );
@@ -918,7 +894,7 @@ function RbacDetailsSection({
   if (error || !data) {
     return (
       <Section title="rbac">
-        <div className="text-[12px] text-term-red flex items-center gap-2">
+        <div className="text-[12px] text-danger flex items-center gap-2">
           <AlertTriangle className="size-3.5" /> failed to load RBAC details
         </div>
       </Section>
@@ -939,9 +915,9 @@ function RbacDetailsSection({
                     {data.subjects.map((subject) => (
                       <div
                         key={`${subject.kind}/${subject.namespace ?? ""}/${subject.name}`}
-                        className="font-mono text-[11px] text-term-fg"
+                        className="font-mono text-[11px] text-text-primary"
                       >
-                        <span className="text-term-subtle">{subject.kind}</span>{" "}
+                        <span className="text-text-muted">{subject.kind}</span>{" "}
                         {subject.namespace ? `${subject.namespace}/` : ""}
                         {subject.name}
                       </div>
@@ -955,7 +931,7 @@ function RbacDetailsSection({
       )}
       <Section title="rules">
         {data.rules.length === 0 ? (
-          <div className="text-[11px] text-term-subtle">
+          <div className="text-[11px] text-text-muted">
             no readable policy rules found
           </div>
         ) : (
@@ -963,7 +939,7 @@ function RbacDetailsSection({
             {data.rules.map((rule, index) => (
               <div
                 key={index}
-                className="rounded border border-term-border-soft bg-term-panel-2 px-2.5 py-2"
+                className="rounded-control border border-border-default bg-elevated px-2.5 py-2"
               >
                 <div className="flex flex-wrap gap-1">
                   {rule.verbs.map((verb) => (
@@ -972,10 +948,10 @@ function RbacDetailsSection({
                       className={cn(
                         "px-1.5 py-0.5 rounded border text-[10px] font-mono",
                         verb === "*" || verb === "delete" || verb === "deletecollection"
-                          ? "border-term-red/40 bg-term-red/10 text-term-red"
+                          ? "border-danger/40 bg-[var(--status-error-soft)] text-danger"
                           : verb === "create" || verb === "patch" || verb === "update"
-                            ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-                            : "border-term-border-soft bg-term-panel text-term-muted",
+                            ? "border-warning/40 bg-[var(--status-warning-soft)] text-warning"
+                            : "border-border-default bg-surface text-text-secondary",
                       )}
                     >
                       {verb}
@@ -983,26 +959,26 @@ function RbacDetailsSection({
                   ))}
                 </div>
                 <div className="mt-2 grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
-                  <span className="text-term-subtle">api groups</span>
-                  <span className="font-mono text-term-muted break-all">
+                  <span className="text-text-muted">api groups</span>
+                  <span className="font-mono text-text-secondary break-all">
                     {rule.api_groups.join(", ")}
                   </span>
-                  <span className="text-term-subtle">resources</span>
-                  <span className="font-mono text-term-fg break-all">
+                  <span className="text-text-muted">resources</span>
+                  <span className="font-mono text-text-primary break-all">
                     {rule.resources.join(", ")}
                   </span>
                   {rule.resource_names.length > 0 && (
                     <>
-                      <span className="text-term-subtle">names</span>
-                      <span className="font-mono text-term-muted break-all">
+                      <span className="text-text-muted">names</span>
+                      <span className="font-mono text-text-secondary break-all">
                         {rule.resource_names.join(", ")}
                       </span>
                     </>
                   )}
                   {rule.non_resource_urls.length > 0 && (
                     <>
-                      <span className="text-term-subtle">urls</span>
-                      <span className="font-mono text-term-muted break-all">
+                      <span className="text-text-muted">urls</span>
+                      <span className="font-mono text-text-secondary break-all">
                         {rule.non_resource_urls.join(", ")}
                       </span>
                     </>
@@ -1041,8 +1017,8 @@ function StorageDetailsSection({
   if (isLoading) {
     return (
       <Section title="storage">
-        <div className="text-[12px] text-term-muted flex items-center gap-2">
-          <Loader2 className="size-3.5 animate-spin" /> loading storage details…
+        <div className="text-[12px] text-text-secondary flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading storage details...
         </div>
       </Section>
     );
@@ -1050,7 +1026,7 @@ function StorageDetailsSection({
   if (error || !data) {
     return (
       <Section title="storage">
-        <div className="text-[12px] text-term-red flex items-center gap-2">
+        <div className="text-[12px] text-danger flex items-center gap-2">
           <AlertTriangle className="size-3.5" /> failed to load storage details
         </div>
       </Section>
@@ -1091,9 +1067,9 @@ function StorageDetailsSection({
               <div className="space-y-1">
                 {params.map(([key, value]) => (
                   <div key={key} className="font-mono text-[11px] break-all">
-                    <span className="text-term-subtle">{key}</span>
-                    <span className="text-term-muted">=</span>
-                    <span className="text-term-fg">{value}</span>
+                    <span className="text-text-muted">{key}</span>
+                    <span className="text-text-secondary">=</span>
+                    <span className="text-text-primary">{value}</span>
                   </div>
                 ))}
               </div>
@@ -1129,7 +1105,7 @@ function ResourceInsightsSection({
   if (isLoading) {
     return (
       <Section title="insights">
-        <div className="text-[12px] text-term-muted flex items-center gap-2">
+        <div className="text-[12px] text-text-secondary flex items-center gap-2">
           <Loader2 className="size-3.5 animate-spin" /> loading insights…
         </div>
       </Section>
@@ -1138,7 +1114,7 @@ function ResourceInsightsSection({
   if (error || !data) {
     return (
       <Section title="insights">
-        <div className="text-[12px] text-term-red flex items-center gap-2">
+        <div className="text-[12px] text-danger flex items-center gap-2">
           <AlertTriangle className="size-3.5" /> failed to load insights
         </div>
       </Section>
@@ -1150,7 +1126,7 @@ function ResourceInsightsSection({
       {data.sections.map((insight) => (
         <Section key={insight.title} title={insight.title}>
           {insight.rows.length === 0 ? (
-            <div className="text-[11px] text-term-subtle">no details reported</div>
+            <div className="text-[11px] text-text-muted">no details reported</div>
           ) : (
             <Dl>
               {insight.rows.map((row) => (
@@ -1184,8 +1160,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-term-subtle">{title}</span>
-        <span className="flex-1 border-t border-dashed border-term-border-soft" />
+        <span className="text-[10px] uppercase tracking-wider text-text-muted">{title}</span>
+        <span className="flex-1 border-t border-dashed border-border-subtle" />
       </div>
       {children}
     </section>
@@ -1246,13 +1222,13 @@ function MetricsTiles({
         value={cpuMilli !== null ? `${(cpuMilli / 1000).toFixed(3)}` : "—"}
         suffix="cores"
         history={cpuHist}
-        stroke="text-emerald-400"
+        stroke="text-success"
       />
       <SparklineTile
         label="memory"
         value={memBytes !== null ? formatBytes(memBytes) : "—"}
         history={memHist}
-        stroke="text-amber-400"
+        stroke="text-warning"
       />
     </div>
   );
@@ -1272,11 +1248,11 @@ function SparklineTile({
   stroke: string;
 }) {
   return (
-    <div className="rounded border border-term-border-soft bg-term-panel-2 p-3">
-      <div className="text-[10px] uppercase tracking-wide text-term-subtle">{label}</div>
+    <div className="rounded-control border border-border-default bg-elevated p-3">
+      <div className="text-[10px] uppercase tracking-wide text-text-muted">{label}</div>
       <div className="mt-1 flex items-baseline gap-1.5">
-        <span className="text-[20px] font-mono tabular-nums text-term-fg">{value}</span>
-        {suffix && <span className="text-[10px] text-term-muted">{suffix}</span>}
+        <span className="text-[20px] font-mono tabular-nums text-text-primary">{value}</span>
+        {suffix && <span className="text-[10px] text-text-secondary">{suffix}</span>}
       </div>
       <Sparkline values={history} className={cn("mt-1.5 h-6", stroke)} />
     </div>
@@ -1292,8 +1268,8 @@ function Sparkline({
 }) {
   if (values.length < 2) {
     return (
-      <div className={cn("text-[10px] text-term-subtle", className)}>
-        gathering data…
+      <div className={cn("text-[10px] text-text-muted", className)}>
+        gathering data...
       </div>
     );
   }
@@ -1350,10 +1326,10 @@ function DlRow({
 }) {
   return (
     <>
-      <dt className="text-[11px] text-term-subtle">{label}</dt>
+      <dt className="text-[11px] text-text-muted">{label}</dt>
       <dd
         className={cn(
-          "text-[12px] text-term-fg break-all",
+          "text-[12px] text-text-primary break-all",
           mono && "font-mono tabular-nums",
         )}
       >
@@ -1364,24 +1340,16 @@ function DlRow({
 }
 
 function StatusText({ status }: { status: string }) {
-  const cls =
-    status === "Running" || status === "Succeeded"
-      ? "text-emerald-400"
-      : status === "Pending"
-        ? "text-amber-400"
-        : status === "Failed"
-          ? "text-term-red"
-          : "text-term-muted";
-  return <span className={cls}>{status}</span>;
+  return <StatusBadge status={status} />;
 }
 
 function ConditionPill({ type, status }: { type: string; status: string }) {
   const cls =
     status === "True"
-      ? "border-emerald-400/40 text-emerald-400 bg-emerald-400/10"
+      ? "border-success/30 text-success bg-[var(--status-success-soft)]"
       : status === "False"
-        ? "border-term-red/40 text-term-red bg-term-red/10"
-        : "border-term-border-soft text-term-muted bg-term-panel-2";
+        ? "border-danger/30 text-danger bg-[var(--status-error-soft)]"
+        : "border-border-default text-text-secondary bg-elevated";
   return (
     <span
       className={cn(
@@ -1405,22 +1373,22 @@ function LabelPills({
   const visible = list.slice(0, max);
   const hidden = list.length - visible.length;
   if (list.length === 0) {
-    return <span className="text-[11px] text-term-subtle">no labels</span>;
+    return <span className="text-[11px] text-text-muted">no labels</span>;
   }
   return (
     <div className="flex flex-wrap gap-1">
       {visible.map(([k, v]) => (
         <span
           key={k}
-          className="inline-flex items-center px-1.5 py-0.5 rounded bg-term-panel-2 border border-term-border-soft text-[10px] text-term-muted font-mono"
+          className="inline-flex items-center px-1.5 py-0.5 rounded bg-elevated border border-border-default text-[10px] text-text-secondary font-mono"
         >
-          <span className="text-term-subtle">{k}</span>
-          <span className="text-term-subtle">=</span>
-          <span className="text-term-fg">{v}</span>
+          <span className="text-text-muted">{k}</span>
+          <span className="text-text-muted">=</span>
+          <span className="text-text-primary">{v}</span>
         </span>
       ))}
       {hidden > 0 && (
-        <span className="px-1.5 py-0.5 text-[10px] text-term-subtle">+{hidden} more</span>
+        <span className="px-1.5 py-0.5 text-[10px] text-text-muted">+{hidden} more</span>
       )}
     </div>
   );
@@ -1430,49 +1398,49 @@ function LabelPills({
 
 function ContainerCard({ container: c }: { container: ContainerInfo }) {
   const stateColor = c.state.startsWith("Running")
-    ? "bg-emerald-500"
+    ? "bg-success"
     : c.state.startsWith("Waiting")
-      ? "bg-amber-400"
+      ? "bg-warning"
       : c.state.startsWith("Terminated")
-        ? "bg-term-red"
-        : "bg-term-border-soft";
+        ? "bg-danger"
+        : "bg-border-default";
   return (
-    <div className="rounded border border-term-border-soft bg-term-panel-2 p-2.5">
+    <div className="rounded-control border border-border-default bg-elevated p-2.5">
       <div className="flex items-center gap-2">
         <span className={cn("size-2 rounded-full shrink-0", stateColor)} />
-        <span className="text-[12px] text-term-fg font-medium font-mono truncate flex-1">
+        <span className="text-[12px] text-text-primary font-medium font-mono truncate flex-1">
           {c.name}
         </span>
         {c.restart_count > 0 && (
-          <span className="px-1 rounded bg-amber-400/15 text-amber-400 text-[10px] border border-amber-400/30 tabular-nums">
+          <span className="px-1 rounded bg-[var(--status-warning-soft)] text-warning text-[10px] border border-warning/30 tabular-nums">
             ↻ {c.restart_count}
           </span>
         )}
-        <span className="text-[10px] text-term-subtle">{c.state}</span>
+        <span className="text-[10px] text-text-muted">{c.state}</span>
       </div>
-      <div className="mt-1 text-[11px] text-term-muted font-mono truncate">{c.image}</div>
-      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-term-subtle">
+      <div className="mt-1 text-[11px] text-text-secondary font-mono truncate">{c.image}</div>
+      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-text-muted">
         <div className="flex justify-between">
           <span>cpu req</span>
-          <span className="text-term-muted font-mono tabular-nums">
+          <span className="text-text-secondary font-mono tabular-nums">
             {c.cpu_request_milli !== null ? `${c.cpu_request_milli}m` : "—"}
           </span>
         </div>
         <div className="flex justify-between">
           <span>cpu lim</span>
-          <span className="text-term-muted font-mono tabular-nums">
+          <span className="text-text-secondary font-mono tabular-nums">
             {c.cpu_limit_milli !== null ? `${c.cpu_limit_milli}m` : "—"}
           </span>
         </div>
         <div className="flex justify-between">
           <span>mem req</span>
-          <span className="text-term-muted font-mono tabular-nums">
+          <span className="text-text-secondary font-mono tabular-nums">
             {c.mem_request_bytes !== null ? formatBytes(c.mem_request_bytes) : "—"}
           </span>
         </div>
         <div className="flex justify-between">
           <span>mem lim</span>
-          <span className="text-term-muted font-mono tabular-nums">
+          <span className="text-text-secondary font-mono tabular-nums">
             {c.mem_limit_bytes !== null ? formatBytes(c.mem_limit_bytes) : "—"}
           </span>
         </div>
@@ -1492,21 +1460,21 @@ function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
   });
   if (isLoading) {
     return (
-      <div className="p-4 text-[12px] text-term-muted flex items-center gap-2">
-        <Loader2 className="size-3.5 animate-spin" /> loading yaml…
+      <div className="p-4 text-[12px] text-text-secondary flex items-center gap-2">
+        <Loader2 className="size-3.5 animate-spin" /> loading yaml...
       </div>
     );
   }
   if (error || !data) {
     return (
-      <div className="p-4 text-[12px] text-term-red flex items-center gap-2">
+      <div className="p-4 text-[12px] text-danger flex items-center gap-2">
         <AlertTriangle className="size-3.5" />
         failed to load yaml
       </div>
     );
   }
   return (
-    <pre className="p-4 m-0 text-[11px] font-mono whitespace-pre-wrap break-all bg-term-panel-2 text-term-fg">
+    <pre className="p-4 m-0 text-[11px] font-mono whitespace-pre-wrap break-all bg-code-surface text-text-primary">
       {data.yaml}
     </pre>
   );
@@ -1531,26 +1499,26 @@ function EventsTab({ ctx, resource }: { ctx: string; resource: Resource }) {
   });
   if (isLoading) {
     return (
-      <div className="p-4 text-[12px] text-term-muted flex items-center gap-2">
-        <Loader2 className="size-3.5 animate-spin" /> loading events…
+      <div className="p-4 text-[12px] text-text-secondary flex items-center gap-2">
+        <Loader2 className="size-3.5 animate-spin" /> loading events...
       </div>
     );
   }
   if (error) {
     return (
-      <div className="p-4 text-[12px] text-term-red">failed to load events</div>
+      <div className="p-4 text-[12px] text-danger">failed to load events</div>
     );
   }
   if (!data || data.length === 0) {
     return (
-      <div className="p-4 text-[12px] text-term-muted">no events for this resource.</div>
+      <div className="p-4 text-[12px] text-text-secondary">no events for this resource.</div>
     );
   }
   return (
     <div className="p-2">
       <table className="w-full text-[11px]">
         <thead>
-          <tr className="text-term-subtle text-left uppercase tracking-wide">
+          <tr className="text-text-muted text-left uppercase tracking-wide">
             <th className="px-2 py-1.5 font-normal">time</th>
             <th className="px-2 py-1.5 font-normal">type</th>
             <th className="px-2 py-1.5 font-normal">reason</th>
@@ -1562,11 +1530,11 @@ function EventsTab({ ctx, resource }: { ctx: string; resource: Resource }) {
             <tr
               key={i}
               className={cn(
-                "border-t border-term-border-soft align-top",
-                e.type_ === "Warning" && "bg-amber-400/5",
+                "border-t border-border-subtle align-top",
+                e.type_ === "Warning" && "bg-[var(--status-warning-soft)]/30",
               )}
             >
-              <td className="px-2 py-1.5 text-term-muted whitespace-nowrap font-mono">
+              <td className="px-2 py-1.5 text-text-secondary whitespace-nowrap font-mono">
                 {e.ts ? formatRelative(Date.parse(e.ts)) : "—"}
               </td>
               <td className="px-2 py-1.5">
@@ -1574,15 +1542,15 @@ function EventsTab({ ctx, resource }: { ctx: string; resource: Resource }) {
                   className={cn(
                     "inline-flex px-1 rounded text-[10px] border",
                     e.type_ === "Warning"
-                      ? "text-amber-400 border-amber-400/40 bg-amber-400/10"
-                      : "text-term-muted border-term-border-soft",
+                      ? "text-warning border-warning/40 bg-[var(--status-warning-soft)]"
+                      : "text-text-secondary border-border-default",
                   )}
                 >
                   {e.type_}
                 </span>
               </td>
-              <td className="px-2 py-1.5 text-term-fg whitespace-nowrap">{e.reason}</td>
-              <td className="px-2 py-1.5 text-term-muted">{e.message}</td>
+              <td className="px-2 py-1.5 text-text-primary whitespace-nowrap">{e.reason}</td>
+              <td className="px-2 py-1.5 text-text-secondary">{e.message}</td>
             </tr>
           ))}
         </tbody>
