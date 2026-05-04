@@ -281,10 +281,10 @@ fn rbac_findings(
     cluster_roles: &[ClusterRole],
     cluster_bindings: &[ClusterRoleBinding],
     roles: &[Role],
+    role_bindings: &[RoleBinding],
 ) -> Vec<Finding> {
     let mut out = Vec::new();
 
-    // cluster-admin bindings.
     for b in cluster_bindings {
         if b.role_ref.name == "cluster-admin" {
             let subjects = b
@@ -312,9 +312,24 @@ fn rbac_findings(
                 remediation: "Narrow to least-privilege. cluster-admin should only belong to break-glass identities.".into(),
             });
         }
+        if has_anonymous_subject(b.subjects.as_ref()) {
+            out.push(Finding {
+                rule_id: "RBAC-ANONYMOUS".into(),
+                title: format!(
+                    "ClusterRoleBinding '{}' includes unauthenticated subjects",
+                    b.metadata.name.clone().unwrap_or_default()
+                ),
+                severity: Severity::Critical,
+                category: "RBAC".into(),
+                resource_kind: "ClusterRoleBinding".into(),
+                resource_name: b.metadata.name.clone().unwrap_or_default(),
+                namespace: None,
+                detail: "Binding includes system:anonymous or system:unauthenticated.".into(),
+                remediation: "Remove unauthenticated subjects from RBAC bindings.".into(),
+            });
+        }
     }
 
-    // Wildcard verbs/resources in ClusterRoles.
     for cr in cluster_roles {
         if let Some(rules) = &cr.rules {
             for r in rules {
@@ -338,6 +353,25 @@ fn rbac_findings(
                         namespace: None,
                         detail: "Rule uses wildcard verbs against wildcard resources.".into(),
                         remediation: "Enumerate only the verbs and resources needed.".into(),
+                    });
+                    break;
+                }
+                if rule_reads_secrets(r) {
+                    out.push(Finding {
+                        rule_id: "RBAC-SECRET-READ".into(),
+                        title: format!(
+                            "ClusterRole '{}' can read Secrets",
+                            cr.metadata.name.clone().unwrap_or_default()
+                        ),
+                        severity: Severity::High,
+                        category: "RBAC".into(),
+                        resource_kind: "ClusterRole".into(),
+                        resource_name: cr.metadata.name.clone().unwrap_or_default(),
+                        namespace: None,
+                        detail: "Rule grants read access to Secret resources.".into(),
+                        remediation:
+                            "Avoid granting get/list/watch on secrets except to tightly scoped controllers."
+                                .into(),
                     });
                     break;
                 }
@@ -371,11 +405,93 @@ fn rbac_findings(
                     });
                     break;
                 }
+                if rule_reads_secrets(rule) {
+                    out.push(Finding {
+                        rule_id: "RBAC-SECRET-READ".into(),
+                        title: format!(
+                            "Role '{}' can read Secrets",
+                            r.metadata.name.clone().unwrap_or_default()
+                        ),
+                        severity: Severity::High,
+                        category: "RBAC".into(),
+                        resource_kind: "Role".into(),
+                        resource_name: r.metadata.name.clone().unwrap_or_default(),
+                        namespace: r.metadata.namespace.clone(),
+                        detail: "Rule grants read access to Secret resources.".into(),
+                        remediation:
+                            "Avoid granting get/list/watch on secrets except to tightly scoped workloads."
+                                .into(),
+                    });
+                    break;
+                }
             }
         }
     }
 
+    for binding in role_bindings {
+        if binding.role_ref.kind == "ClusterRole" && binding.role_ref.name == "cluster-admin" {
+            out.push(Finding {
+                rule_id: "RBAC-NS-ADMIN".into(),
+                title: format!(
+                    "RoleBinding '{}' grants namespace-scoped cluster-admin",
+                    binding.metadata.name.clone().unwrap_or_default()
+                ),
+                severity: Severity::High,
+                category: "RBAC".into(),
+                resource_kind: "RoleBinding".into(),
+                resource_name: binding.metadata.name.clone().unwrap_or_default(),
+                namespace: binding.metadata.namespace.clone(),
+                detail: "RoleBinding references ClusterRole/cluster-admin.".into(),
+                remediation:
+                    "Bind a narrower Role or ClusterRole with only the namespace permissions needed."
+                        .into(),
+            });
+        }
+        if has_anonymous_subject(binding.subjects.as_ref()) {
+            out.push(Finding {
+                rule_id: "RBAC-ANONYMOUS".into(),
+                title: format!(
+                    "RoleBinding '{}' includes unauthenticated subjects",
+                    binding.metadata.name.clone().unwrap_or_default()
+                ),
+                severity: Severity::Critical,
+                category: "RBAC".into(),
+                resource_kind: "RoleBinding".into(),
+                resource_name: binding.metadata.name.clone().unwrap_or_default(),
+                namespace: binding.metadata.namespace.clone(),
+                detail: "Binding includes system:anonymous or system:unauthenticated.".into(),
+                remediation: "Remove unauthenticated subjects from RBAC bindings.".into(),
+            });
+        }
+    }
+
     out
+}
+
+fn rule_reads_secrets(rule: &k8s_openapi::api::rbac::v1::PolicyRule) -> bool {
+    let reads = rule
+        .verbs
+        .iter()
+        .any(|verb| matches!(verb.as_str(), "*" | "get" | "list" | "watch"));
+    let touches_secrets = rule
+        .resources
+        .as_ref()
+        .map(|resources| {
+            resources
+                .iter()
+                .any(|resource| matches!(resource.as_str(), "*" | "secrets"))
+        })
+        .unwrap_or(false);
+    reads && touches_secrets
+}
+
+fn has_anonymous_subject(subjects: Option<&Vec<k8s_openapi::api::rbac::v1::Subject>>) -> bool {
+    subjects.into_iter().flatten().any(|subject| {
+        matches!(
+            subject.name.as_str(),
+            "system:anonymous" | "system:unauthenticated"
+        )
+    })
 }
 
 fn namespace_coverage_findings(
@@ -488,7 +604,7 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
     let c8 = client.clone();
     let c9 = client.clone();
 
-    let (pods, deps, ss, ds, svcs, nps, crs, crbs, rls, _rbs) = tokio::join!(
+    let (pods, deps, ss, ds, svcs, nps, crs, crbs, rls, rbs) = tokio::join!(
         async move { Api::<Pod>::all(c0).list(&ListParams::default()).await },
         async move {
             Api::<Deployment>::all(c1)
@@ -534,6 +650,7 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
     let crs_items = crs.ok().map(|l| l.items).unwrap_or_default();
     let crbs_items = crbs.ok().map(|l| l.items).unwrap_or_default();
     let rls_items = rls.ok().map(|l| l.items).unwrap_or_default();
+    let rbs_items = rbs.ok().map(|l| l.items).unwrap_or_default();
 
     let mut findings: Vec<Finding> = Vec::new();
     let mut resources_scanned = 0i32;
@@ -592,7 +709,12 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
         }
     }
 
-    findings.extend(rbac_findings(&crs_items, &crbs_items, &rls_items));
+    findings.extend(rbac_findings(
+        &crs_items,
+        &crbs_items,
+        &rls_items,
+        &rbs_items,
+    ));
     findings.extend(service_exposure_findings(&svcs.items));
     findings.extend(default_namespace_findings(
         &deps.items,
@@ -652,6 +774,10 @@ mod tests {
     use k8s_openapi::api::core::v1::{
         Container, HostPathVolumeSource, PodSpec, SecurityContext, Volume,
     };
+    use k8s_openapi::api::rbac::v1::{
+        ClusterRoleBinding, PolicyRule, Role, RoleBinding, RoleRef, Subject,
+    };
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     fn base_spec() -> PodSpec {
         PodSpec {
@@ -700,5 +826,82 @@ mod tests {
         spec.containers[0].image = Some("ghcr.io/org/app@sha256:aaaaaaaaaaaaaaaaaaaa".into());
         let f = pod_spec_findings("Deployment", "api", "prod", &spec);
         assert!(!f.iter().any(|x| x.rule_id == "CTR-LATEST"));
+    }
+
+    #[test]
+    fn flags_roles_that_can_read_secrets() {
+        let role = Role {
+            metadata: ObjectMeta {
+                name: Some("secret-reader".into()),
+                namespace: Some("prod".into()),
+                ..Default::default()
+            },
+            rules: Some(vec![PolicyRule {
+                resources: Some(vec!["secrets".into()]),
+                verbs: vec!["get".into(), "list".into()],
+                ..Default::default()
+            }]),
+        };
+
+        let findings = rbac_findings(&[], &[], &[role], &[]);
+
+        assert!(findings
+            .iter()
+            .any(|finding| finding.rule_id == "RBAC-SECRET-READ"));
+    }
+
+    #[test]
+    fn flags_anonymous_rbac_subjects() {
+        let binding = ClusterRoleBinding {
+            metadata: ObjectMeta {
+                name: Some("anonymous-view".into()),
+                ..Default::default()
+            },
+            role_ref: RoleRef {
+                api_group: "rbac.authorization.k8s.io".into(),
+                kind: "ClusterRole".into(),
+                name: "view".into(),
+            },
+            subjects: Some(vec![Subject {
+                kind: "Group".into(),
+                name: "system:unauthenticated".into(),
+                namespace: None,
+                api_group: Some("rbac.authorization.k8s.io".into()),
+            }]),
+        };
+
+        let findings = rbac_findings(&[], &[binding], &[], &[]);
+
+        assert!(findings
+            .iter()
+            .any(|finding| finding.rule_id == "RBAC-ANONYMOUS"));
+    }
+
+    #[test]
+    fn flags_rolebindings_to_cluster_admin() {
+        let binding = RoleBinding {
+            metadata: ObjectMeta {
+                name: Some("namespace-admin".into()),
+                namespace: Some("prod".into()),
+                ..Default::default()
+            },
+            role_ref: RoleRef {
+                api_group: "rbac.authorization.k8s.io".into(),
+                kind: "ClusterRole".into(),
+                name: "cluster-admin".into(),
+            },
+            subjects: Some(vec![Subject {
+                kind: "ServiceAccount".into(),
+                name: "deployer".into(),
+                namespace: Some("prod".into()),
+                api_group: None,
+            }]),
+        };
+
+        let findings = rbac_findings(&[], &[], &[], &[binding]);
+
+        assert!(findings
+            .iter()
+            .any(|finding| finding.rule_id == "RBAC-NS-ADMIN"));
     }
 }
