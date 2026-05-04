@@ -151,6 +151,20 @@ export type RbacDetail = {
   rules: RbacRuleDetail[];
 };
 
+export type StorageDetail = {
+  phase: string | null;
+  capacity: string | null;
+  access_modes: string[];
+  storage_class: string | null;
+  volume_name: string | null;
+  reclaim_policy: string | null;
+  binding_mode: string | null;
+  provisioner: string | null;
+  allow_expansion: boolean | null;
+  claim_ref: string | null;
+  parameters: Record<string, string>;
+};
+
 // ─── Fleet ────────────────────────────────────────────────────────────────
 
 export type FleetHealth = {
@@ -465,6 +479,18 @@ export const k8s = {
     name: string,
     context?: string,
   ) => invoke<RbacDetail>("get_rbac_details", { namespace, kind, name, context }),
+  getStorageDetails: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    context?: string,
+  ) =>
+    invoke<StorageDetail>("get_storage_details", {
+      namespace,
+      kind,
+      name,
+      context,
+    }),
   listCrds: (context?: string) => invoke<CrdSummary[]>("list_crds", { context }),
   listCrInstances: (
     group: string,

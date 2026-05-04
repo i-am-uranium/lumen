@@ -848,6 +848,9 @@ function NonPodPropertiesTab({
       {isRbacKind(s.kind) && (
         <RbacDetailsSection ctx={ctx} resource={resource} kind={s.kind} />
       )}
+      {isStorageKind(s.kind) && (
+        <StorageDetailsSection ctx={ctx} resource={resource} kind={s.kind} />
+      )}
       <Section title="labels">
         <LabelPills entries={s.labels} max={8} />
       </Section>
@@ -861,6 +864,14 @@ function isRbacKind(kind: WorkloadKind): boolean {
     kind === "clusterrole" ||
     kind === "rolebinding" ||
     kind === "clusterrolebinding"
+  );
+}
+
+function isStorageKind(kind: WorkloadKind): boolean {
+  return (
+    kind === "persistentvolumeclaim" ||
+    kind === "persistentvolume" ||
+    kind === "storageclass"
   );
 }
 
@@ -988,6 +999,94 @@ function RbacDetailsSection({
         )}
       </Section>
     </>
+  );
+}
+
+function StorageDetailsSection({
+  ctx,
+  resource,
+  kind,
+}: {
+  ctx: string;
+  resource: Resource;
+  kind: WorkloadKind;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["k8s", "storage-details", ctx, resource.namespace, kind, resource.name],
+    queryFn: () =>
+      k8s.getStorageDetails(
+        resource.namespace,
+        kind,
+        resource.name,
+        ctx || undefined,
+      ),
+    staleTime: 10_000,
+  });
+
+  if (isLoading) {
+    return (
+      <Section title="storage">
+        <div className="text-[12px] text-term-muted flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" /> loading storage details…
+        </div>
+      </Section>
+    );
+  }
+  if (error || !data) {
+    return (
+      <Section title="storage">
+        <div className="text-[12px] text-term-red flex items-center gap-2">
+          <AlertTriangle className="size-3.5" /> failed to load storage details
+        </div>
+      </Section>
+    );
+  }
+
+  const params = Object.entries(data.parameters);
+  return (
+    <Section title="storage">
+      <Dl>
+        <DlRow label="phase" value={data.phase ?? "—"} />
+        <DlRow label="capacity" value={data.capacity ?? "—"} mono />
+        <DlRow
+          label="access modes"
+          value={data.access_modes.length ? data.access_modes.join(", ") : "—"}
+          mono
+        />
+        <DlRow label="storage class" value={data.storage_class ?? "—"} mono />
+        {data.volume_name && <DlRow label="volume" value={data.volume_name} mono />}
+        {data.claim_ref && <DlRow label="claim" value={data.claim_ref} mono />}
+        {data.provisioner && (
+          <DlRow label="provisioner" value={data.provisioner} mono />
+        )}
+        {data.reclaim_policy && (
+          <DlRow label="reclaim" value={data.reclaim_policy} mono />
+        )}
+        {data.binding_mode && <DlRow label="binding" value={data.binding_mode} mono />}
+        {data.allow_expansion !== null && (
+          <DlRow
+            label="expansion"
+            value={data.allow_expansion ? "allowed" : "not allowed"}
+          />
+        )}
+        {params.length > 0 && (
+          <DlRow
+            label="parameters"
+            value={
+              <div className="space-y-1">
+                {params.map(([key, value]) => (
+                  <div key={key} className="font-mono text-[11px] break-all">
+                    <span className="text-term-subtle">{key}</span>
+                    <span className="text-term-muted">=</span>
+                    <span className="text-term-fg">{value}</span>
+                  </div>
+                ))}
+              </div>
+            }
+          />
+        )}
+      </Dl>
+    </Section>
   );
 }
 

@@ -17,5 +17,6 @@ pub mod rbac_details;
 pub mod registry;
 pub mod resources;
 pub mod security;
+pub mod storage_details;
 pub mod types;
 pub mod watch;

@@ -1,10 +1,11 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
     actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
-    rbac_details, registry, resources, security,
+    rbac_details, registry, resources, security, storage_details,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
-        PodDetails, RbacDetail, ResourceDetail, SecurityReport, WorkloadKind, WorkloadSummary,
+        PodDetails, RbacDetail, ResourceDetail, SecurityReport, StorageDetail, WorkloadKind,
+        WorkloadSummary,
     },
 };
 use crate::state::AppState;
@@ -985,6 +986,46 @@ pub async fn get_rbac_details(
         }
         other => Err(AppError::Internal(format!(
             "RBAC details are not available for {other:?}"
+        ))),
+    }
+}
+
+#[tauri::command]
+pub async fn get_storage_details(
+    namespace: String,
+    kind: WorkloadKind,
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<StorageDetail> {
+    let client = client_for(&state, context.as_deref()).await?;
+    match kind {
+        WorkloadKind::PersistentVolumeClaim => {
+            let api: Api<PersistentVolumeClaim> = Api::namespaced(client, &namespace);
+            let pvc = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(storage_details::pvc_detail(&pvc))
+        }
+        WorkloadKind::PersistentVolume => {
+            let api: Api<PersistentVolume> = Api::all(client);
+            let pv = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(storage_details::pv_detail(&pv))
+        }
+        WorkloadKind::StorageClass => {
+            let api: Api<StorageClass> = Api::all(client);
+            let class = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            Ok(storage_details::storage_class_detail(&class))
+        }
+        other => Err(AppError::Internal(format!(
+            "storage details are not available for {other:?}"
         ))),
     }
 }

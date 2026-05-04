@@ -157,6 +157,21 @@ pub struct RbacDetail {
     pub rules: Vec<RbacRuleDetail>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageDetail {
+    pub phase: Option<String>,
+    pub capacity: Option<String>,
+    pub access_modes: Vec<String>,
+    pub storage_class: Option<String>,
+    pub volume_name: Option<String>,
+    pub reclaim_policy: Option<String>,
+    pub binding_mode: Option<String>,
+    pub provisioner: Option<String>,
+    pub allow_expansion: Option<bool>,
+    pub claim_ref: Option<String>,
+    pub parameters: std::collections::BTreeMap<String, String>,
+}
+
 // ─── Fleet ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
