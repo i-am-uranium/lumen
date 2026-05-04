@@ -1,7 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
     actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
-    rbac_details, registry, resource_insights, resources, security, storage_details,
+    rbac_details, registry, resource_insights, resources, security, storage_details, time,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
         PodDetails, RbacDetail, ResourceDetail, ResourceInsights, SecurityReport, StorageDetail,
@@ -1972,7 +1972,7 @@ pub async fn get_pod_details(
     let created_at_ms = meta
         .creation_timestamp
         .as_ref()
-        .map(|t| t.0.timestamp_millis())
+        .map(time::millis)
         .unwrap_or(0);
     let age_seconds = if created_at_ms > 0 {
         ((chrono::Utc::now().timestamp_millis() - created_at_ms) / 1000).max(0)

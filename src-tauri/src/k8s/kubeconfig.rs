@@ -58,7 +58,7 @@ pub fn list_contexts_from(cfg: &Kubeconfig) -> Vec<ContextInfo> {
             ContextInfo {
                 name: name.clone(),
                 cluster: ctx.cluster.clone(),
-                user: ctx.user.clone(),
+                user: ctx.user.clone().unwrap_or_default(),
                 namespace: ctx.namespace.clone(),
                 is_current: *name == current,
                 is_prod,
@@ -282,10 +282,12 @@ fn deleted_context_from(cfg: &Kubeconfig, name: &str, now: i64) -> AppResult<Del
             .cloned()
     });
     let auth_info = context.context.as_ref().and_then(|ctx| {
-        cfg.auth_infos
-            .iter()
-            .find(|auth_info| auth_info.name == ctx.user)
-            .cloned()
+        ctx.user.as_ref().and_then(|user| {
+            cfg.auth_infos
+                .iter()
+                .find(|auth_info| auth_info.name == *user)
+                .cloned()
+        })
     });
     Ok(DeletedContext {
         name: context.name.clone(),
@@ -306,7 +308,7 @@ fn deleted_summary(
     DeletedContextSummary {
         name: entry.name.clone(),
         cluster: ctx.cluster,
-        user: ctx.user,
+        user: ctx.user.unwrap_or_default(),
         namespace: ctx.namespace,
         is_prod: entry.name.to_lowercase().contains("prod"),
         deleted_at_ms: entry.deleted_at_ms,
@@ -386,7 +388,9 @@ pub fn delete_context_from(cfg: &mut Kubeconfig, name: &str) -> AppResult<()> {
     for named in &cfg.contexts {
         if let Some(ctx) = &named.context {
             referenced_clusters.insert(ctx.cluster.as_str());
-            referenced_users.insert(ctx.user.as_str());
+            if let Some(user) = ctx.user.as_deref() {
+                referenced_users.insert(user);
+            }
         }
     }
 
@@ -394,8 +398,10 @@ pub fn delete_context_from(cfg: &mut Kubeconfig, name: &str) -> AppResult<()> {
         if !referenced_clusters.contains(ctx.cluster.as_str()) {
             cfg.clusters.retain(|c| c.name != ctx.cluster);
         }
-        if !referenced_users.contains(ctx.user.as_str()) {
-            cfg.auth_infos.retain(|u| u.name != ctx.user);
+        if let Some(user) = ctx.user {
+            if !referenced_users.contains(user.as_str()) {
+                cfg.auth_infos.retain(|u| u.name != user);
+            }
         }
     }
     Ok(())

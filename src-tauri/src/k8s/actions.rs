@@ -6,7 +6,7 @@
 //! their own focused skill and risk model.
 
 use crate::error::{AppError, AppResult};
-use crate::k8s::{registry, types::WorkloadKind};
+use crate::k8s::{registry, time, types::WorkloadKind};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{Event, Pod};
 use kube::{
@@ -29,12 +29,15 @@ pub struct EventSummary {
     pub count: Option<i32>,
 }
 
-fn event_ts(e: &Event) -> Option<chrono::DateTime<chrono::Utc>> {
-    e.event_time
-        .as_ref()
-        .map(|t| t.0)
-        .or_else(|| e.last_timestamp.as_ref().map(|t| t.0))
-        .or_else(|| e.first_timestamp.as_ref().map(|t| t.0))
+fn event_ts(e: &Event) -> Option<String> {
+    if let Some(event_time) = e.event_time.as_ref() {
+        Some(time::micro_rfc3339(event_time))
+    } else {
+        e.last_timestamp
+            .as_ref()
+            .or(e.first_timestamp.as_ref())
+            .map(time::rfc3339)
+    }
 }
 
 /// Fetch events directly involving `<kind>/<name>` in the given namespace.
@@ -62,7 +65,7 @@ pub async fn list_events_for(
         .items
         .into_iter()
         .map(|e| EventSummary {
-            ts: event_ts(&e).map(|t| t.to_rfc3339()),
+            ts: event_ts(&e),
             type_: e.type_.clone().unwrap_or_default(),
             reason: e.reason.clone().unwrap_or_default(),
             message: e.message.clone().unwrap_or_default(),

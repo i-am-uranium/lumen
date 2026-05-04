@@ -13,6 +13,7 @@
 //! * The emitted kubeconfig contains the token. Treat it as a secret.
 
 use crate::error::{AppError, AppResult};
+use crate::k8s::time;
 use k8s_openapi::api::authentication::v1::{TokenRequest, TokenRequestSpec};
 use k8s_openapi::api::core::v1::ServiceAccount;
 use k8s_openapi::api::rbac::v1::{
@@ -517,7 +518,7 @@ async fn issue_token(
     let status = resp
         .status
         .ok_or_else(|| AppError::K8s("TokenRequest returned no status".into()))?;
-    Ok((status.token, status.expiration_timestamp.0.to_rfc3339()))
+    Ok((status.token, time::rfc3339(&status.expiration_timestamp)))
 }
 
 /// Produce a kubeconfig YAML string using the token and the cluster endpoint
@@ -982,10 +983,7 @@ fn labels_of(
 }
 
 fn age_of(meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> i64 {
-    meta.creation_timestamp
-        .as_ref()
-        .map(|t| (chrono::Utc::now() - t.0).num_seconds().max(0))
-        .unwrap_or(0)
+    time::age_seconds(meta.creation_timestamp.as_ref())
 }
 
 pub async fn list_grants(client: &Client) -> AppResult<Vec<TeamGrant>> {

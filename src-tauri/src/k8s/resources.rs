@@ -1,5 +1,6 @@
 use crate::k8s::{
     registry::ResourceDefinition,
+    time,
     types::{Health, WorkloadKind, WorkloadSummary},
 };
 use k8s_openapi::api::admissionregistration::v1::{
@@ -50,10 +51,7 @@ mod generic_tests {
 }
 
 pub fn age_seconds(meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> i64 {
-    meta.creation_timestamp
-        .as_ref()
-        .map(|t| (chrono::Utc::now() - t.0).num_seconds().max(0))
-        .unwrap_or(0)
+    time::age_seconds(meta.creation_timestamp.as_ref())
 }
 
 fn labels_of(

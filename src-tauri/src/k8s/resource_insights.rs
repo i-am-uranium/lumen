@@ -135,7 +135,8 @@ pub fn network_policy_insights(policy: &NetworkPolicy) -> ResourceInsights {
             vec![
                 row(
                     "pod selector",
-                    spec.map(|spec| labels(&spec.pod_selector.match_labels))
+                    spec.and_then(|spec| spec.pod_selector.as_ref())
+                        .map(|selector| labels(&selector.match_labels))
                         .unwrap_or_else(|| "-".to_string()),
                 ),
                 row(
@@ -325,10 +326,10 @@ mod tests {
     fn network_policy_insights_include_selector_and_rule_counts() {
         let policy = NetworkPolicy {
             spec: Some(NetworkPolicySpec {
-                pod_selector: LabelSelector {
+                pod_selector: Some(LabelSelector {
                     match_labels: Some(BTreeMap::from([("app".into(), "api".into())])),
                     ..Default::default()
-                },
+                }),
                 policy_types: Some(vec!["Ingress".into(), "Egress".into()]),
                 ingress: Some(vec![Default::default()]),
                 egress: Some(vec![Default::default(), Default::default()]),
