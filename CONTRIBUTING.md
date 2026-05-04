@@ -28,6 +28,14 @@ Run the desktop app:
 npm run tauri dev
 ```
 
+Create a representative local kind cluster:
+
+```bash
+./scripts/kind-fixture.sh
+```
+
+This applies the fixture in `testdata/k8s/lumen-fixtures.yaml` and creates resources that exercise workloads, services, ingress, network policy, RBAC, secrets, storage, quotas, limits, PDBs, and HPAs.
+
 ## Checks
 
 Run these before opening a pull request:
@@ -36,6 +44,7 @@ Run these before opening a pull request:
 npm run lint
 npm run test
 npm run build
+npm run perf:bundle
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
