@@ -9,6 +9,7 @@ import { PortForwardDialog } from "@/components/PortForwardDialog";
 import { PinButton } from "@/components/PinButton";
 import { useShellDock } from "@/hooks/useShellDock";
 import { useRecentResources } from "@/hooks/useRecentResources";
+import { aiResourceUrl } from "@/lib/aiNavigation";
 // Lazy-load the terminal: xterm.js + addons + their CSS together weigh
 // ~200KB and only matter when a user actually opens a pod shell. Keeping
 // it out of the main bundle means cluster browsing pays nothing for the
@@ -29,6 +30,7 @@ import {
   Repeat,
   Search,
   Server,
+  Sparkles,
   Target,
   Terminal,
   TerminalSquare,
@@ -908,6 +910,7 @@ function InspectorPanel({
   const canDelete = node.kind === "pod" && !!node.namespace;
   const canForward = FORWARD_KINDS.includes(node.kind) && !!node.namespace;
   const canAttach = node.kind === "pod" && !!node.namespace;
+  const canAsk = true;
   const workloadKind = toWorkloadKind(node.kind);
 
   // Modal + confirm state.
@@ -973,6 +976,14 @@ function InspectorPanel({
     navigate(`/cluster/${encodeURIComponent(context)}/logs?${params.toString()}`);
   };
 
+  const askLumen = () => {
+    navigate(aiResourceUrl(context, {
+      kind: node.kind,
+      namespace: node.namespace,
+      name: node.name,
+    }));
+  };
+
   const runPending = async () => {
     if (!pending || !workloadKind || !node.namespace) return;
     setActionBusy(true);
@@ -1019,7 +1030,8 @@ function InspectorPanel({
           <X className="size-4" />
         </button>
       </div>
-      {(canLogs ||
+      {(canAsk ||
+        canLogs ||
         canYaml ||
         canEvents ||
         canRestart ||
@@ -1028,10 +1040,16 @@ function InspectorPanel({
         canForward ||
         canAttach) && (
         <div className="px-3 py-2 border-b border-term-border-soft space-y-1.5">
+          <button
+            onClick={askLumen}
+            className="w-full term-btn term-btn-primary !min-h-[30px] !text-[12px] justify-center"
+          >
+            <Sparkles className="size-3.5" /> ask Lumen
+          </button>
           {canLogs && (
             <button
               onClick={openLogs}
-              className="w-full term-btn term-btn-primary !min-h-[30px] !text-[12px] justify-center"
+              className="w-full term-btn !min-h-[30px] !text-[12px] justify-center"
             >
               <Terminal className="size-3.5" /> view logs
             </button>
