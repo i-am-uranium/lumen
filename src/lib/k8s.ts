@@ -22,6 +22,9 @@ export type DeletedContextSummary = {
 };
 
 export type WorkloadKind =
+  | "node"
+  | "namespace"
+  | "event"
   | "deployment"
   | "statefulset"
   | "daemonset"
@@ -45,7 +48,10 @@ export type WorkloadKind =
   | "persistentvolumeclaim"
   | "persistentvolume"
   | "storageclass"
+  | "csidriver"
+  | "csinode"
   | "volumeattributesclass"
+  | "podtemplate"
   | "ingressclass"
   | "resourcequota"
   | "horizontalpodautoscaler"
@@ -63,6 +69,8 @@ export type WorkloadKind =
   | "httproute"
   | "grpcroute"
   | "jobset"
+  | "apiservice"
+  | "certificatesigningrequest"
   | "customresourcedefinition";
 
 export type Health = "healthy" | "degraded" | "failed" | "unknown";

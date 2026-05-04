@@ -100,7 +100,7 @@ pub async fn run_ai_prompt(request: AiRunRequest) -> AppResult<AiRunResult> {
         .model
         .as_deref()
         .filter(|m| provider_models.iter().any(|allowed| allowed == m))
-        .unwrap_or_else(|| match request.provider.as_str() {
+        .unwrap_or(match request.provider.as_str() {
             "codex" => "gpt-5.5",
             "claude" => "sonnet",
             _ => "",
