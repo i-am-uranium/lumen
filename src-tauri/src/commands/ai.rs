@@ -36,9 +36,25 @@ pub struct AiRunResult {
     pub timed_out: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AiCommandRunRequest {
+    pub command: String,
+    pub context: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiCommandRunResult {
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+}
+
 const MAX_PROMPT_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: usize = 96 * 1024;
 const AI_TIMEOUT: Duration = Duration::from_secs(120);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tauri::command]
 pub fn detect_ai_providers() -> Vec<AiProviderStatus> {
@@ -203,6 +219,176 @@ pub async fn run_ai_prompt(request: AiRunRequest) -> AppResult<AiRunResult> {
     }
 }
 
+#[tauri::command]
+pub async fn run_ai_command(request: AiCommandRunRequest) -> AppResult<AiCommandRunResult> {
+    let parsed = parse_ai_command(&request.command, request.context.as_deref())?;
+    let executable = find_on_path(&parsed.program)
+        .ok_or_else(|| AppError::Internal(format!("{} was not found on PATH", parsed.program)))?;
+
+    let mut cmd = Command::new(executable);
+    cmd.args(&parsed.args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    match time::timeout(COMMAND_TIMEOUT, cmd.output()).await {
+        Ok(output) => {
+            let output =
+                output.map_err(|e| AppError::Internal(format!("failed to run command: {e}")))?;
+            Ok(AiCommandRunResult {
+                command: parsed.display_command,
+                stdout: truncate_utf8(&String::from_utf8_lossy(&output.stdout), MAX_OUTPUT_BYTES),
+                stderr: truncate_utf8(&String::from_utf8_lossy(&output.stderr), MAX_OUTPUT_BYTES),
+                exit_code: output.status.code(),
+                timed_out: false,
+            })
+        }
+        Err(_) => Ok(AiCommandRunResult {
+            command: parsed.display_command,
+            stdout: String::new(),
+            stderr: format!(
+                "command timed out after {} seconds",
+                COMMAND_TIMEOUT.as_secs()
+            ),
+            exit_code: None,
+            timed_out: true,
+        }),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedAiCommand {
+    program: String,
+    args: Vec<String>,
+    display_command: String,
+}
+
+fn parse_ai_command(command: &str, context: Option<&str>) -> AppResult<ParsedAiCommand> {
+    let tokens = shell_split(command)?;
+    if tokens.is_empty() {
+        return Err(AppError::Internal("command is empty".into()));
+    }
+    if tokens.iter().any(|token| is_shell_operator(token)) {
+        return Err(AppError::Internal(
+            "shell operators and pipelines are not supported for assistant-run commands".into(),
+        ));
+    }
+
+    let program = tokens[0].trim_start_matches("`").trim_end_matches("`");
+    if program != "kubectl" {
+        return Err(AppError::Internal(
+            "only kubectl inspection commands can be run from the assistant".into(),
+        ));
+    }
+
+    let mut args = tokens[1..].to_vec();
+    let verb = first_kubectl_verb(&args)
+        .ok_or_else(|| AppError::Internal("could not identify kubectl verb".into()))?;
+    if !is_read_only_kubectl_verb(&verb, &args) {
+        return Err(AppError::Internal(format!(
+            "kubectl {verb} is not allowed from the assistant"
+        )));
+    }
+    if let Some(ctx) = context.filter(|ctx| !ctx.trim().is_empty()) {
+        let has_context = args
+            .iter()
+            .any(|arg| arg == "--context" || arg.starts_with("--context="));
+        if !has_context {
+            args.insert(0, format!("--context={ctx}"));
+        }
+    }
+    let display_command = std::iter::once(program.to_string())
+        .chain(args.iter().map(|arg| quote_arg(arg)))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    Ok(ParsedAiCommand {
+        program: program.to_string(),
+        args,
+        display_command,
+    })
+}
+
+fn shell_split(input: &str) -> AppResult<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.trim().chars().peekable();
+    let mut quote: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some('"') if ch == '\\' => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            Some(_) => current.push(ch),
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(ch),
+        }
+    }
+    if quote.is_some() {
+        return Err(AppError::Internal(
+            "command contains an unterminated quote".into(),
+        ));
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    Ok(tokens)
+}
+
+fn is_shell_operator(token: &str) -> bool {
+    matches!(
+        token,
+        "|" | "||" | "&" | "&&" | ";" | ">" | ">>" | "<" | "<<" | "$(" | "`"
+    ) || token.contains("$(")
+        || token.contains('`')
+}
+
+fn first_kubectl_verb(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if !arg.starts_with('-') {
+            return Some(arg.to_lowercase());
+        }
+        if matches!(
+            arg.as_str(),
+            "--context" | "-n" | "--namespace" | "-o" | "--output"
+        ) {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn is_read_only_kubectl_verb(verb: &str, args: &[String]) -> bool {
+    match verb {
+        "get" | "describe" | "logs" | "top" | "events" | "explain" | "api-resources"
+        | "api-versions" | "version" | "cluster-info" | "auth" | "diff" | "config" => true,
+        "rollout" => args.iter().any(|arg| arg == "history" || arg == "status"),
+        _ => false,
+    }
+}
+
+fn quote_arg(arg: &str) -> String {
+    if arg.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '=' | ',')
+    }) {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
+}
+
 fn provider_status(
     id: &str,
     label: &str,
@@ -266,4 +452,38 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     format!("{}\n\n[output truncated by Lumen]", &value[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_read_only_kubectl_command_with_context() {
+        let parsed = parse_ai_command(
+            "kubectl get pod -n kafka clinikk-medblocks-streams -o jsonpath='{.spec.containers[*].resources}'",
+            Some("kind-lumen-dev"),
+        )
+        .expect("command should parse");
+
+        assert_eq!(parsed.program, "kubectl");
+        assert_eq!(parsed.args[0], "--context=kind-lumen-dev");
+        assert!(parsed.args.iter().any(|arg| arg == "get"));
+        assert!(parsed
+            .args
+            .iter()
+            .any(|arg| arg == "jsonpath={.spec.containers[*].resources}"));
+    }
+
+    #[test]
+    fn rejects_mutating_kubectl_command() {
+        let err = parse_ai_command("kubectl delete pod api-1", Some("ctx")).unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn rejects_shell_pipeline() {
+        let err = parse_ai_command("kubectl get pods | grep CrashLoop", Some("ctx")).unwrap_err();
+        assert!(err.to_string().contains("shell operators"));
+    }
 }
