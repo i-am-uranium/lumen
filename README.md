@@ -42,6 +42,8 @@ npm run test
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
 ## Performance Direction
 
 The current architecture is already pointed in the right direction for a cluster workbench: route-level code splitting, React Query cache reuse, virtualized logs, coalesced log stream updates, Rust-side watch streams, and local Tauri commands avoid a backend hop.
@@ -56,4 +58,4 @@ The next high-impact optimizations are:
 
 ## License
 
-MIT
+Apache-2.0

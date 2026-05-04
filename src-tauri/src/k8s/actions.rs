@@ -6,7 +6,7 @@
 //! their own focused skill and risk model.
 
 use crate::error::{AppError, AppResult};
-use crate::k8s::types::WorkloadKind;
+use crate::k8s::{registry, types::WorkloadKind};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{Event, Pod};
 use kube::{
@@ -47,30 +47,9 @@ pub async fn list_events_for(
     kind: WorkloadKind,
     name: &str,
 ) -> AppResult<Vec<EventSummary>> {
-    let kind_str = match kind {
-        WorkloadKind::Deployment => "Deployment",
-        WorkloadKind::StatefulSet => "StatefulSet",
-        WorkloadKind::DaemonSet => "DaemonSet",
-        WorkloadKind::CronJob => "CronJob",
-        WorkloadKind::Job => "Job",
-        WorkloadKind::Pod => "Pod",
-        WorkloadKind::Service => "Service",
-        WorkloadKind::Ingress => "Ingress",
-        WorkloadKind::ConfigMap => "ConfigMap",
-        WorkloadKind::Secret => "Secret",
-        WorkloadKind::NetworkPolicy => "NetworkPolicy",
-        WorkloadKind::PersistentVolumeClaim => "PersistentVolumeClaim",
-        WorkloadKind::PersistentVolume => "PersistentVolume",
-        WorkloadKind::StorageClass => "StorageClass",
-        WorkloadKind::IngressClass => "IngressClass",
-        WorkloadKind::ResourceQuota => "ResourceQuota",
-        WorkloadKind::HorizontalPodAutoscaler => "HorizontalPodAutoscaler",
-        WorkloadKind::LimitRange => "LimitRange",
-        WorkloadKind::PodDisruptionBudget => "PodDisruptionBudget",
-        WorkloadKind::PriorityClass => "PriorityClass",
-        WorkloadKind::MutatingWebhookConfiguration => "MutatingWebhookConfiguration",
-        WorkloadKind::ValidatingWebhookConfiguration => "ValidatingWebhookConfiguration",
-    };
+    let kind_str = registry::get_resource_definition(&kind)
+        .map(|definition| registry::api_kind(&definition.kind))
+        .unwrap_or("Unknown");
     let api: Api<Event> = Api::namespaced(client.clone(), namespace);
     let fs = format!("involvedObject.kind={kind_str},involvedObject.name={name}");
     let lp = ListParams::default().fields(&fs);
@@ -119,24 +98,18 @@ pub async fn rollout_restart(
     });
     let pp = PatchParams::apply("lumen").force();
     match kind {
-        WorkloadKind::Deployment => {
-            Api::<Deployment>::namespaced(client.clone(), namespace)
-                .patch(name, &pp, &Patch::Merge(&patch))
-                .await
-                .map(|_| ())
-        }
-        WorkloadKind::StatefulSet => {
-            Api::<StatefulSet>::namespaced(client.clone(), namespace)
-                .patch(name, &pp, &Patch::Merge(&patch))
-                .await
-                .map(|_| ())
-        }
-        WorkloadKind::DaemonSet => {
-            Api::<DaemonSet>::namespaced(client.clone(), namespace)
-                .patch(name, &pp, &Patch::Merge(&patch))
-                .await
-                .map(|_| ())
-        }
+        WorkloadKind::Deployment => Api::<Deployment>::namespaced(client.clone(), namespace)
+            .patch(name, &pp, &Patch::Merge(&patch))
+            .await
+            .map(|_| ()),
+        WorkloadKind::StatefulSet => Api::<StatefulSet>::namespaced(client.clone(), namespace)
+            .patch(name, &pp, &Patch::Merge(&patch))
+            .await
+            .map(|_| ()),
+        WorkloadKind::DaemonSet => Api::<DaemonSet>::namespaced(client.clone(), namespace)
+            .patch(name, &pp, &Patch::Merge(&patch))
+            .await
+            .map(|_| ()),
         other => {
             return Err(AppError::K8s(format!(
                 "rollout restart not supported for {other:?}"
@@ -157,30 +130,20 @@ pub async fn scale(
     replicas: i32,
 ) -> AppResult<()> {
     if replicas < 0 || replicas > 1000 {
-        return Err(AppError::K8s(
-            "replicas must be between 0 and 1000".into(),
-        ));
+        return Err(AppError::K8s("replicas must be between 0 and 1000".into()));
     }
     let patch = serde_json::json!({ "spec": { "replicas": replicas } });
     let pp = PatchParams::default();
     match kind {
-        WorkloadKind::Deployment => {
-            Api::<Deployment>::namespaced(client.clone(), namespace)
-                .patch_scale(name, &pp, &Patch::Merge(&patch))
-                .await
-                .map(|_| ())
-        }
-        WorkloadKind::StatefulSet => {
-            Api::<StatefulSet>::namespaced(client.clone(), namespace)
-                .patch_scale(name, &pp, &Patch::Merge(&patch))
-                .await
-                .map(|_| ())
-        }
-        other => {
-            return Err(AppError::K8s(format!(
-                "scale not supported for {other:?}"
-            )))
-        }
+        WorkloadKind::Deployment => Api::<Deployment>::namespaced(client.clone(), namespace)
+            .patch_scale(name, &pp, &Patch::Merge(&patch))
+            .await
+            .map(|_| ()),
+        WorkloadKind::StatefulSet => Api::<StatefulSet>::namespaced(client.clone(), namespace)
+            .patch_scale(name, &pp, &Patch::Merge(&patch))
+            .await
+            .map(|_| ()),
+        other => return Err(AppError::K8s(format!("scale not supported for {other:?}"))),
     }
     .map_err(|e| AppError::K8s(e.to_string()))
 }

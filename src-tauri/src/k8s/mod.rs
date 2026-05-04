@@ -12,6 +12,7 @@ pub mod logs;
 pub mod metrics;
 pub mod portforward;
 pub mod rbac_admin;
+pub mod registry;
 pub mod resources;
 pub mod security;
 pub mod types;

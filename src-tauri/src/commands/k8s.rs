@@ -1,7 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
-    actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac_admin, resources,
-    security,
+    actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac_admin, registry,
+    resources, security,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
         PodDetails, ResourceDetail, SecurityReport, WorkloadKind, WorkloadSummary,
@@ -22,7 +22,11 @@ use k8s_openapi::api::{
     scheduling::v1::PriorityClass,
     storage::v1::StorageClass,
 };
-use kube::{api::ListParams, Api};
+use kube::{
+    api::{DynamicObject, ListParams},
+    core::{ApiResource, GroupVersionKind},
+    Api,
+};
 use tauri::{AppHandle, State};
 
 fn owner_refs_from(
@@ -46,6 +50,73 @@ fn owner_refs_from(
 async fn client_for(state: &AppState, context: Option<&str>) -> AppResult<kube::Client> {
     let ctx = state.k8s.resolve_context(context).await?;
     state.k8s.client_for(&ctx).await
+}
+
+fn api_resource_for(definition: &registry::ResourceDefinition) -> ApiResource {
+    let gvk = GroupVersionKind::gvk(
+        definition.api_group,
+        definition.version,
+        registry::api_kind(&definition.kind),
+    );
+    ApiResource::from_gvk_with_plural(&gvk, definition.plural)
+}
+
+fn is_not_found(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(api_err) if api_err.code == 404)
+}
+
+async fn list_dynamic_resources(
+    client: kube::Client,
+    namespace: &str,
+    kind: &WorkloadKind,
+) -> AppResult<Vec<WorkloadSummary>> {
+    let definition = registry::get_resource_definition(kind)
+        .ok_or_else(|| AppError::Internal(format!("resource kind {kind:?} is not registered")))?;
+    let ar = api_resource_for(definition);
+    let api: Api<DynamicObject> = if definition.namespaced {
+        Api::namespaced_with(client, namespace, &ar)
+    } else {
+        Api::all_with(client, &ar)
+    };
+    let list = match api.list(&ListParams::default()).await {
+        Ok(list) => list,
+        Err(err) if definition.optional && is_not_found(&err) => return Ok(vec![]),
+        Err(err) => return Err(AppError::K8s(err.to_string())),
+    };
+
+    Ok(list
+        .items
+        .iter()
+        .map(|obj| resources::dynamic_summary(obj, definition))
+        .collect())
+}
+
+async fn get_dynamic_resource(
+    client: kube::Client,
+    namespace: &str,
+    kind: &WorkloadKind,
+    name: &str,
+) -> AppResult<ResourceDetail> {
+    let definition = registry::get_resource_definition(kind)
+        .ok_or_else(|| AppError::Internal(format!("resource kind {kind:?} is not registered")))?;
+    let ar = api_resource_for(definition);
+    let api: Api<DynamicObject> = if definition.namespaced {
+        Api::namespaced_with(client, namespace, &ar)
+    } else {
+        Api::all_with(client, &ar)
+    };
+    let obj = api
+        .get(name)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let summary = resources::dynamic_summary(&obj, definition);
+    let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+    let owner_refs = owner_refs_from(&obj.metadata);
+    Ok(ResourceDetail {
+        summary,
+        yaml,
+        owner_refs,
+    })
 }
 
 // ─── Contexts & namespaces ────────────────────────────────────────────────
@@ -132,10 +203,7 @@ pub async fn probe_fleet_context(
 }
 
 #[tauri::command]
-pub async fn disconnect_context(
-    context: String,
-    state: State<'_, AppState>,
-) -> AppResult<()> {
+pub async fn disconnect_context(context: String, state: State<'_, AppState>) -> AppResult<()> {
     state.k8s.invalidate(&context).await;
     metrics::invalidate_context(&context);
     Ok(())
@@ -269,8 +337,7 @@ pub async fn list_workloads(
                         by_key.insert((u.namespace, u.name), (u.cpu_milli, u.mem_bytes));
                     }
                     for s in summaries.iter_mut() {
-                        if let Some((cpu, mem)) =
-                            by_key.get(&(s.namespace.clone(), s.name.clone()))
+                        if let Some((cpu, mem)) = by_key.get(&(s.namespace.clone(), s.name.clone()))
                         {
                             s.cpu_milli = Some(*cpu);
                             s.mem_bytes = Some(*mem);
@@ -442,6 +509,7 @@ pub async fn list_workloads(
                 .map(resources::validating_webhook_summary)
                 .collect()
         }
+        registered => list_dynamic_resources(client, &namespace, &registered).await?,
     };
     Ok(summaries)
 }
@@ -458,180 +526,357 @@ pub async fn get_resource(
     match kind {
         WorkloadKind::Deployment => {
             let api: Api<Deployment> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::deployment_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::StatefulSet => {
             let api: Api<StatefulSet> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::statefulset_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::DaemonSet => {
             let api: Api<DaemonSet> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::daemonset_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::CronJob => {
             let api: Api<CronJob> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::cronjob_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::Job => {
             let api: Api<Job> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::job_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::Pod => {
             let api: Api<Pod> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::pod_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::Service => {
             let api: Api<Service> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::service_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::Ingress => {
             let api: Api<Ingress> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::ingress_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::ConfigMap => {
             let api: Api<ConfigMap> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::configmap_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::Secret => {
             let api: Api<Secret> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::secret_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::NetworkPolicy => {
             let api: Api<NetworkPolicy> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::networkpolicy_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::PersistentVolumeClaim => {
             let api: Api<PersistentVolumeClaim> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::pvc_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::PersistentVolume => {
             let api: Api<PersistentVolume> = Api::all(client);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::pv_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::StorageClass => {
             let api: Api<StorageClass> = Api::all(client);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::storage_class_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::IngressClass => {
             let api: Api<IngressClass> = Api::all(client);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::ingress_class_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::ResourceQuota => {
             let api: Api<ResourceQuota> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::resource_quota_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::HorizontalPodAutoscaler => {
             let api: Api<HorizontalPodAutoscaler> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::hpa_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::LimitRange => {
             let api: Api<LimitRange> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::limit_range_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::PodDisruptionBudget => {
             let api: Api<PodDisruptionBudget> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::pdb_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::PriorityClass => {
             let api: Api<PriorityClass> = Api::all(client);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::priority_class_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::MutatingWebhookConfiguration => {
             let api: Api<MutatingWebhookConfiguration> = Api::all(client);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::mutating_webhook_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
         WorkloadKind::ValidatingWebhookConfiguration => {
             let api: Api<ValidatingWebhookConfiguration> = Api::all(client);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let summary = resources::validating_webhook_summary(&obj);
-            let yaml = serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
+            let yaml =
+                serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?;
             let owner_refs = owner_refs_from(&obj.metadata);
-            Ok(ResourceDetail { summary, yaml, owner_refs })
+            Ok(ResourceDetail {
+                summary,
+                yaml,
+                owner_refs,
+            })
         }
+        registered => get_dynamic_resource(client, &namespace, &registered, &name).await,
     }
 }
 
@@ -752,7 +997,10 @@ pub async fn list_pods_for(
     match kind {
         WorkloadKind::Deployment => {
             let api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let match_labels = obj
                 .spec
                 .as_ref()
@@ -762,7 +1010,9 @@ pub async fn list_pods_for(
                 return Ok(vec![]);
             }
             let ls = label_selector_from(
-                &match_labels.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                &match_labels
+                    .into_iter()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
             );
             let pods: Api<Pod> = Api::namespaced(client, &namespace);
             let list = pods
@@ -773,7 +1023,10 @@ pub async fn list_pods_for(
         }
         WorkloadKind::StatefulSet => {
             let api: Api<StatefulSet> = Api::namespaced(client.clone(), &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let match_labels = obj
                 .spec
                 .as_ref()
@@ -783,7 +1036,9 @@ pub async fn list_pods_for(
                 return Ok(vec![]);
             }
             let ls = label_selector_from(
-                &match_labels.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                &match_labels
+                    .into_iter()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
             );
             let pods: Api<Pod> = Api::namespaced(client, &namespace);
             let list = pods
@@ -794,7 +1049,10 @@ pub async fn list_pods_for(
         }
         WorkloadKind::DaemonSet => {
             let api: Api<DaemonSet> = Api::namespaced(client.clone(), &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             let match_labels = obj
                 .spec
                 .as_ref()
@@ -804,7 +1062,9 @@ pub async fn list_pods_for(
                 return Ok(vec![]);
             }
             let ls = label_selector_from(
-                &match_labels.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                &match_labels
+                    .into_iter()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
             );
             let pods: Api<Pod> = Api::namespaced(client, &namespace);
             let list = pods
@@ -878,25 +1138,13 @@ pub async fn list_pods_for(
         }
         WorkloadKind::Pod => {
             let api: Api<Pod> = Api::namespaced(client, &namespace);
-            let obj = api.get(&name).await.map_err(|e| AppError::K8s(e.to_string()))?;
+            let obj = api
+                .get(&name)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
             Ok(vec![resources::pod_summary(&obj)])
         }
-        WorkloadKind::Service
-        | WorkloadKind::Ingress
-        | WorkloadKind::ConfigMap
-        | WorkloadKind::Secret
-        | WorkloadKind::NetworkPolicy
-        | WorkloadKind::PersistentVolumeClaim
-        | WorkloadKind::PersistentVolume
-        | WorkloadKind::StorageClass
-        | WorkloadKind::IngressClass
-        | WorkloadKind::ResourceQuota
-        | WorkloadKind::HorizontalPodAutoscaler
-        | WorkloadKind::LimitRange
-        | WorkloadKind::PodDisruptionBudget
-        | WorkloadKind::PriorityClass
-        | WorkloadKind::MutatingWebhookConfiguration
-        | WorkloadKind::ValidatingWebhookConfiguration => Ok(vec![]),
+        _ => Ok(vec![]),
     }
 }
 
@@ -937,16 +1185,7 @@ pub async fn get_cr_yaml(
     state: State<'_, AppState>,
 ) -> AppResult<String> {
     let client = client_for(&state, context.as_deref()).await?;
-    crd_mod::get_instance_yaml(
-        &client,
-        &group,
-        &version,
-        &kind,
-        &plural,
-        namespace,
-        &name,
-    )
-    .await
+    crd_mod::get_instance_yaml(&client, &group, &version, &kind, &plural, namespace, &name).await
 }
 
 // ─── Team Access (RBAC provisioning) ──────────────────────────────────────
@@ -1420,11 +1659,7 @@ pub async fn get_pod_details(
     // count + state into the spec-driven container list.
     let cs_by_name: std::collections::HashMap<String, _> = status
         .and_then(|s| s.container_statuses.as_ref())
-        .map(|v| {
-            v.iter()
-                .map(|cs| (cs.name.clone(), cs.clone()))
-                .collect()
-        })
+        .map(|v| v.iter().map(|cs| (cs.name.clone(), cs.clone())).collect())
         .unwrap_or_default();
 
     let containers: Vec<ContainerInfo> = spec

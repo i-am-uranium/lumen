@@ -30,6 +30,11 @@ dist-ssr
 .worktrees/
 .superpowers/
 
+# Local planning artifacts
+AGENTS.md
+docs/superpowers/
+docs/research/HEADLAMP_PARITY_MATRIX.md
+
 # Local design scratch
 app-*.png
 bao-mockup-*.png

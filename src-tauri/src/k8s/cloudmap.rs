@@ -147,8 +147,18 @@ pub async fn build(
     let pod_usage_client = client.clone();
     let pod_usage_ctx = ctx.to_string();
     let (n0, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11) = (
-        nf.clone(), nf.clone(), nf.clone(), nf.clone(), nf.clone(), nf.clone(),
-        nf.clone(), nf.clone(), nf.clone(), nf.clone(), nf.clone(), nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
+        nf.clone(),
     );
 
     let (ns, pods, deps, ss, ds, rs, svc, ing, cj, jobs, hpas, cms, secs, pusage) = tokio::join!(
@@ -539,22 +549,12 @@ pub async fn build(
     let configmap_names: std::collections::HashSet<(String, String)> = cms
         .items
         .iter()
-        .filter_map(|c| {
-            Some((
-                c.metadata.namespace.clone()?,
-                c.metadata.name.clone()?,
-            ))
-        })
+        .filter_map(|c| Some((c.metadata.namespace.clone()?, c.metadata.name.clone()?)))
         .collect();
     let secret_names: std::collections::HashSet<(String, String)> = secs
         .items
         .iter()
-        .filter_map(|s| {
-            Some((
-                s.metadata.namespace.clone()?,
-                s.metadata.name.clone()?,
-            ))
-        })
+        .filter_map(|s| Some((s.metadata.namespace.clone()?, s.metadata.name.clone()?)))
         .collect();
 
     // ConfigMap / Secret nodes (only those referenced by at least one pod get

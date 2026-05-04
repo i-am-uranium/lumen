@@ -28,12 +28,7 @@ fn sev_key(s: Severity) -> &'static str {
     }
 }
 
-fn pod_spec_findings(
-    kind: &str,
-    name: &str,
-    namespace: &str,
-    spec: &PodSpec,
-) -> Vec<Finding> {
+fn pod_spec_findings(kind: &str, name: &str, namespace: &str, spec: &PodSpec) -> Vec<Finding> {
     let mut out = Vec::new();
 
     // Host networking / PID / IPC.
@@ -47,7 +42,8 @@ fn pod_spec_findings(
             resource_name: name.into(),
             namespace: Some(namespace.into()),
             detail: "Pod uses the host network namespace, bypassing CNI isolation.".into(),
-            remediation: "Set spec.hostNetwork=false unless the workload is a node-level agent.".into(),
+            remediation: "Set spec.hostNetwork=false unless the workload is a node-level agent."
+                .into(),
         });
     }
     if spec.host_pid.unwrap_or(false) {
@@ -77,7 +73,8 @@ fn pod_spec_findings(
                     resource_name: name.into(),
                     namespace: Some(namespace.into()),
                     detail: format!("Volume '{}' mounts host path '{}'.", v.name, hp.path),
-                    remediation: "Replace hostPath with a managed volume (PVC, emptyDir, or CSI).".into(),
+                    remediation: "Replace hostPath with a managed volume (PVC, emptyDir, or CSI)."
+                        .into(),
                 });
             }
         }
@@ -88,8 +85,12 @@ fn pod_spec_findings(
         let cname = &c.name;
         let sc = c.security_context.as_ref();
         let privileged = sc.and_then(|s| s.privileged).unwrap_or(false);
-        let allow_priv_esc = sc.and_then(|s| s.allow_privilege_escalation).unwrap_or(true);
-        let read_only_rootfs = sc.and_then(|s| s.read_only_root_filesystem).unwrap_or(false);
+        let allow_priv_esc = sc
+            .and_then(|s| s.allow_privilege_escalation)
+            .unwrap_or(true);
+        let read_only_rootfs = sc
+            .and_then(|s| s.read_only_root_filesystem)
+            .unwrap_or(false);
         let run_as_non_root = sc.and_then(|s| s.run_as_non_root).unwrap_or(false);
         let run_as_user = sc.and_then(|s| s.run_as_user);
         let caps_add = sc
@@ -108,7 +109,8 @@ fn pod_spec_findings(
                 resource_name: name.into(),
                 namespace: Some(namespace.into()),
                 detail: "Privileged containers have full host access.".into(),
-                remediation: "Drop securityContext.privileged. Grant specific capabilities instead.".into(),
+                remediation:
+                    "Drop securityContext.privileged. Grant specific capabilities instead.".into(),
             });
         }
         if allow_priv_esc {
@@ -134,7 +136,8 @@ fn pod_spec_findings(
                 resource_name: name.into(),
                 namespace: Some(namespace.into()),
                 detail: "No runAsNonRoot=true and no non-zero runAsUser set.".into(),
-                remediation: "Set securityContext.runAsNonRoot=true and a non-zero runAsUser.".into(),
+                remediation: "Set securityContext.runAsNonRoot=true and a non-zero runAsUser."
+                    .into(),
             });
         }
         if !read_only_rootfs {
@@ -182,7 +185,8 @@ fn pod_spec_findings(
                 resource_kind: kind.into(),
                 resource_name: name.into(),
                 namespace: Some(namespace.into()),
-                detail: "Missing resource.limits — pod can consume unbounded node resources.".into(),
+                detail: "Missing resource.limits — pod can consume unbounded node resources."
+                    .into(),
                 remediation: "Set resources.limits.cpu and .memory.".into(),
             });
         }
@@ -195,7 +199,8 @@ fn pod_spec_findings(
                 resource_kind: kind.into(),
                 resource_name: name.into(),
                 namespace: Some(namespace.into()),
-                detail: "Missing resource.requests — scheduler cannot reason about placement.".into(),
+                detail: "Missing resource.requests — scheduler cannot reason about placement."
+                    .into(),
                 remediation: "Set resources.requests.cpu and .memory.".into(),
             });
         }
@@ -240,7 +245,9 @@ fn pod_spec_findings(
                     resource_name: name.into(),
                     namespace: Some(namespace.into()),
                     detail: format!("Image '{img}' has no pinned digest or tag."),
-                    remediation: "Pin to an immutable digest (@sha256:...) or at least a specific tag.".into(),
+                    remediation:
+                        "Pin to an immutable digest (@sha256:...) or at least a specific tag."
+                            .into(),
                 });
             }
         }
@@ -483,15 +490,39 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
 
     let (pods, deps, ss, ds, svcs, nps, crs, crbs, rls, _rbs) = tokio::join!(
         async move { Api::<Pod>::all(c0).list(&ListParams::default()).await },
-        async move { Api::<Deployment>::all(c1).list(&ListParams::default()).await },
-        async move { Api::<StatefulSet>::all(c2).list(&ListParams::default()).await },
+        async move {
+            Api::<Deployment>::all(c1)
+                .list(&ListParams::default())
+                .await
+        },
+        async move {
+            Api::<StatefulSet>::all(c2)
+                .list(&ListParams::default())
+                .await
+        },
         async move { Api::<DaemonSet>::all(c3).list(&ListParams::default()).await },
         async move { Api::<Service>::all(c4).list(&ListParams::default()).await },
-        async move { Api::<NetworkPolicy>::all(c5).list(&ListParams::default()).await },
-        async move { Api::<ClusterRole>::all(c6).list(&ListParams::default()).await },
-        async move { Api::<ClusterRoleBinding>::all(c7).list(&ListParams::default()).await },
+        async move {
+            Api::<NetworkPolicy>::all(c5)
+                .list(&ListParams::default())
+                .await
+        },
+        async move {
+            Api::<ClusterRole>::all(c6)
+                .list(&ListParams::default())
+                .await
+        },
+        async move {
+            Api::<ClusterRoleBinding>::all(c7)
+                .list(&ListParams::default())
+                .await
+        },
         async move { Api::<Role>::all(c8).list(&ListParams::default()).await },
-        async move { Api::<RoleBinding>::all(c9).list(&ListParams::default()).await },
+        async move {
+            Api::<RoleBinding>::all(c9)
+                .list(&ListParams::default())
+                .await
+        },
     );
 
     let pods = pods.map_err(|e| crate::error::AppError::K8s(e.to_string()))?;
@@ -509,11 +540,7 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
 
     for d in &deps.items {
         resources_scanned += 1;
-        if let Some(spec) = d
-            .spec
-            .as_ref()
-            .and_then(|s| s.template.spec.as_ref())
-        {
+        if let Some(spec) = d.spec.as_ref().and_then(|s| s.template.spec.as_ref()) {
             findings.extend(pod_spec_findings(
                 "Deployment",
                 d.metadata.name.as_deref().unwrap_or(""),
@@ -524,11 +551,7 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
     }
     for s in &ss.items {
         resources_scanned += 1;
-        if let Some(spec) = s
-            .spec
-            .as_ref()
-            .and_then(|sp| sp.template.spec.as_ref())
-        {
+        if let Some(spec) = s.spec.as_ref().and_then(|sp| sp.template.spec.as_ref()) {
             findings.extend(pod_spec_findings(
                 "StatefulSet",
                 s.metadata.name.as_deref().unwrap_or(""),
@@ -539,11 +562,7 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
     }
     for d in &ds.items {
         resources_scanned += 1;
-        if let Some(spec) = d
-            .spec
-            .as_ref()
-            .and_then(|sp| sp.template.spec.as_ref())
-        {
+        if let Some(spec) = d.spec.as_ref().and_then(|sp| sp.template.spec.as_ref()) {
             findings.extend(pod_spec_findings(
                 "DaemonSet",
                 d.metadata.name.as_deref().unwrap_or(""),
@@ -575,7 +594,11 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
 
     findings.extend(rbac_findings(&crs_items, &crbs_items, &rls_items));
     findings.extend(service_exposure_findings(&svcs.items));
-    findings.extend(default_namespace_findings(&deps.items, &ss.items, &ds.items));
+    findings.extend(default_namespace_findings(
+        &deps.items,
+        &ss.items,
+        &ds.items,
+    ));
 
     let mut workload_namespaces = std::collections::BTreeSet::<String>::new();
     for d in &deps.items {
@@ -609,7 +632,9 @@ pub async fn scan(client: &Client, context: String) -> AppResult<SecurityReport>
 
     let mut counts_by_severity: BTreeMap<String, i32> = BTreeMap::new();
     for f in &findings {
-        *counts_by_severity.entry(sev_key(f.severity).into()).or_insert(0) += 1;
+        *counts_by_severity
+            .entry(sev_key(f.severity).into())
+            .or_insert(0) += 1;
     }
 
     Ok(SecurityReport {
@@ -672,8 +697,7 @@ mod tests {
     #[test]
     fn does_not_flag_pinned_digest() {
         let mut spec = base_spec();
-        spec.containers[0].image =
-            Some("ghcr.io/org/app@sha256:aaaaaaaaaaaaaaaaaaaa".into());
+        spec.containers[0].image = Some("ghcr.io/org/app@sha256:aaaaaaaaaaaaaaaaaaaa".into());
         let f = pod_spec_findings("Deployment", "api", "prod", &spec);
         assert!(!f.iter().any(|x| x.rule_id == "CTR-LATEST"));
     }

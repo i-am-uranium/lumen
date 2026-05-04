@@ -1,0 +1,64 @@
+name: Bug report
+description: Report a reproducible problem in Lumen
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include kubeconfig files, tokens, Secret values, or private cluster screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: Lumen version
+      placeholder: "0.6.0 or commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: kubernetes-version
+    attributes:
+      label: Kubernetes version
+      placeholder: "v1.34.0"
+  - type: input
+    id: distribution
+    attributes:
+      label: Kubernetes distribution
+      placeholder: "kind, k3d, minikube, EKS, AKS, GKE, OpenShift, other"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide a minimal, sanitized reproduction.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove tokens, kubeconfig content, Secret values, internal hostnames, and private resource names.

@@ -1,4 +1,7 @@
-use crate::k8s::types::{Health, WorkloadKind, WorkloadSummary};
+use crate::k8s::{
+    registry::ResourceDefinition,
+    types::{Health, WorkloadKind, WorkloadSummary},
+};
 use k8s_openapi::api::admissionregistration::v1::{
     MutatingWebhookConfiguration, ValidatingWebhookConfiguration,
 };
@@ -13,7 +16,38 @@ use k8s_openapi::api::networking::v1::{Ingress, IngressClass, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::api::scheduling::v1::PriorityClass;
 use k8s_openapi::api::storage::v1::StorageClass;
+use kube::api::DynamicObject;
 use std::collections::BTreeMap;
+
+#[cfg(test)]
+mod generic_tests {
+    use super::dynamic_summary;
+    use crate::k8s::{registry, types::WorkloadKind};
+    use kube::api::DynamicObject;
+    use kube::core::{ApiResource, GroupVersionKind};
+
+    #[test]
+    fn dynamic_summary_preserves_metadata_for_registered_resources() {
+        let definition = registry::get_resource_definition(&WorkloadKind::ClusterRole).unwrap();
+        let gvk = GroupVersionKind::gvk(definition.api_group, definition.version, "ClusterRole");
+        let ar = ApiResource::from_gvk_with_plural(&gvk, definition.plural);
+        let mut obj = DynamicObject::new("view", &ar);
+        obj.metadata.labels = Some(
+            [("app.kubernetes.io/name".to_string(), "rbac".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        let summary = dynamic_summary(&obj, definition);
+
+        assert_eq!(summary.kind, WorkloadKind::ClusterRole);
+        assert_eq!(summary.name, "view");
+        assert_eq!(summary.namespace, "");
+        assert_eq!(summary.ready, "metadata");
+        assert_eq!(summary.health, crate::k8s::types::Health::Unknown);
+        assert_eq!(summary.labels["app.kubernetes.io/name"], "rbac");
+    }
+}
 
 pub fn age_seconds(meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> i64 {
     meta.creation_timestamp
@@ -29,6 +63,27 @@ fn labels_of(
         .clone()
         .map(|m| m.into_iter().collect::<BTreeMap<_, _>>())
         .unwrap_or_default()
+}
+
+pub fn dynamic_summary(obj: &DynamicObject, definition: &ResourceDefinition) -> WorkloadSummary {
+    WorkloadSummary {
+        kind: definition.kind.clone(),
+        name: obj.metadata.name.clone().unwrap_or_default(),
+        namespace: obj.metadata.namespace.clone().unwrap_or_default(),
+        ready: "metadata".to_string(),
+        age_seconds: age_seconds(&obj.metadata),
+        health: Health::Unknown,
+        labels: labels_of(&obj.metadata),
+        restart_count: None,
+        container_count: None,
+        container_ready_count: None,
+        node_name: None,
+        controlled_by: None,
+        qos_class: None,
+        cpu_milli: None,
+        mem_bytes: None,
+        pod_phase: None,
+    }
 }
 
 pub fn deployment_summary(d: &Deployment) -> WorkloadSummary {
@@ -326,10 +381,7 @@ pub fn configmap_summary(c: &ConfigMap) -> WorkloadSummary {
 pub fn secret_summary(s: &Secret) -> WorkloadSummary {
     // Use the type field as the "ready" cell so users can spot dockercfg /
     // tls / opaque at a glance without opening the YAML.
-    let kind_label = s
-        .type_
-        .clone()
-        .unwrap_or_else(|| "Opaque".to_string());
+    let kind_label = s.type_.clone().unwrap_or_else(|| "Opaque".to_string());
     WorkloadSummary {
         kind: WorkloadKind::Secret,
         name: s.metadata.name.clone().unwrap_or_default(),
@@ -559,11 +611,7 @@ pub fn pvc_summary(p: &PersistentVolumeClaim) -> WorkloadSummary {
 pub fn limit_range_summary(l: &LimitRange) -> WorkloadSummary {
     // Surface the count of distinct limit types (Container/Pod/PVC) in the
     // Ready column — quick "is this enforcing anything" signal.
-    let limit_count = l
-        .spec
-        .as_ref()
-        .map(|s| s.limits.len() as i32)
-        .unwrap_or(0);
+    let limit_count = l.spec.as_ref().map(|s| s.limits.len() as i32).unwrap_or(0);
     WorkloadSummary {
         kind: WorkloadKind::LimitRange,
         name: l.metadata.name.clone().unwrap_or_default(),
@@ -587,16 +635,8 @@ pub fn limit_range_summary(l: &LimitRange) -> WorkloadSummary {
 pub fn pdb_summary(p: &PodDisruptionBudget) -> WorkloadSummary {
     // PDB readiness = "{currentHealthy}/{desiredHealthy}". Health flips
     // Failed when below the disruption threshold.
-    let current = p
-        .status
-        .as_ref()
-        .map(|s| s.current_healthy)
-        .unwrap_or(0);
-    let desired = p
-        .status
-        .as_ref()
-        .map(|s| s.desired_healthy)
-        .unwrap_or(0);
+    let current = p.status.as_ref().map(|s| s.current_healthy).unwrap_or(0);
+    let desired = p.status.as_ref().map(|s| s.desired_healthy).unwrap_or(0);
     let health = if desired == 0 {
         Health::Unknown
     } else if current >= desired {

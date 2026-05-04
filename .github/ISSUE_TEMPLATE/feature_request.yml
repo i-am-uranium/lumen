@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest an improvement or new Kubernetes workflow
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What Kubernetes workflow is hard, slow, unsafe, or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the user experience you want.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Workloads
+        - Networking
+        - Storage
+        - RBAC/security
+        - Logs/shell/port-forward
+        - Helm
+        - CRDs/custom resources
+        - Multi-cluster
+        - Performance
+        - Accessibility/UX
+        - Release/install
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Mention kubectl, Headlamp, Lens, K9s, scripts, or other workflows if relevant.
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: Does this read secrets, mutate resources, run commands, or require elevated RBAC?

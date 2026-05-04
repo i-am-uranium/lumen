@@ -15,6 +15,7 @@ import { useClusterStore } from "@/state/cluster";
 import { useUi } from "@/state/ui";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { k8s, type WorkloadKind } from "@/lib/k8s";
+import { resourceKindToSlug } from "@/lib/k8s/resourceRegistry";
 import {
   Boxes,
   FileText,
@@ -40,31 +41,6 @@ const JUMP_KINDS: WorkloadKind[] = [
   "horizontalpodautoscaler",
   "networkpolicy",
 ];
-
-const KIND_TO_SLUG: Record<WorkloadKind, string> = {
-  pod: "pods",
-  deployment: "deployments",
-  statefulset: "statefulsets",
-  daemonset: "daemonsets",
-  cronjob: "cronjobs",
-  job: "jobs",
-  service: "services",
-  ingress: "ingresses",
-  configmap: "configmaps",
-  secret: "secrets",
-  networkpolicy: "networkpolicies",
-  persistentvolumeclaim: "pvcs",
-  persistentvolume: "pvs",
-  storageclass: "storageclasses",
-  ingressclass: "ingressclasses",
-  resourcequota: "resourcequotas",
-  horizontalpodautoscaler: "hpas",
-  limitrange: "limitranges",
-  poddisruptionbudget: "pdbs",
-  priorityclass: "priorityclasses",
-  mutatingwebhookconfiguration: "mutatingwebhooks",
-  validatingwebhookconfiguration: "validatingwebhooks",
-};
 
 type Jumpable = { kind: WorkloadKind; name: string; namespace: string };
 
@@ -201,7 +177,7 @@ export function CommandPalette() {
   function pickResource(resource: Jumpable) {
     const ctx = useClusterStore.getState().contextName;
     if (!ctx) return close();
-    const slug = KIND_TO_SLUG[resource.kind] ?? "pods";
+    const slug = resourceKindToSlug(resource.kind);
     const params = new URLSearchParams({
       q: resource.name,
       ns: resource.namespace,

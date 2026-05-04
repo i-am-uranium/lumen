@@ -11,19 +11,28 @@ pub struct ContextInfo {
     pub is_prod: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkloadKind {
     Deployment,
     StatefulSet,
     DaemonSet,
+    ReplicaSet,
+    ReplicationController,
     CronJob,
     Job,
     Pod,
     Service,
     Ingress,
+    Endpoint,
+    EndpointSlice,
     ConfigMap,
     Secret,
+    ServiceAccount,
+    Role,
+    RoleBinding,
+    ClusterRole,
+    ClusterRoleBinding,
     NetworkPolicy,
     #[serde(rename = "persistentvolumeclaim")]
     PersistentVolumeClaim,
@@ -33,6 +42,8 @@ pub enum WorkloadKind {
     PersistentVolume,
     #[serde(rename = "storageclass")]
     StorageClass,
+    #[serde(rename = "volumeattributesclass")]
+    VolumeAttributesClass,
     #[serde(rename = "ingressclass")]
     IngressClass,
     // Namespaced.
@@ -40,6 +51,8 @@ pub enum WorkloadKind {
     ResourceQuota,
     #[serde(rename = "horizontalpodautoscaler")]
     HorizontalPodAutoscaler,
+    #[serde(rename = "verticalpodautoscaler")]
+    VerticalPodAutoscaler,
     // PR D+1 long-tail kinds.
     #[serde(rename = "limitrange")]
     LimitRange,
@@ -47,13 +60,29 @@ pub enum WorkloadKind {
     PodDisruptionBudget,
     #[serde(rename = "priorityclass")]
     PriorityClass,
+    #[serde(rename = "runtimeclass")]
+    RuntimeClass,
+    Lease,
+    #[serde(rename = "controllerrevision")]
+    ControllerRevision,
     #[serde(rename = "mutatingwebhookconfiguration")]
     MutatingWebhookConfiguration,
     #[serde(rename = "validatingwebhookconfiguration")]
     ValidatingWebhookConfiguration,
+    #[serde(rename = "gatewayclass")]
+    GatewayClass,
+    Gateway,
+    #[serde(rename = "httproute")]
+    HttpRoute,
+    #[serde(rename = "grpcroute")]
+    GrpcRoute,
+    #[serde(rename = "jobset")]
+    JobSet,
+    #[serde(rename = "customresourcedefinition")]
+    CustomResourceDefinition,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Health {
     Healthy,

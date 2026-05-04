@@ -187,8 +187,16 @@ async fn probe_one_inner(state: &K8sState, ctx: ContextInfo) -> FleetCard {
         async move { Api::<Node>::all(c0).list(&ListParams::default()).await },
         async move { Api::<Namespace>::all(c1).list(&ListParams::default()).await },
         async move { Api::<Pod>::all(c2).list(&ListParams::default()).await },
-        async move { Api::<Deployment>::all(c3).list(&ListParams::default()).await },
-        async move { Api::<StatefulSet>::all(c4).list(&ListParams::default()).await },
+        async move {
+            Api::<Deployment>::all(c3)
+                .list(&ListParams::default())
+                .await
+        },
+        async move {
+            Api::<StatefulSet>::all(c4)
+                .list(&ListParams::default())
+                .await
+        },
         async move { Api::<DaemonSet>::all(c5).list(&ListParams::default()).await },
         async move { Api::<CronJob>::all(c6).list(&ListParams::default()).await },
         async move { Api::<Job>::all(c7).list(&ListParams::default()).await },
@@ -350,10 +358,7 @@ pub async fn probe_context(state: &K8sState, context: &str) -> AppResult<FleetCa
         .into_iter()
         .find(|c| c.name == context)
         .ok_or_else(|| {
-            crate::error::AppError::Kubeconfig(format!(
-                "context '{}' not in kubeconfig",
-                context
-            ))
+            crate::error::AppError::Kubeconfig(format!("context '{}' not in kubeconfig", context))
         })?;
     Ok(probe_one(state, ctx).await)
 }
