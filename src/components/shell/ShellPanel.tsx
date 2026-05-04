@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { SearchAddon } from "@xterm/addon-search";
 import { useShellSession } from "@/hooks/useShellSession";
 import type { ShellSession } from "@/state/shellSession";
 import { ShellToolbar } from "./ShellToolbar";
-import { ShellTerminalHost } from "./ShellTerminalHost";
 import type { ShellSearchState } from "./ShellSearchBox";
 import { cn } from "@/lib/utils";
+
+const ShellTerminalHost = lazy(() =>
+  import("./ShellTerminalHost").then((module) => ({
+    default: module.ShellTerminalHost,
+  })),
+);
 
 export function ShellPanel({
   session,
@@ -113,7 +118,15 @@ export function ShellPanel({
         onResetTerminal={onResetTerminal}
         onDownload={onDownload}
       />
-      <ShellTerminalHost session={session} searchAddonRef={searchAddonRef} />
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center text-[12px] text-term-muted">
+            <span className="animate-pulse">starting terminal...</span>
+          </div>
+        }
+      >
+        <ShellTerminalHost session={session} searchAddonRef={searchAddonRef} />
+      </Suspense>
     </div>
   );
 }
