@@ -183,7 +183,7 @@ export function Overview() {
                       className={cn(
                         nodesReady < nodesTotal
                           ? "text-warning"
-                          : "text-term-green",
+                          : "text-accent-primary",
                       )}
                     >
                       {nodesReady} ready
@@ -222,7 +222,7 @@ export function Overview() {
                 <>
                   <BigNumber value={workloadsTotal} />
                   <SubLabel>
-                    <span className="text-term-green">
+                    <span className="text-accent-primary">
                       {wlBreakdown.healthy} running
                     </span>
                     <span className="text-text-muted"> · </span>
@@ -254,7 +254,7 @@ export function Overview() {
                 <>
                   <BigNumber value={pods.pods_total} />
                   <SubLabel>
-                    <span className="text-term-green">
+                    <span className="text-accent-primary">
                       {pods.pods_ready} ready
                     </span>
                     <span className="text-text-muted"> · </span>
