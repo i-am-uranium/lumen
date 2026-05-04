@@ -1,4 +1,4 @@
-import { forwardRef, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   Bot,
@@ -89,7 +89,6 @@ export function AiAssistant() {
   const [provider, setProvider] = useState<"codex" | "claude">("codex");
   const [approved, setApproved] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
-  const approvalRef = useRef<HTMLDivElement>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<AiRunResult | null>(null);
 
@@ -163,10 +162,7 @@ export function AiAssistant() {
       return;
     }
     if (!approved) {
-      approvalRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      approvalRef.current
-        ?.querySelector<HTMLInputElement>('input[type="checkbox"]')
-        ?.focus({ preventScroll: true });
+      toast.message("Approve the redacted payload beside the Ask button first");
       return;
     }
     void runProvider();
@@ -176,11 +172,15 @@ export function AiAssistant() {
     <LumenPage className="max-w-[1760px] gap-3">
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="space-y-3">
-          <ContextStrip items={contextSignals} loading={loadingContext} />
+          <ContextStrip
+            items={contextSignals}
+            loading={loadingContext}
+            provider={selectedProvider}
+            showConfig={showConfig}
+            onToggleConfig={() => setShowConfig((open) => !open)}
+          />
           <ApprovalPanel
-            ref={approvalRef}
             approved={approved}
-            onApprovedChange={setApproved}
             prompt={prompt}
             byteSize={new Blob([prompt]).size}
             workloads={workloads.length}
@@ -189,11 +189,6 @@ export function AiAssistant() {
             redactionCount={redactionCount}
             redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
             onCopy={() => void copyPrompt()}
-          />
-          <AssistantHeader
-            provider={selectedProvider}
-            showConfig={showConfig}
-            onToggleConfig={() => setShowConfig((open) => !open)}
           />
           {showConfig && (
             <ConfigurationPanel
@@ -218,6 +213,7 @@ export function AiAssistant() {
             question={question}
             notes={notes}
             running={running}
+            approved={approved}
             actionLabel={
               !selectedProvider?.available
                 ? "Configure provider"
@@ -234,6 +230,7 @@ export function AiAssistant() {
               setNotes(value);
               setApproved(false);
             }}
+            onApprovedChange={setApproved}
             onRun={handleQuestionAction}
           />
         </div>
@@ -241,47 +238,6 @@ export function AiAssistant() {
         <AnswerPanel result={result} provider={selectedProvider} />
       </div>
     </LumenPage>
-  );
-}
-
-function AssistantHeader({
-  provider,
-  showConfig,
-  onToggleConfig,
-}: {
-  provider?: AiProviderStatus;
-  showConfig: boolean;
-  onToggleConfig: () => void;
-}) {
-  return (
-    <section className="relative overflow-hidden rounded-panel border border-accent-primary/35 bg-[linear-gradient(135deg,rgba(99,102,241,0.14),rgba(16,185,129,0.05)_42%,rgba(13,15,20,0.92))] px-4 py-3 shadow-[var(--shadow-panel)]">
-      <div className="absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--accent-primary),transparent)]" />
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-accent-primary">
-            <Sparkles className="size-4" />
-            AI assistant
-          </div>
-          <h1 className="mt-1 text-xl font-semibold leading-tight text-text-primary">
-            Ask Lumen
-          </h1>
-          <p className="mt-1 max-w-3xl text-[12px] text-text-secondary">
-            Ask a focused Kubernetes question. Lumen reviews redacted context before
-            sending anything to your local AI CLI.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <div className="inline-flex items-center gap-1.5 self-start rounded-control border border-success/25 bg-[var(--status-success-soft)] px-2 py-1 text-[10px] text-success">
-            <ShieldCheck className="size-3" />
-            {provider?.available ? `${provider.label} · read-only` : "CLI not detected"}
-          </div>
-          <Button type="button" variant="secondary" size="sm" onClick={onToggleConfig}>
-            <Settings2 className="size-3.5" />
-            {showConfig ? "Hide config" : "Configure"}
-          </Button>
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -331,26 +287,44 @@ function ConfigurationPanel({
 function ContextStrip({
   items,
   loading,
+  provider,
+  showConfig,
+  onToggleConfig,
 }: {
   items: Array<{ label: string; value: string }>;
   loading: boolean;
+  provider?: AiProviderStatus;
+  showConfig: boolean;
+  onToggleConfig: () => void;
 }) {
   return (
     <section className="rounded-panel border border-border-default bg-shell/80 p-3">
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {items.map((item) => (
-          <div
-            key={item.label}
-            className="min-w-0 border-border-subtle px-3 py-2 sm:border-l first:border-l-0"
-          >
-            <div className="text-[10px] uppercase tracking-wide text-text-muted">
-              {item.label}
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {items.map((item) => (
+            <div
+              key={item.label}
+              className="min-w-0 border-border-subtle px-3 py-2 sm:border-l first:border-l-0"
+            >
+              <div className="text-[10px] uppercase tracking-wide text-text-muted">
+                {item.label}
+              </div>
+              <div className="mt-1 truncate font-mono text-[12px] text-text-primary">
+                {loading && item.label === "Resources" ? "sampling..." : item.value}
+              </div>
             </div>
-            <div className="mt-1 truncate font-mono text-[12px] text-text-primary">
-              {loading && item.label === "Resources" ? "sampling..." : item.value}
-            </div>
+          ))}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 px-3">
+          <div className="inline-flex items-center gap-1.5 rounded-control border border-success/25 bg-[var(--status-success-soft)] px-2 py-1 text-[10px] text-success">
+            <ShieldCheck className="size-3" />
+            {provider?.available ? `${provider.label} · read-only` : "CLI not detected"}
           </div>
-        ))}
+          <Button type="button" variant="secondary" size="sm" onClick={onToggleConfig}>
+            <Settings2 className="size-3.5" />
+            {showConfig ? "Hide config" : "Configure"}
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -416,20 +390,24 @@ function QuestionPanel({
   question,
   notes,
   running,
+  approved,
   disabled,
   actionLabel,
   onQuestionChange,
   onNotesChange,
+  onApprovedChange,
   onRun,
 }: {
   task: (typeof TASKS)[number];
   question: string;
   notes: string;
   running: boolean;
+  approved: boolean;
   disabled: boolean;
   actionLabel: string;
   onQuestionChange: (value: string) => void;
   onNotesChange: (value: string) => void;
+  onApprovedChange: (value: boolean) => void;
   onRun: () => void;
 }) {
   return (
@@ -446,18 +424,29 @@ function QuestionPanel({
           onChange={(e) => onQuestionChange(e.target.value)}
           className="min-h-[84px] w-full resize-y bg-transparent p-2 text-[13px] leading-5 text-text-primary outline-none placeholder:text-text-muted"
         />
-        <div className="flex items-center justify-between border-t border-border-subtle pt-2">
+        <div className="flex flex-col gap-2 border-t border-border-subtle pt-2 md:flex-row md:items-center md:justify-between">
           <span className="px-2 text-[10px] text-text-muted">
             Answers are advisory; commands are not auto-executed.
           </span>
-          <Button type="button" disabled={disabled} onClick={onRun} className="h-9 px-3">
-            {running ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <SendHorizontal className="size-4" />
-            )}
-            {actionLabel}
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <label className="flex items-center gap-2 rounded-control border border-accent-primary/30 bg-accent-primary-soft px-3 py-2 text-[12px] text-text-primary">
+              <input
+                type="checkbox"
+                checked={approved}
+                onChange={(e) => onApprovedChange(e.target.checked)}
+                className="size-4 shrink-0 accent-[var(--accent-primary)]"
+              />
+              <span>Approve redacted payload</span>
+            </label>
+            <Button type="button" disabled={disabled} onClick={onRun} className="h-9 px-3">
+              {running ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <SendHorizontal className="size-4" />
+              )}
+              {actionLabel}
+            </Button>
+          </div>
         </div>
       </div>
       <label className="block">
@@ -477,7 +466,6 @@ function QuestionPanel({
 
 type ApprovalPanelProps = {
   approved: boolean;
-  onApprovedChange: (value: boolean) => void;
   prompt: string;
   byteSize: number;
   workloads: number;
@@ -488,25 +476,20 @@ type ApprovalPanelProps = {
   onCopy: () => void;
 };
 
-const ApprovalPanel = forwardRef<HTMLDivElement, ApprovalPanelProps>(
-  function ApprovalPanel(
-    {
-      approved,
-      onApprovedChange,
-      prompt,
-      byteSize,
-      workloads,
-      unhealthy,
-      notes,
-      redactionCount,
-      redactions,
-      onCopy,
-    },
-    ref,
-  ) {
+function ApprovalPanel({
+  approved,
+  prompt,
+  byteSize,
+  workloads,
+  unhealthy,
+  notes,
+  redactionCount,
+  redactions,
+  onCopy,
+}: ApprovalPanelProps) {
     const [showPayload, setShowPayload] = useState(false);
     return (
-      <div ref={ref}>
+      <div>
         <SectionPanel className="space-y-3">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="flex min-w-0 items-start gap-3">
@@ -567,20 +550,15 @@ const ApprovalPanel = forwardRef<HTMLDivElement, ApprovalPanelProps>(
             </pre>
           )}
 
-          <label className="flex items-start gap-2 border-t border-border-subtle pt-3 text-[12px] text-text-secondary">
-            <input
-              type="checkbox"
-              checked={approved}
-              onChange={(e) => onApprovedChange(e.target.checked)}
-              className="mt-0.5"
-            />
-            I reviewed the redacted payload and approve sending it to my local AI CLI.
-          </label>
+          <div className="border-t border-border-subtle pt-3 text-[12px] text-text-secondary">
+            {approved
+              ? "Approved. The next run can send this redacted payload to your local AI CLI."
+              : "Approve the redacted payload beside the Ask button before running the assistant."}
+          </div>
         </SectionPanel>
       </div>
     );
-  },
-);
+}
 
 function ReviewStat({ label, value }: { label: string; value: number }) {
   return (
