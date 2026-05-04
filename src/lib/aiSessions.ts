@@ -55,7 +55,11 @@ export function createSessionId(): string {
   const random =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2, 12);
+      : (() => {
+          const bytes = new Uint8Array(10);
+          crypto.getRandomValues(bytes);
+          return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+        })();
   return `ai_${Date.now().toString(36)}_${random}`;
 }
 
