@@ -172,64 +172,59 @@ export function AiAssistant() {
             value={provider}
             onChange={setProvider}
           />
+          <TaskChooser
+            task={task}
+            onSelect={(item) => {
+              setTask(item.id);
+              setQuestion(item.prompt);
+              setApproved(false);
+              setResult(null);
+            }}
+          />
+          <QuestionPanel
+            task={selectedTask}
+            question={question}
+            notes={notes}
+            running={running}
+            disabled={!approved || !selectedProvider?.available || running}
+            onQuestionChange={(value) => {
+              setQuestion(value);
+              setApproved(false);
+            }}
+            onNotesChange={(value) => {
+              setNotes(value);
+              setApproved(false);
+            }}
+            onRun={() => void runProvider()}
+          />
           <ContextStrip items={contextSignals} loading={loadingContext} />
 
-          <div className="grid gap-3 2xl:grid-cols-[260px_minmax(0,1fr)]">
-            <TaskRail
-              task={task}
-              onSelect={(item) => {
-                setTask(item.id);
-                setQuestion(item.prompt);
-                setApproved(false);
-                setResult(null);
-              }}
+          <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_360px]">
+            <ReviewPanel
+              tabs={reviewTabs}
+              rows={sampleRows}
+              prompt={prompt}
+              redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
+              byteSize={new Blob([prompt]).size}
+              loading={loadingContext}
             />
-
             <div className="space-y-3">
-              <QuestionPanel
-                task={selectedTask}
-                question={question}
-                notes={notes}
-                running={running}
-                disabled={!approved || !selectedProvider?.available || running}
-                onQuestionChange={(value) => {
-                  setQuestion(value);
-                  setApproved(false);
-                }}
-                onNotesChange={(value) => {
-                  setNotes(value);
-                  setApproved(false);
-                }}
-                onRun={() => void runProvider()}
+              <PreviewPane
+                title="Redaction report"
+                empty="No sensitive patterns detected"
+                content={
+                  redacted.findings.length
+                    ? redacted.findings.map((f) => `${f.label}: ${f.count}`).join("\n")
+                    : ""
+                }
+                tone={redacted.findings.length ? "warning" : "success"}
               />
-
-              <ReviewPanel
-                tabs={reviewTabs}
-                rows={sampleRows}
-                prompt={prompt}
-                redactions={redacted.findings.map((f) => `${f.label}: ${f.count}`)}
-                byteSize={new Blob([prompt]).size}
-                loading={loadingContext}
+              <ExecutionPreview
+                provider={selectedProvider}
+                approved={approved}
+                onApprovedChange={setApproved}
+                onCopy={() => void copyPrompt()}
               />
-
-              <div className="grid gap-3 lg:grid-cols-2">
-                <PreviewPane
-                  title="Redaction report"
-                  empty="No sensitive patterns detected"
-                  content={
-                    redacted.findings.length
-                      ? redacted.findings.map((f) => `${f.label}: ${f.count}`).join("\n")
-                      : ""
-                  }
-                  tone={redacted.findings.length ? "warning" : "success"}
-                />
-                <ExecutionPreview
-                  provider={selectedProvider}
-                  approved={approved}
-                  onApprovedChange={setApproved}
-                  onCopy={() => void copyPrompt()}
-                />
-              </div>
             </div>
           </div>
         </div>
@@ -311,7 +306,7 @@ function ContextStrip({
   );
 }
 
-function TaskRail({
+function TaskChooser({
   task,
   onSelect,
 }: {
@@ -319,19 +314,32 @@ function TaskRail({
   onSelect: (task: (typeof TASKS)[number]) => void;
 }) {
   return (
-    <SectionPanel className="space-y-3 p-3">
-      <PanelHeading eyebrow="Mode" title="Workflow" icon={<Bot className="size-3.5" />} />
-      <div className="space-y-1">
+    <SectionPanel className="p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
+            <Bot className="size-3.5" />
+            Workflow
+          </div>
+          <div className="mt-1 text-sm font-semibold text-text-primary">
+            Choose what you need
+          </div>
+        </div>
+        <span className="hidden text-[11px] text-text-muted md:block">
+          Pick one, ask, review, approve
+        </span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
         {TASKS.map((item) => (
           <button
             key={item.id}
             type="button"
             onClick={() => onSelect(item)}
             className={cn(
-              "group w-full rounded-control border px-3 py-2.5 text-left transition-colors",
+              "group min-h-[82px] rounded-control border px-3 py-2.5 text-left transition-colors",
               task === item.id
                 ? "border-accent-primary/50 bg-accent-primary-soft text-text-primary"
-                : "border-transparent bg-transparent text-text-secondary hover:border-border-default hover:bg-elevated hover:text-text-primary",
+                : "border-border-default bg-elevated text-text-secondary hover:bg-hover hover:text-text-primary",
             )}
           >
             <div className="flex items-center gap-2">
@@ -343,7 +351,7 @@ function TaskRail({
               />
               <span className="text-[12px] font-medium">{item.label}</span>
             </div>
-            <div className="mt-1 pl-3.5 text-[10px] leading-4 text-text-muted">
+            <div className="mt-1 pl-3.5 text-[10px] leading-4 text-text-muted line-clamp-2">
               {item.description}
             </div>
           </button>
@@ -396,7 +404,7 @@ function QuestionPanel({
             ) : (
               <SendHorizontal className="size-4" />
             )}
-            Ask
+            {disabled ? "Review first" : "Ask"}
           </Button>
         </div>
       </div>

@@ -22,7 +22,6 @@ import {
   Repeat,
   Server,
   ShieldAlert,
-  Sparkles,
   Star,
   UserPlus,
   type LucideIcon,
@@ -81,6 +80,7 @@ const SECTIONS: Item[] = [
       { to: "workloads/pods", label: "pods" },
       { to: "events", label: "events" },
       { to: "logs", label: "logs" },
+      { to: "ai", label: "AI assistant" },
     ],
   },
   { kind: "leaf", to: "nodes", label: "nodes", icon: Server },
@@ -184,7 +184,6 @@ const SECTIONS: Item[] = [
 
   { kind: "divider" },
   { kind: "leaf", to: "access", label: "access control", icon: UserPlus },
-  { kind: "leaf", to: "ai", label: "AI assistant", icon: Sparkles },
   { kind: "leaf", to: "helm", label: "helm", icon: Package },
   { kind: "leaf", to: "crds", label: "custom resources", icon: Boxes },
   { kind: "leaf", to: "security", label: "security", icon: ShieldAlert },
