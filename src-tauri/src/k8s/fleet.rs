@@ -27,8 +27,8 @@ pub fn node_summary(n: &Node) -> NodeSummary {
         .labels
         .as_ref()
         .map(|m| {
-            m.iter()
-                .filter_map(|(k, _)| k.strip_prefix("node-role.kubernetes.io/").map(String::from))
+            m.keys()
+                .filter_map(|k| k.strip_prefix("node-role.kubernetes.io/").map(String::from))
                 .collect()
         })
         .unwrap_or_default();

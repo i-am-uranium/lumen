@@ -1186,6 +1186,7 @@ pub async fn list_cr_instances(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn get_cr_yaml(
     group: String,
     version: String,

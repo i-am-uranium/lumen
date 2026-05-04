@@ -28,6 +28,8 @@ use k8s_openapi::api::networking::v1::Ingress;
 use kube::{api::ListParams, Api, Client};
 use std::collections::{BTreeMap, HashMap};
 
+type ServiceSelectorBuckets<'a> = HashMap<&'a str, Vec<(&'a str, &'a BTreeMap<String, String>)>>;
+
 fn health_of_pod(p: &Pod) -> Health {
     let phase = p
         .status
@@ -566,8 +568,7 @@ pub async fn build(
     // only scans services in the pod's own namespace — services never cross
     // namespaces, so the cross-ns comparisons in the previous flat loop were
     // pure waste at O(svc_total × pods) scale.
-    let mut service_selectors_by_ns: HashMap<&str, Vec<(&str, &BTreeMap<String, String>)>> =
-        HashMap::new();
+    let mut service_selectors_by_ns: ServiceSelectorBuckets<'_> = HashMap::new();
     for (svc_ns, svc_name, sel) in &service_selectors {
         if sel.is_empty() {
             continue;

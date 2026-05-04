@@ -130,7 +130,7 @@ pub async fn scale(
     name: &str,
     replicas: i32,
 ) -> AppResult<()> {
-    if replicas < 0 || replicas > 1000 {
+    if !(0..=1000).contains(&replicas) {
         return Err(AppError::K8s("replicas must be between 0 and 1000".into()));
     }
     let patch = serde_json::json!({ "spec": { "replicas": replicas } });
@@ -423,8 +423,8 @@ metadata:
   name: other
 "#;
 
-        let err = prepare_apply_manifest(&WorkloadKind::ConfigMap, "apps", "settings", yaml)
-            .unwrap_err();
+        let err =
+            prepare_apply_manifest(&WorkloadKind::ConfigMap, "apps", "settings", yaml).unwrap_err();
 
         assert!(err.to_string().contains("metadata.name 'other' differs"));
     }

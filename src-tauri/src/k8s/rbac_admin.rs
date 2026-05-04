@@ -403,21 +403,31 @@ async fn upsert_cluster_role(
     Ok(())
 }
 
-async fn upsert_binding_to_role(
-    client: &Client,
-    ns: &str,
-    binding_name: &str,
-    role_name: &str,
-    sa_name: &str,
-    sa_ns: &str,
-    member: &str,
+struct RoleBindingTarget<'a> {
+    namespace: &'a str,
+    binding_name: &'a str,
+    role_name: &'a str,
+    service_account_name: &'a str,
+    service_account_namespace: &'a str,
+    member: &'a str,
     template: AccessTemplate,
-) -> AppResult<()> {
-    let api: Api<RoleBinding> = Api::namespaced(client.clone(), ns);
+}
+
+async fn upsert_binding_to_role(client: &Client, target: RoleBindingTarget<'_>) -> AppResult<()> {
+    let RoleBindingTarget {
+        namespace,
+        binding_name,
+        role_name,
+        service_account_name,
+        service_account_namespace,
+        member,
+        template,
+    } = target;
+    let api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
     let rb = RoleBinding {
         metadata: ObjectMeta {
             name: Some(binding_name.into()),
-            namespace: Some(ns.into()),
+            namespace: Some(namespace.into()),
             labels: Some(lumen_labels(member, template)),
             ..Default::default()
         },
@@ -428,8 +438,8 @@ async fn upsert_binding_to_role(
         },
         subjects: Some(vec![Subject {
             kind: "ServiceAccount".into(),
-            name: sa_name.into(),
-            namespace: Some(sa_ns.into()),
+            name: service_account_name.into(),
+            namespace: Some(service_account_namespace.into()),
             api_group: None,
         }]),
     };
@@ -647,13 +657,15 @@ pub async fn provision(
             let bn = binding_name(&req.member_id, ns);
             upsert_binding_to_role(
                 client,
-                ns,
-                &bn,
-                &role,
-                &sa,
-                &sa_ns,
-                &req.member_id,
-                req.template,
+                RoleBindingTarget {
+                    namespace: ns,
+                    binding_name: &bn,
+                    role_name: &role,
+                    service_account_name: &sa,
+                    service_account_namespace: &sa_ns,
+                    member: &req.member_id,
+                    template: req.template,
+                },
             )
             .await?;
             created.push(CreatedObject {

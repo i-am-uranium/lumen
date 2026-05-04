@@ -237,7 +237,7 @@ async fn pipe_one(
     result
 }
 
-async fn listener_loop(
+struct ListenerLoopInput {
     registry: Arc<ForwardRegistry>,
     id: String,
     client: Client,
@@ -246,7 +246,19 @@ async fn listener_loop(
     pod_port: u16,
     listener: TcpListener,
     cancel: CancellationToken,
-) {
+}
+
+async fn listener_loop(input: ListenerLoopInput) {
+    let ListenerLoopInput {
+        registry,
+        id,
+        client,
+        namespace,
+        pod,
+        pod_port,
+        listener,
+        cancel,
+    } = input;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -343,9 +355,16 @@ pub async fn start(
     let id_clone = id.clone();
     let ns = req.namespace.clone();
     tokio::spawn(async move {
-        listener_loop(
-            reg, id_clone, client, ns, pod_name, pod_port, listener, cancel,
-        )
+        listener_loop(ListenerLoopInput {
+            registry: reg,
+            id: id_clone,
+            client,
+            namespace: ns,
+            pod: pod_name,
+            pod_port,
+            listener,
+            cancel,
+        })
         .await;
     });
 

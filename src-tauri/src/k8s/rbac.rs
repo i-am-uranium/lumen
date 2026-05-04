@@ -38,7 +38,9 @@ pub fn resource_attributes_for(
         version: Some(definition.version.to_string()),
         resource: Some(definition.plural.to_string()),
         verb: Some(verb.to_string()),
-        namespace: definition.namespaced.then(|| namespace.unwrap_or("").to_string()),
+        namespace: definition
+            .namespaced
+            .then(|| namespace.unwrap_or("").to_string()),
         name: name.map(ToString::to_string),
         subresource: subresource.map(ToString::to_string),
         ..Default::default()
@@ -104,9 +106,14 @@ mod tests {
 
     #[test]
     fn resource_attributes_keep_namespace_for_namespaced_resources() {
-        let attrs =
-            resource_attributes_for(&WorkloadKind::Deployment, "update", Some("apps"), None, None)
-                .unwrap();
+        let attrs = resource_attributes_for(
+            &WorkloadKind::Deployment,
+            "update",
+            Some("apps"),
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(attrs.group.as_deref(), Some("apps"));
         assert_eq!(attrs.resource.as_deref(), Some("deployments"));
