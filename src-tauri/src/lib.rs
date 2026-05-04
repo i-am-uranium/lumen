@@ -1,0 +1,87 @@
+pub mod commands;
+pub mod error;
+pub mod k8s;
+pub mod state;
+
+use state::AppState;
+use tauri::Manager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                // kube_client logs every failed TCP connect at ERROR, which
+                // floods the console when a fleet context is unreachable.
+                // We surface those failures through our own AppError path, so
+                // silence the crate-level spam by default. Users can still set
+                // RUST_LOG explicitly to debug.
+                tracing_subscriber::EnvFilter::new(
+                    "info,kube_client::client::builder=off,kube_client::client=warn",
+                )
+            }),
+        )
+        .init();
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            app.manage(AppState::new());
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::k8s::list_contexts,
+            commands::k8s::set_context,
+            commands::k8s::delete_context,
+            commands::k8s::list_deleted_contexts,
+            commands::k8s::restore_deleted_context,
+            commands::k8s::list_namespaces,
+            commands::k8s::list_workloads,
+            commands::k8s::get_resource,
+            commands::k8s::stream_events,
+            commands::k8s::stop_stream,
+            commands::k8s::watch_nodes,
+            commands::k8s::watch_workloads,
+            commands::k8s::stream_logs,
+            commands::k8s::list_pods_for,
+            commands::k8s::list_fleet,
+            commands::k8s::probe_fleet_context,
+            commands::k8s::disconnect_context,
+            commands::k8s::reconnect_all,
+            commands::k8s::list_nodes,
+            commands::k8s::cloud_map,
+            commands::k8s::security_scan,
+            commands::k8s::list_crds,
+            commands::k8s::list_cr_instances,
+            commands::k8s::get_cr_yaml,
+            commands::k8s::provision_team_access,
+            commands::k8s::revoke_team_access,
+            commands::k8s::list_team_access,
+            commands::k8s::renew_team_token,
+            commands::k8s::rotate_team_token,
+            commands::k8s::list_events_for,
+            commands::k8s::restart_workload,
+            commands::k8s::scale_workload,
+            commands::k8s::delete_pod,
+            commands::k8s::start_port_forward,
+            commands::k8s::list_port_forwards,
+            commands::k8s::stop_port_forward,
+            commands::k8s::list_pod_containers,
+            commands::k8s::apply_resource,
+            commands::k8s::list_helm_releases,
+            commands::k8s::get_helm_release,
+            commands::k8s::list_helm_history,
+            commands::k8s::helm_install,
+            commands::k8s::helm_upgrade,
+            commands::k8s::helm_rollback,
+            commands::k8s::helm_uninstall,
+            commands::k8s::start_pod_attach,
+            commands::k8s::pod_attach_stdin,
+            commands::k8s::pod_attach_resize,
+            commands::k8s::pod_attach_close,
+            commands::k8s::get_pod_details,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running lumen");
+}

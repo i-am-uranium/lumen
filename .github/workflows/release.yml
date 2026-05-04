@@ -1,0 +1,251 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag name (e.g. v0.1.0). Leave empty on main to auto-detect from package.json."
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  detect:
+    name: detect version bump
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.compute.outputs.tag }}
+      version: ${{ steps.compute.outputs.version }}
+      should_release: ${{ steps.compute.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - id: compute
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          resolve_tag() {
+            # 1. manual dispatch with explicit tag
+            if [ -n "${INPUT_TAG:-}" ]; then
+              echo "$INPUT_TAG"; return
+            fi
+            # 2. tag push
+            if [ "$REF_TYPE" = "tag" ]; then
+              echo "$REF_NAME"; return
+            fi
+            # 3. main push — use the current package.json version.
+            # We release whenever the matching tag doesn't exist yet,
+            # so a prior failed release (tag never created) self-heals
+            # on the next push instead of needing another version bump.
+            CURR=$(jq -r .version package.json)
+            if [ -n "$CURR" ] && [ "$CURR" != "null" ]; then
+              echo "v$CURR"
+            fi
+          }
+
+          TAG="$(resolve_tag)"
+          SHOULD=false
+
+          if [ -n "$TAG" ]; then
+            case "$TAG" in
+              v[0-9]*) ;;
+              *) echo "::error::Invalid tag '$TAG' — must start with 'v' followed by digits."; exit 1 ;;
+            esac
+            if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+              echo "::notice::Tag $TAG already exists on remote — nothing to release."
+            else
+              SHOULD=true
+              echo "::notice::Tag $TAG does not exist yet — releasing."
+            fi
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "should_release=$SHOULD" >> "$GITHUB_OUTPUT"
+          echo "resolved: tag='$TAG' should_release='$SHOULD'"
+
+  create-release:
+    name: create draft release
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create tag and draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --draft \
+              --title "Lumen $TAG" \
+              --notes "Lumen $TAG"
+          fi
+
+  build-macos:
+    name: build · macos (${{ matrix.target }})
+    needs: [detect, create-release]
+    if: needs.detect.outputs.should_release == 'true'
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+          - target: x86_64-apple-darwin
+            arch: x64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: ${{ matrix.target }}
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Detect signing mode
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_ID" ]; then
+            echo "mode=signed" >> "$GITHUB_OUTPUT"
+            echo "::notice::Building SIGNED + NOTARIZED release (Apple secrets present)."
+          else
+            echo "mode=unsigned" >> "$GITHUB_OUTPUT"
+            echo "::warning::Apple signing secrets are not configured. Producing UNSIGNED DMGs. Users will see Gatekeeper warnings. Add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, KEYCHAIN_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID repo secrets to enable signing."
+          fi
+
+      - name: Import signing certificate
+        if: steps.signing.outputs.mode == 'signed'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -e
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          EXISTING=$(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+
+      # Two Build steps below — signed vs unsigned — because GitHub Actions
+      # has no clean way to conditionally omit individual env vars. Tauri's
+      # bundler interprets `APPLE_ID=""` and `APPLE_TEAM_ID=""` as "notarize
+      # with empty creds" rather than "skip notarize", so in unsigned mode
+      # we must not pass those vars at all. Ad-hoc sign ("-") keeps codesign
+      # happy without a Developer ID cert.
+
+      - name: Build Tauri app (signed)
+        if: steps.signing.outputs.mode == 'signed'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ needs.detect.outputs.tag }}
+          releaseName: "Lumen ${{ needs.detect.outputs.tag }}"
+          releaseBody: |
+            Lumen ${{ needs.detect.outputs.tag }}
+
+            Signed & notarized macOS builds:
+            - `Lumen_${{ needs.detect.outputs.version }}_aarch64.dmg` — Apple Silicon
+            - `Lumen_${{ needs.detect.outputs.version }}_x64.dmg` — Intel
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
+      - name: Build Tauri app (unsigned, ad-hoc)
+        if: steps.signing.outputs.mode == 'unsigned'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          tagName: ${{ needs.detect.outputs.tag }}
+          releaseName: "Lumen ${{ needs.detect.outputs.tag }}"
+          releaseBody: |
+            Lumen ${{ needs.detect.outputs.tag }}
+
+            Unsigned macOS builds (ad-hoc signature, Gatekeeper will warn):
+            - `Lumen_${{ needs.detect.outputs.version }}_aarch64.dmg` — Apple Silicon
+            - `Lumen_${{ needs.detect.outputs.version }}_x64.dmg` — Intel
+
+            To open: right-click → Open, then confirm. For a properly signed
+            build, add Apple Developer secrets to the repo.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
+      - name: Cleanup keychain
+        if: always() && steps.signing.outputs.mode == 'signed'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+
+  publish-release:
+    name: publish release
+    needs: [detect, build-macos]
+    if: needs.detect.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flip draft to published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
