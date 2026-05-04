@@ -31,4 +31,24 @@ describe("ConfirmActionDialog", () => {
     await userEvent.click(confirm);
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
+
+  it("closes with Escape so users can recover from a confirmation overlay", async () => {
+    const onCancel = vi.fn();
+    render(
+      <ConfirmActionDialog
+        open
+        title="copy command"
+        description="Review this generated command."
+        target="kubectl get pods"
+        confirmLabel="copy"
+        confirmText="kubectl get pods"
+        onCancel={onCancel}
+        onConfirm={() => {}}
+      />,
+    );
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
 });

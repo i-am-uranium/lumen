@@ -1,12 +1,12 @@
 import { Suspense, lazy } from "react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShellDock } from "@/components/shell/ShellDock";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
-import { Network, Search } from "lucide-react";
+import { Network, Sparkles } from "lucide-react";
 import { useClusterStore } from "@/state/cluster";
 
 const named =
@@ -93,6 +93,11 @@ function StatusBar() {
 }
 
 function NavBar() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const { contextName } = useClusterStore();
+  const aiActive = pathname.endsWith("/ai");
+
   return (
     <nav className="flex items-center gap-2 px-4 py-2 border-b border-term-border-soft bg-term-panel">
       <span className="mds-heading text-[19px] text-term-fg">lumen</span>
@@ -100,10 +105,22 @@ function NavBar() {
         cluster
       </span>
       <div className="flex-1" />
-      <span className="hidden sm:inline-flex items-center gap-2 text-[12px] text-term-subtle">
-        <Search className="size-3.5" aria-hidden="true" />
-        kubeconfig
-      </span>
+      <button
+        type="button"
+        disabled={!contextName}
+        title={contextName ? "Open AI assistant (Cmd K, type ai)" : "Select a cluster context first"}
+        onClick={() => contextName && navigate(`/cluster/${encodeURIComponent(contextName)}/ai`)}
+        className={cn(
+          "inline-flex h-8 items-center gap-2 rounded-[6px] border px-3 text-[12px] font-medium transition-colors",
+          aiActive
+            ? "border-accent-primary/50 bg-accent-primary-soft text-accent-primary"
+            : "border-term-border-soft bg-term-bg/70 text-term-muted hover:border-accent-primary/35 hover:text-term-fg",
+          !contextName && "cursor-not-allowed opacity-45 hover:border-term-border-soft hover:text-term-muted",
+        )}
+      >
+        <Sparkles className="size-3.5" aria-hidden="true" />
+        <span>AI</span>
+      </button>
     </nav>
   );
 }
