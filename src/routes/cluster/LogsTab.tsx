@@ -19,6 +19,8 @@ import { PodStrip } from "@/components/PodStrip";
 import { LogLineRow } from "@/components/LogLineRow";
 import { useLogsStore, type LogLine } from "@/state/logs";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 const LOG_KINDS: { value: WorkloadKind; label: string }[] = [
   { value: "deployment", label: "deployments" },
@@ -228,16 +230,16 @@ export function LogsTab() {
   return (
     <div className="flex h-full min-h-0">
       {/* Left picker */}
-      <aside className="w-[300px] border-r border-term-border-soft bg-term-panel flex flex-col min-h-0">
-        <div className="px-4 h-12 flex items-center border-b border-term-border-soft shrink-0">
-          <h2 className="mds-heading text-[14px] text-term-fg flex items-center gap-2">
+      <aside className="w-[300px] border-r border-border-default bg-surface flex flex-col min-h-0">
+        <div className="px-4 h-12 flex items-center border-b border-border-default shrink-0">
+          <h2 className="mds-heading text-[14px] text-text-primary flex items-center gap-2">
             <Terminal className="size-4" /> logs
           </h2>
         </div>
 
-        <div className="p-3 space-y-3 border-b border-term-border-soft">
+        <div className="p-3 space-y-3 border-b border-border-default">
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-term-subtle mb-1">
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
               namespace
             </label>
             <select
@@ -246,7 +248,7 @@ export function LogsTab() {
                 setNamespace(e.target.value);
                 setName("");
               }}
-              className="w-full h-8 px-2 rounded-md bg-term-bg border border-term-border-soft text-[12px] text-term-fg"
+              className="w-full h-8 px-2 rounded-control bg-elevated border border-border-default text-[12px] text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/45"
             >
               <option value="">— select —</option>
               {namespaces.map((n) => (
@@ -257,40 +259,43 @@ export function LogsTab() {
             </select>
           </div>
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-term-subtle mb-1">
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
               kind
             </label>
             <div className="grid grid-cols-2 gap-1">
               {LOG_KINDS.map((k) => (
-                <button
+                <Button
                   key={k.value}
+                  type="button"
                   onClick={() => {
                     setKind(k.value);
                     setName("");
                   }}
+                  variant="outline"
+                  size="sm"
                   className={cn(
-                    "h-7 text-[11px] rounded-md border",
+                    "h-7 text-[11px] rounded-control",
                     kind === k.value
-                      ? "border-term-green/60 bg-term-green-soft text-term-green"
-                      : "border-term-border-soft text-term-muted hover:bg-term-panel-2",
+                      ? "border-accent-primary/60 bg-accent-primary-soft text-accent-primary"
+                      : "text-text-secondary hover:text-text-primary",
                   )}
                 >
                   {k.label}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-term-subtle mb-1">
+            <label className="block text-[10px] uppercase tracking-wider text-text-muted mb-1">
               filter
             </label>
-            <div className="flex items-center gap-2 h-8 px-2 rounded-md bg-term-bg border border-term-border-soft">
-              <Search className="size-3.5 text-term-subtle" />
-              <input
+            <div className="flex items-center gap-2 h-8 px-2 rounded-control bg-elevated border border-border-default">
+              <Search className="size-3.5 text-text-muted" />
+              <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="filter workloads..."
-                className="flex-1 bg-transparent outline-none text-[12px] text-term-fg placeholder:text-term-subtle"
+                className="h-7 flex-1 border-0 bg-transparent px-0 text-[12px] shadow-none focus-visible:ring-0"
               />
             </div>
           </div>
@@ -298,13 +303,13 @@ export function LogsTab() {
 
         <div className="flex-1 overflow-y-auto">
           {!namespace ? (
-            <div className="p-3 text-[12px] text-term-muted">
+            <div className="p-3 text-[12px] text-text-secondary">
               pick a namespace to list {LOG_KINDS.find((k) => k.value === kind)?.label}.
             </div>
           ) : loadingWl ? (
-            <div className="p-3 text-[12px] text-term-muted">loading…</div>
+            <div className="p-3 text-[12px] text-text-secondary">loading...</div>
           ) : filteredWorkloads.length === 0 ? (
-            <div className="p-3 text-[12px] text-term-muted">
+            <div className="p-3 text-[12px] text-text-secondary">
               no {kind}s found in {namespace}.
             </div>
           ) : (
@@ -313,8 +318,8 @@ export function LogsTab() {
                 key={w.name}
                 onClick={() => setName(w.name)}
                 className={cn(
-                  "w-full text-left px-3 py-1.5 text-[12px] flex items-center gap-2 hover:bg-term-panel-2 transition-colors",
-                  name === w.name && "bg-term-green-soft",
+                  "w-full text-left px-3 py-1.5 text-[12px] flex items-center gap-2 hover:bg-hover transition-colors",
+                  name === w.name && "bg-accent-primary-soft",
                 )}
               >
                 <span
@@ -325,19 +330,19 @@ export function LogsTab() {
                       : w.health === "degraded"
                         ? "bg-amber-400"
                         : w.health === "failed"
-                          ? "bg-term-red"
-                          : "bg-term-subtle",
+                          ? "bg-danger"
+                          : "bg-text-muted",
                   )}
                 />
                 <span
                   className={cn(
-                    "text-term-fg truncate font-mono",
-                    name === w.name && "text-term-green",
+                    "text-text-primary truncate font-mono",
+                    name === w.name && "text-accent-primary",
                   )}
                 >
                   {w.name}
                 </span>
-                <span className="ml-auto text-term-subtle text-[11px] tabular-nums">
+                <span className="ml-auto text-text-muted text-[11px] tabular-nums">
                   {w.ready}
                 </span>
               </button>
@@ -349,7 +354,7 @@ export function LogsTab() {
       {/* Main log stream */}
       <main className="flex-1 flex flex-col min-w-0 min-h-0">
         {!state ? (
-          <div className="flex-1 flex items-center justify-center text-center text-term-muted">
+          <div className="flex-1 flex items-center justify-center text-center text-text-secondary">
             <div className="flex flex-col items-center gap-2">
               <Terminal className="size-5" />
               <p className="text-[13px]">select a workload on the left to tail its logs</p>
@@ -357,22 +362,22 @@ export function LogsTab() {
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-3 h-12 px-4 border-b border-term-border-soft bg-term-panel shrink-0">
+            <div className="flex items-center gap-3 h-12 px-4 border-b border-border-default bg-surface shrink-0">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-[12px]">
-                  <span className="text-term-subtle font-mono">{namespace}</span>
-                  <span className="text-term-subtle">/</span>
-                  <span className="text-term-subtle uppercase text-[10px] tracking-wider">
+                  <span className="text-text-muted font-mono">{namespace}</span>
+                  <span className="text-text-muted">/</span>
+                  <span className="text-text-muted uppercase text-[10px] tracking-wider">
                     {kind}
                   </span>
-                  <span className="text-term-subtle">/</span>
-                  <span className="text-term-fg font-mono truncate">{name}</span>
+                  <span className="text-text-muted">/</span>
+                  <span className="text-text-primary font-mono truncate">{name}</span>
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-term-muted">
+                <div className="flex items-center gap-2 text-[11px] text-text-secondary">
                   <CircleDot
                     className={cn(
                       "size-3",
-                      state.paused ? "text-term-subtle" : "text-emerald-400 animate-pulse",
+                      state.paused ? "text-text-muted" : "text-success animate-pulse",
                     )}
                   />
                   {state.paused ? "paused" : "live"} · {state.buffer.length} lines buffered
@@ -386,7 +391,7 @@ export function LogsTab() {
                   <select
                     value={container ?? ""}
                     onChange={(e) => setContainer(e.target.value || null)}
-                    className="h-8 px-2 text-[12px] rounded-md bg-term-bg border border-term-border-soft text-term-fg"
+                    className="h-8 px-2 text-[12px] rounded-control bg-elevated border border-border-default text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/45"
                     title="container"
                   >
                     <option value="">default</option>
@@ -399,37 +404,45 @@ export function LogsTab() {
                     ))}
                   </select>
                 )}
-              <div className="flex items-center gap-2 h-8 px-2 rounded-md bg-term-bg border border-term-border-soft w-[260px]">
-                <Search className="size-3.5 text-term-subtle" />
-                <input
+              <div className="flex items-center gap-2 h-8 px-2 rounded-control bg-elevated border border-border-default w-[260px]">
+                <Search className="size-3.5 text-text-muted" />
+                <Input
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                   placeholder="grep..."
-                  className="flex-1 bg-transparent outline-none text-[12px] text-term-fg placeholder:text-term-subtle"
+                  className="h-7 flex-1 border-0 bg-transparent px-0 text-[12px] shadow-none focus-visible:ring-0"
                 />
               </div>
-              <button
+              <Button
+                type="button"
                 onClick={() => streamId && setPaused(streamId, !state.paused)}
-                className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
+                variant="secondary"
+                size="sm"
+                className="h-8 text-[12px]"
                 title={state.paused ? "resume" : "pause"}
               >
                 {state.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
                 {state.paused ? "resume" : "pause"}
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
                 onClick={clear}
-                className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
+                variant="secondary"
+                size="icon"
+                className="size-8"
                 title="clear buffer"
               >
                 <Eraser className="size-3.5" />
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
                 onClick={download}
-                className="term-btn term-btn-primary !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
+                size="sm"
+                className="h-8 text-[12px]"
                 disabled={!state.buffer.length}
               >
                 <Download className="size-3.5" /> download
-              </button>
+              </Button>
             </div>
 
             <PodStrip
@@ -442,52 +455,55 @@ export function LogsTab() {
             />
 
             <div className="relative flex-1 min-h-0">
-            {state.paused && (
-              <button
-                onClick={jumpToLive}
-                className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-term-green/40 bg-term-green/10 text-[11px] text-term-green hover:bg-term-green/20 transition-colors shadow-md"
-              >
-                <ArrowDown className="size-3" /> jump to live
-              </button>
-            )}
-            <div
-              ref={parentRef}
-              className="absolute inset-0 overflow-auto font-mono bg-term-bg"
-            >
-              {visibleLines.length === 0 ? (
-                <div className="p-4 text-[12px] text-term-muted">
-                  {filterLc
-                    ? "no lines match the current filter."
-                    : "waiting for first line…"}
-                </div>
-              ) : (
-                <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
-                  {rowVirtualizer.getVirtualItems().map((v) => {
-                    const line = visibleLines[v.index];
-                    return (
-                      <div
-                        key={v.key}
-                        data-index={v.index}
-                        ref={rowVirtualizer.measureElement}
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          transform: `translateY(${v.start}px)`,
-                        }}
-                      >
-                        <LogLineRow
-                          line={line}
-                          color={state.colorByPod[line.pod] ?? "text-term-subtle"}
-                          highlight={filterLc}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
+              {state.paused && (
+                <Button
+                  type="button"
+                  onClick={jumpToLive}
+                  variant="outline"
+                  size="sm"
+                  className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 h-8 rounded-full border-accent-primary/40 bg-accent-primary-soft text-[11px] text-accent-primary shadow-[var(--shadow-popover)]"
+                >
+                  <ArrowDown className="size-3" /> jump to live
+                </Button>
               )}
-            </div>
+              <div
+                ref={parentRef}
+                className="absolute inset-0 overflow-auto font-mono bg-shell"
+              >
+                {visibleLines.length === 0 ? (
+                  <div className="p-4 text-[12px] text-text-secondary">
+                    {filterLc
+                      ? "no lines match the current filter."
+                      : "waiting for first line..."}
+                  </div>
+                ) : (
+                  <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+                    {rowVirtualizer.getVirtualItems().map((v) => {
+                      const line = visibleLines[v.index];
+                      return (
+                        <div
+                          key={v.key}
+                          data-index={v.index}
+                          ref={rowVirtualizer.measureElement}
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            transform: `translateY(${v.start}px)`,
+                          }}
+                        >
+                          <LogLineRow
+                            line={line}
+                            color={state.colorByPod[line.pod] ?? "text-text-muted"}
+                            highlight={filterLc}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </>
         )}
