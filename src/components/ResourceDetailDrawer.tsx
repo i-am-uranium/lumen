@@ -19,6 +19,7 @@ import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import {
   DrawerBackdrop,
   DrawerHeader,
@@ -55,6 +56,7 @@ export function ResourceDetailDrawer({
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
   const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const { openSession } = useShellDock();
   const qc = useQueryClient();
 
@@ -82,7 +84,10 @@ export function ResourceDetailDrawer({
 
   // Reset when drawer opens for a new resource.
   useEffect(() => {
-    if (resource) setActiveTab("overview");
+    if (resource) {
+      setActiveTab("overview");
+      setDeleteConfirmOpen(false);
+    }
   }, [resource?.kind, resource?.namespace, resource?.name]);
 
   // Hotkeys (only when drawer is open).
@@ -125,10 +130,6 @@ export function ResourceDetailDrawer({
 
   async function handleDelete() {
     if (!resource || deleting) return;
-    const ok = window.confirm(
-      `Delete ${resource.kind}/${resource.name} from ${resource.namespace || "cluster scope"} in ${ctx}?`,
-    );
-    if (!ok) return;
     setDeleting(true);
     try {
       await k8s.deleteResource(
@@ -140,6 +141,7 @@ export function ResourceDetailDrawer({
       toast.success(`deleted ${resource.kind}/${resource.name}`);
       await qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
       await qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
+      setDeleteConfirmOpen(false);
       onClose();
     } catch (e) {
       toast.error((e as Error).message ?? String(e));
@@ -253,7 +255,7 @@ export function ResourceDetailDrawer({
           onShellExec={openShell}
           onEditYaml={() => setActiveTab("yaml")}
           deleting={deleting}
-          onDelete={handleDelete}
+          onDelete={() => setDeleteConfirmOpen(true)}
           onClose={onClose}
         />
         <Tabs activeTab={activeTab} onChange={setActiveTab} showLogsTab={showLogsTab} />
@@ -273,6 +275,19 @@ export function ResourceDetailDrawer({
           )}
         </div>
       </DrawerPanel>
+      {resource && (
+        <ConfirmActionDialog
+          open={deleteConfirmOpen}
+          title={`delete ${resource.kind}`}
+          description={`This will delete ${resource.kind}/${resource.name} from ${resource.namespace || "cluster scope"} in ${ctx}. The action is sent to Kubernetes immediately after confirmation.`}
+          target={`${resource.namespace || "cluster"}/${resource.name}`}
+          confirmLabel="delete"
+          intent="danger"
+          busy={deleting}
+          onCancel={() => setDeleteConfirmOpen(false)}
+          onConfirm={handleDelete}
+        />
+      )}
     </>
   );
 }

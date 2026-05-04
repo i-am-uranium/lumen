@@ -4,6 +4,7 @@ import { Check, Copy, Eye, FlaskConical, Pencil, ShieldOff, X } from "lucide-rea
 import { toast } from "sonner";
 import { k8s, type ApplyOutcome, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 
 type EditCapability = {
   /** Namespace of the target. Required because apply_resource pins it server-side. */
@@ -50,6 +51,7 @@ export function YamlModal({
   const [dryRunOutput, setDryRunOutput] = useState<string | null>(null);
   const [applyErr, setApplyErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const updateAccess = useQuery({
     queryKey: [
@@ -88,6 +90,7 @@ export function YamlModal({
     setDraft("");
     setDryRunOutput(null);
     setApplyErr(null);
+    setApplyConfirmOpen(false);
   }, [title, subtitle]);
 
   const copy = async () => {
@@ -265,13 +268,29 @@ export function YamlModal({
               <FlaskConical className="size-3" /> dry-run
             </button>
             <button
-              onClick={() => runApply(false)}
+              onClick={() => setApplyConfirmOpen(true)}
               disabled={busy || !dirty || !canEdit}
               className="term-btn term-btn-primary !min-h-[30px] !text-[11px] disabled:opacity-50"
             >
               <Check className="size-3" /> {busy ? "applying…" : "apply"}
             </button>
           </div>
+        )}
+        {editCapability && (
+          <ConfirmActionDialog
+            open={applyConfirmOpen}
+            title={`apply ${editCapability.kind}`}
+            description={`This server-side apply can create or update ${editCapability.kind}/${editCapability.name} in ${editCapability.namespace || "cluster scope"}. Dry-run first if you only want validation.`}
+            target={`${editCapability.namespace || "cluster"}/${editCapability.name}`}
+            confirmLabel="apply"
+            intent="warning"
+            busy={busy}
+            onCancel={() => setApplyConfirmOpen(false)}
+            onConfirm={() => {
+              setApplyConfirmOpen(false);
+              void runApply(false);
+            }}
+          />
         )}
       </div>
     </div>
