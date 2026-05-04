@@ -373,10 +373,44 @@ fn first_kubectl_verb(args: &[String]) -> Option<String> {
 fn is_read_only_kubectl_verb(verb: &str, args: &[String]) -> bool {
     match verb {
         "get" | "describe" | "logs" | "top" | "events" | "explain" | "api-resources"
-        | "api-versions" | "version" | "cluster-info" | "auth" | "diff" | "config" => true,
+        | "api-versions" | "version" | "cluster-info" | "diff" => true,
+        "auth" => matches!(
+            kubectl_subcommand_after_verb(args, "auth").as_deref(),
+            Some("can-i" | "whoami")
+        ),
+        "config" => matches!(
+            kubectl_subcommand_after_verb(args, "config").as_deref(),
+            Some("view" | "current-context" | "get-contexts")
+        ),
         "rollout" => args.iter().any(|arg| arg == "history" || arg == "status"),
         _ => false,
     }
+}
+
+fn kubectl_subcommand_after_verb(args: &[String], verb: &str) -> Option<String> {
+    let mut found_verb = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg.starts_with('-') {
+            if matches!(
+                arg.as_str(),
+                "--context" | "-n" | "--namespace" | "-o" | "--output"
+            ) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if !found_verb {
+            found_verb = arg.eq_ignore_ascii_case(verb);
+            i += 1;
+            continue;
+        }
+        return Some(arg.to_lowercase());
+    }
+    None
 }
 
 fn quote_arg(arg: &str) -> String {
@@ -478,6 +512,32 @@ mod tests {
     #[test]
     fn rejects_mutating_kubectl_command() {
         let err = parse_ai_command("kubectl delete pod api-1", Some("ctx")).unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn rejects_mutating_kubectl_config_command() {
+        let err = parse_ai_command(
+            "kubectl config set-context --current --namespace prod",
+            Some("ctx"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn allows_read_only_kubectl_config_and_auth_commands() {
+        parse_ai_command("kubectl config current-context", Some("ctx"))
+            .expect("current-context should be allowed");
+        parse_ai_command("kubectl config get-contexts", Some("ctx"))
+            .expect("get-contexts should be allowed");
+        parse_ai_command("kubectl auth can-i list pods", Some("ctx"))
+            .expect("auth can-i should be allowed");
+    }
+
+    #[test]
+    fn rejects_mutating_kubectl_auth_command() {
+        let err = parse_ai_command("kubectl auth reconcile -f rbac.yaml", Some("ctx")).unwrap_err();
         assert!(err.to_string().contains("not allowed"));
     }
 
