@@ -11,6 +11,7 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{Event, Pod};
 use kube::{
     api::{DeleteParams, ListParams, Patch, PatchParams},
+    core::{ApiResource, GroupVersionKind},
     Api, Client,
 };
 use serde::Serialize;
@@ -169,6 +170,66 @@ pub struct ApplyOutcome {
     pub dry_run: bool,
 }
 
+fn api_resource_for(kind: &WorkloadKind) -> AppResult<ApiResource> {
+    let definition = registry::get_resource_definition(kind)
+        .ok_or_else(|| AppError::Internal(format!("resource kind {kind:?} is not registered")))?;
+    let gvk = GroupVersionKind::gvk(
+        definition.api_group,
+        definition.version,
+        registry::api_kind(kind),
+    );
+    Ok(ApiResource::from_gvk_with_plural(&gvk, definition.plural))
+}
+
+fn prepare_apply_manifest(
+    kind: &WorkloadKind,
+    namespace: &str,
+    name: &str,
+    yaml_text: &str,
+) -> AppResult<serde_json::Value> {
+    let definition = registry::get_resource_definition(kind)
+        .ok_or_else(|| AppError::Internal(format!("resource kind {kind:?} is not registered")))?;
+    let mut value: serde_json::Value = serde_yaml::from_str(yaml_text)
+        .map_err(|e| AppError::Internal(format!("yaml parse: {e}")))?;
+
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| AppError::Internal("yaml root must be a Kubernetes object".into()))?;
+    let meta = obj
+        .entry("metadata")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| AppError::Internal("metadata must be an object".into()))?;
+
+    let body_name = meta.get("name").and_then(|v| v.as_str()).unwrap_or(name);
+    if body_name != name {
+        return Err(AppError::K8s(format!(
+            "refusing to apply: metadata.name '{body_name}' differs from target '{name}'. \
+             Renaming a resource needs delete+create, not apply."
+        )));
+    }
+
+    if definition.namespaced {
+        let body_ns = meta.get("namespace").and_then(|v| v.as_str());
+        if let Some(body_ns) = body_ns {
+            if body_ns != namespace {
+                return Err(AppError::K8s(format!(
+                    "refusing to apply: metadata.namespace '{body_ns}' differs from target '{namespace}'."
+                )));
+            }
+        }
+        meta.insert(
+            "namespace".into(),
+            serde_json::Value::String(namespace.into()),
+        );
+    } else {
+        meta.remove("namespace");
+    }
+    meta.insert("name".into(), serde_json::Value::String(name.into()));
+
+    Ok(value)
+}
+
 /// Server-side apply a user-edited manifest. We parse the incoming YAML,
 /// pin the name/namespace from the URL path to keep callers honest (edits
 /// that rename or move a resource must go through the wizard, not here),
@@ -182,36 +243,7 @@ pub async fn apply_resource(
     yaml_text: &str,
     dry_run: bool,
 ) -> AppResult<ApplyOutcome> {
-    let mut value: serde_json::Value = serde_yaml::from_str(yaml_text)
-        .map_err(|e| AppError::Internal(format!("yaml parse: {e}")))?;
-    // Refuse if the caller tried to smuggle a different name/namespace into
-    // the body. Rename flows have to delete + recreate.
-    if let Some(obj) = value.as_object_mut() {
-        if let Some(meta) = obj.get_mut("metadata").and_then(|m| m.as_object_mut()) {
-            let body_name = meta.get("name").and_then(|v| v.as_str()).unwrap_or(name);
-            if body_name != name {
-                return Err(AppError::K8s(format!(
-                    "refusing to apply: metadata.name '{body_name}' differs from target '{name}'. \
-                     Renaming a resource needs delete+create, not apply."
-                )));
-            }
-            let body_ns = meta.get("namespace").and_then(|v| v.as_str());
-            if let Some(b) = body_ns {
-                if b != namespace {
-                    return Err(AppError::K8s(format!(
-                        "refusing to apply: metadata.namespace '{b}' differs from target '{namespace}'."
-                    )));
-                }
-            }
-            // Force these on, even when the caller omits them — SSA requires
-            // both.
-            meta.insert("name".into(), serde_json::Value::String(name.into()));
-            meta.insert(
-                "namespace".into(),
-                serde_json::Value::String(namespace.into()),
-            );
-        }
-    }
+    let value = prepare_apply_manifest(&kind, namespace, name, yaml_text)?;
 
     let mut pp = PatchParams::apply("lumen").force();
     if dry_run {
@@ -300,14 +332,80 @@ pub async fn apply_resource(
             serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?
         }
         other => {
-            return Err(AppError::K8s(format!(
-                "apply not supported for {other:?} (edits on Pods and Jobs are ignored by \
-                 controllers; use the owning workload instead)"
-            )))
+            let ar = api_resource_for(&other)?;
+            let definition = registry::get_resource_definition(&other).ok_or_else(|| {
+                AppError::Internal(format!("resource kind {other:?} is not registered"))
+            })?;
+            let api: Api<kube::api::DynamicObject> = if definition.namespaced {
+                Api::namespaced_with(client.clone(), namespace, &ar)
+            } else {
+                Api::all_with(client.clone(), &ar)
+            };
+            let obj = api
+                .patch(name, &pp, &patch)
+                .await
+                .map_err(|e| AppError::K8s(e.to_string()))?;
+            serde_yaml::to_string(&obj).map_err(|e| AppError::Internal(e.to_string()))?
         }
     };
     Ok(ApplyOutcome {
         yaml: yaml_out,
         dry_run,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_apply_manifest;
+    use crate::k8s::types::WorkloadKind;
+
+    #[test]
+    fn prepare_apply_manifest_pins_namespaced_metadata() {
+        let yaml = r#"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec: {}
+"#;
+
+        let prepared =
+            prepare_apply_manifest(&WorkloadKind::Deployment, "apps", "api", yaml).unwrap();
+
+        assert_eq!(prepared["metadata"]["name"], "api");
+        assert_eq!(prepared["metadata"]["namespace"], "apps");
+    }
+
+    #[test]
+    fn prepare_apply_manifest_does_not_add_namespace_to_cluster_scoped_resources() {
+        let yaml = r#"
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: view-extra
+rules: []
+"#;
+
+        let prepared =
+            prepare_apply_manifest(&WorkloadKind::ClusterRole, "ignored", "view-extra", yaml)
+                .unwrap();
+
+        assert_eq!(prepared["metadata"]["name"], "view-extra");
+        assert!(prepared["metadata"].get("namespace").is_none());
+    }
+
+    #[test]
+    fn prepare_apply_manifest_rejects_target_name_changes() {
+        let yaml = r#"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: other
+"#;
+
+        let err = prepare_apply_manifest(&WorkloadKind::ConfigMap, "apps", "settings", yaml)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("metadata.name 'other' differs"));
+    }
 }
