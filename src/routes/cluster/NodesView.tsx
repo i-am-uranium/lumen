@@ -71,7 +71,7 @@ function Row({
           <span className="text-[13px] text-text-primary font-medium">{n.name}</span>
           {n.unschedulable && (
             <span
-              className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-[10px] text-warning font-mono"
+              className="px-1.5 py-0.5 rounded bg-warning-soft border border-warning/30 text-[10px] text-warning font-mono"
               title="cordoned — scheduler will not place new pods here"
             >
               cordoned
