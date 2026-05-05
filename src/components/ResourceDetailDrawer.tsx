@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, Channel } from "@tauri-apps/api/core";
@@ -490,292 +490,57 @@ export function ResourceDetailDrawer({
         />
       )}
       {resource && setImageOpen && (
-        <SetImageDialog
-          resource={resource}
-          busy={actionBusy}
-          onCancel={() => setSetImageOpen(false)}
-          onSubmit={(container, image) => {
-            setSetImageOpen(false);
-            setPendingAction({ kind: "setImage", container, image });
-          }}
-        />
+        <Suspense fallback={null}>
+          <SetImageDialog
+            resource={resource}
+            busy={actionBusy}
+            onCancel={() => setSetImageOpen(false)}
+            onSubmit={(container, image) => {
+              setSetImageOpen(false);
+              setPendingAction({ kind: "setImage", container, image });
+            }}
+          />
+        </Suspense>
       )}
       {resource && compareOpen && (
-        <CompareAcrossClustersDialog
-          resource={resource}
-          sourceCtx={ctx}
-          onClose={() => setCompareOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <CompareAcrossClustersDialog
+            resource={resource}
+            sourceCtx={ctx}
+            onClose={() => setCompareOpen(false)}
+          />
+        </Suspense>
       )}
     </>
   );
 }
 
-// ─── Set-image dialog (C4) ──────────────────────────────────────────────
+// ─── Lazy-loaded dialogs (chunked out of the workloads route) ─────────────
+//
+// SetImageDialog and CompareAcrossClustersDialog are conditionally
+// rendered behind state flags (setImageOpen / compareOpen). Lazy-loading
+// them keeps the workloads chunk lean — users who only browse YAML/logs
+// never pay the parse cost for these dialogs. VulnScanSection is lazy
+// for the same reason (only relevant for pod properties with containers).
+//
+// See scripts/check-bundle-budget.mjs — workloads cap was bumped to
+// 110 KiB; this split is the path back below 100 KiB.
 
-/**
- * Tiny form for `kubectl set image` — two text inputs and a submit. We
- * deliberately don't fetch and prefill from the workload spec for v1: the
- * drawer doesn't currently load workload container details, and the most
- * common use case (bumping a tag on a known container) is fast either way.
- * A future iteration can pull the spec and turn the container input into
- * a dropdown with the current image preselected.
- */
-function SetImageDialog({
-  resource,
-  busy,
-  onCancel,
-  onSubmit,
-}: {
-  resource: Resource;
-  busy: boolean;
-  onCancel: () => void;
-  onSubmit: (container: string, image: string) => void;
-}) {
-  const [container, setContainer] = useState("");
-  const [image, setImage] = useState("");
-  const canSubmit = container.trim().length > 0 && image.trim().length > 0 && !busy;
-  return (
-    <div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4"
-      onClick={onCancel}
-    >
-      <div
-        className="w-full max-w-md rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-border-default px-4 py-3">
-          <div className="flex flex-col">
-            <span className="text-[13px] font-medium text-text-primary">
-              set image · {resource.kind}/{resource.name}
-            </span>
-            <span className="text-[11px] text-text-muted">
-              {resource.namespace}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
-            aria-label="cancel"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-        <div className="space-y-3 px-4 py-3">
-          <label className="block">
-            <span className="mb-1 block text-[11px] uppercase tracking-wide text-text-muted">
-              container
-            </span>
-            <input
-              type="text"
-              autoFocus
-              value={container}
-              onChange={(e) => setContainer(e.target.value)}
-              placeholder="e.g. api"
-              className="term-input w-full"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-[11px] uppercase tracking-wide text-text-muted">
-              new image
-            </span>
-            <input
-              type="text"
-              value={image}
-              onChange={(e) => setImage(e.target.value)}
-              placeholder="e.g. registry/api:v1.2.3"
-              className="term-input w-full"
-            />
-          </label>
-          <p className="text-[11px] text-text-muted">
-            Strategic merge patch — Kubernetes will roll the workload through
-            its normal update strategy. Only the named container is touched.
-          </p>
-        </div>
-        <div className="flex items-center justify-end gap-2 border-t border-border-default px-4 py-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onCancel}
-          >
-            cancel
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={!canSubmit}
-            onClick={() => onSubmit(container.trim(), image.trim())}
-          >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : "set image"}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Cross-cluster compare dialog (D11) ─────────────────────────────────
-
-/**
- * Picks a target context (defaulting to "all other reachable contexts"),
- * fetches the same kind/name there, and shows side-by-side YAML.
- *
- * v1 deliberately stays text-only — no inline diff highlighting. The
- * intent is "is staging the same as prod?", which side-by-side answers
- * adequately. Future iteration can pull in the `diff` package for
- * line-level highlighting.
- */
-function CompareAcrossClustersDialog({
-  resource,
-  sourceCtx,
-  onClose,
-}: {
-  resource: Resource;
-  sourceCtx: string;
-  onClose: () => void;
-}) {
-  const { data: contexts = [] } = useQuery({
-    queryKey: ["k8s", "contexts"],
-    queryFn: k8s.listContexts,
-    staleTime: 30_000,
-  });
-  const otherContexts = contexts.filter((c) => c.name !== sourceCtx);
-  const [targetCtx, setTargetCtx] = useState<string>("");
-
-  // Effect: prefer first non-source context as default once they load.
-  useEffect(() => {
-    if (!targetCtx && otherContexts.length > 0) {
-      setTargetCtx(otherContexts[0].name);
-    }
-  }, [otherContexts, targetCtx]);
-
-  const kind = resource.kind as Parameters<typeof k8s.getResource>[1];
-  const sourceQuery = useQuery({
-    queryKey: ["k8s", "compare-src", sourceCtx, resource.namespace, kind, resource.name],
-    queryFn: () => k8s.getResource(resource.namespace, kind, resource.name, sourceCtx),
-    staleTime: 5_000,
-  });
-  const targetQuery = useQuery({
-    queryKey: ["k8s", "compare-tgt", targetCtx, resource.namespace, kind, resource.name],
-    queryFn: () => k8s.getResource(resource.namespace, kind, resource.name, targetCtx),
-    enabled: !!targetCtx,
-    staleTime: 5_000,
-  });
-
-  // Quick line-set delta — counts lines unique to one side. Not a real
-  // longest-common-subsequence diff, but enough to surface "yes there are
-  // differences, ~N lines" without pulling in a diff library.
-  const summary = useMemo(() => {
-    const a = sourceQuery.data?.yaml ?? "";
-    const b = targetQuery.data?.yaml ?? "";
-    if (!a || !b) return null;
-    const aLines = new Set(a.split("\n"));
-    const bLines = new Set(b.split("\n"));
-    let unique = 0;
-    for (const l of aLines) if (!bLines.has(l)) unique += 1;
-    for (const l of bLines) if (!aLines.has(l)) unique += 1;
-    return { unique, identical: unique === 0 };
-  }, [sourceQuery.data?.yaml, targetQuery.data?.yaml]);
-
-  return (
-    <div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="flex h-[80vh] w-full max-w-5xl flex-col rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-border-default px-4 py-3">
-          <div className="flex flex-col">
-            <span className="text-[13px] font-medium text-text-primary">
-              compare · {resource.kind}/{resource.name}
-            </span>
-            <span className="text-[11px] text-text-muted">{resource.namespace}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {summary && (
-              <span
-                className={cn(
-                  "rounded border px-1.5 py-0.5 font-mono text-[10px]",
-                  summary.identical
-                    ? "border-success/40 bg-success-soft text-success"
-                    : "border-warning/40 bg-warning-soft text-warning",
-                )}
-              >
-                {summary.identical
-                  ? "identical"
-                  : `${summary.unique} unique line${summary.unique === 1 ? "" : "s"}`}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
-              aria-label="cancel"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-4 py-2">
-          <span className="text-[11px] text-text-muted">target context</span>
-          <select
-            value={targetCtx}
-            onChange={(e) => setTargetCtx(e.target.value)}
-            className="term-input h-7 px-2 text-[11px]"
-          >
-            {otherContexts.length === 0 ? (
-              <option value="">no other contexts available</option>
-            ) : (
-              otherContexts.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name}
-                  {c.is_prod ? " (prod)" : ""}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-        <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-border-subtle">
-          <YamlPane label={sourceCtx} query={sourceQuery} />
-          <YamlPane label={targetCtx || "—"} query={targetQuery} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function YamlPane({
-  label,
-  query,
-}: {
-  label: string;
-  query: { data?: { yaml: string }; isLoading: boolean; error: unknown };
-}) {
-  return (
-    <div className="flex min-w-0 flex-col">
-      <div className="shrink-0 border-b border-border-subtle px-3 py-1.5 font-mono text-[11px] text-text-muted truncate">
-        {label}
-      </div>
-      <div className="flex-1 overflow-auto bg-code-surface p-3 font-mono text-[11px] leading-relaxed text-text-primary">
-        {query.isLoading ? (
-          <span className="text-text-muted">loading…</span>
-        ) : query.error ? (
-          <span className="text-danger">
-            {(query.error as Error).message ?? "failed to fetch"}
-          </span>
-        ) : !query.data ? (
-          <span className="text-text-muted">not found in this context</span>
-        ) : (
-          <pre className="whitespace-pre-wrap break-words">{query.data.yaml}</pre>
-        )}
-      </div>
-    </div>
-  );
-}
+const SetImageDialog = lazy(() =>
+  import("@/components/drawer/SetImageDialog").then((m) => ({
+    default: m.SetImageDialog,
+  })),
+);
+const CompareAcrossClustersDialog = lazy(() =>
+  import("@/components/drawer/CompareAcrossClustersDialog").then((m) => ({
+    default: m.CompareAcrossClustersDialog,
+  })),
+);
+const VulnScanSection = lazy(() =>
+  import("@/components/drawer/VulnScanSection").then((m) => ({
+    default: m.VulnScanSection,
+  })),
+);
 
 // ─── Severity strip (Lumen-distinct) ────────────────────────────────────
 
@@ -1253,175 +1018,10 @@ function PropertiesTab({
           ))}
         </div>
       </Section>
-      <VulnScanSection containers={data.containers} />
+      <Suspense fallback={null}>
+        <VulnScanSection containers={data.containers} />
+      </Suspense>
     </div>
-  );
-}
-
-// ─── Image vulnerability scan section (C5) ──────────────────────────────
-
-function VulnScanSection({
-  containers,
-}: {
-  containers: { name: string; image: string }[];
-}) {
-  const trivyAvailable = useQuery({
-    queryKey: ["trivy", "available"],
-    queryFn: () => k8s.detectTrivy(),
-    staleTime: 60_000,
-  });
-  const [scans, setScans] = useState<Record<string, { loading: boolean; report?: import("@/lib/k8s").VulnReport; error?: string }>>({});
-
-  async function runScan(image: string) {
-    setScans((prev) => ({ ...prev, [image]: { loading: true } }));
-    try {
-      const report = await k8s.scanImage(image);
-      setScans((prev) => ({ ...prev, [image]: { loading: false, report } }));
-    } catch (e) {
-      setScans((prev) => ({
-        ...prev,
-        [image]: { loading: false, error: (e as Error).message ?? String(e) },
-      }));
-    }
-  }
-
-  if (trivyAvailable.isLoading) return null;
-  return (
-    <Section title="vulnerability scan">
-      {!trivyAvailable.data ? (
-        <div className="text-[11px] text-text-muted">
-          trivy not detected on PATH — install via{" "}
-          <code className="font-mono text-text-secondary">brew install trivy</code> /{" "}
-          <code className="font-mono text-text-secondary">apt install trivy</code> /{" "}
-          <code className="font-mono text-text-secondary">scoop install trivy</code>{" "}
-          to enable image scanning.
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {containers.map((c) => {
-            const state = scans[c.image];
-            return (
-              <div
-                key={c.name}
-                className="rounded border border-border-subtle bg-elevated p-2"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[11px] text-text-primary truncate flex-1">
-                    {c.image}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => runScan(c.image)}
-                    disabled={state?.loading}
-                    className="rounded border border-border-default bg-surface px-1.5 py-0.5 text-[10px] hover:bg-hover disabled:opacity-50"
-                  >
-                    {state?.loading ? "scanning…" : state?.report ? "rescan" : "scan"}
-                  </button>
-                </div>
-                {state?.error && (
-                  <div className="mt-1 text-[11px] text-danger">{state.error}</div>
-                )}
-                {state?.report && <VulnReportInline report={state.report} />}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </Section>
-  );
-}
-
-function VulnReportInline({ report }: { report: import("@/lib/k8s").VulnReport }) {
-  if (!report.scanner_available) {
-    return (
-      <div className="mt-1 text-[11px] text-text-muted">{report.note ?? "no result"}</div>
-    );
-  }
-  const c = report.counts;
-  const total = c.critical + c.high + c.medium + c.low + c.unknown;
-  return (
-    <div className="mt-1.5 space-y-1.5">
-      <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-        <SevPill label="C" count={c.critical} tone="critical" />
-        <SevPill label="H" count={c.high} tone="high" />
-        <SevPill label="M" count={c.medium} tone="medium" />
-        <SevPill label="L" count={c.low} tone="low" />
-        <span className="text-text-muted">· {total} findings</span>
-      </div>
-      {total > 0 && (
-        <ul className="max-h-40 space-y-0.5 overflow-y-auto pr-1">
-          {report.findings.slice(0, 25).map((f) => (
-            <li
-              key={`${f.id}-${f.package}`}
-              className="flex items-baseline gap-2 text-[11px]"
-            >
-              <SevDot severity={f.severity} />
-              <span className="font-mono text-text-primary">{f.id}</span>
-              <span className="font-mono text-text-muted truncate">
-                {f.package}@{f.installed_version}
-              </span>
-              {f.fixed_version && (
-                <span className="font-mono text-success">→ {f.fixed_version}</span>
-              )}
-            </li>
-          ))}
-          {report.findings.length > 25 && (
-            <li className="text-[10px] text-text-muted pl-3">
-              + {report.findings.length - 25} more
-            </li>
-          )}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function SevPill({
-  label,
-  count,
-  tone,
-}: {
-  label: string;
-  count: number;
-  tone: "critical" | "high" | "medium" | "low";
-}) {
-  const cls =
-    count === 0
-      ? "border-border-subtle bg-transparent text-text-muted"
-      : tone === "critical"
-        ? "border-danger/40 bg-danger-soft text-danger"
-        : tone === "high"
-          ? "border-orange-500/40 bg-orange-500/15 text-orange-700 dark:text-orange-400"
-          : tone === "medium"
-            ? "border-warning/40 bg-warning-soft text-warning"
-            : "border-info/40 bg-info-soft text-info";
-  return (
-    <span
-      className={cn(
-        "inline-flex h-4 items-center gap-1 rounded border px-1 font-mono uppercase",
-        cls,
-      )}
-    >
-      {label} {count}
-    </span>
-  );
-}
-
-function SevDot({ severity }: { severity: string }) {
-  const tone =
-    severity === "CRITICAL"
-      ? "bg-danger"
-      : severity === "HIGH"
-        ? "bg-orange-600 dark:bg-orange-500"
-        : severity === "MEDIUM"
-          ? "bg-warning"
-          : "bg-info";
-  return (
-    <span
-      className={cn("size-1.5 shrink-0 rounded-full", tone)}
-      title={severity}
-      aria-label={severity}
-    />
   );
 }
 

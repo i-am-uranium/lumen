@@ -9,31 +9,78 @@ export const UI_SETTINGS_STORAGE_KEY = "lumen:ui-settings";
  * ────────────────────────
  *
  * Distinct from `useUi` (transient UI state like palette-open) so the
- * persistence boundary is explicit. Right now this just owns `readOnly`,
- * but it's the right home for any future feature flags that should
- * survive an app restart (default-namespace, default-context, etc.).
+ * persistence boundary is explicit. Owns:
  *
- * Read-only mode hides every destructive action across the app:
- * delete / scale / restart / cordon / drain / image-swap. The toggle
- * lives in the topbar (and command palette) so demo clusters or
- * shared shells stay safe.
+ *   • `readOnly`     — hides every destructive action across the app:
+ *                      delete / scale / restart / cordon / drain /
+ *                      image-swap. The toggle lives in the topbar (and
+ *                      command palette) so demo clusters or shared shells
+ *                      stay safe.
+ *
+ *   • `hiddenColumns` — per-view column visibility for tabular routes
+ *                      (workloads-pod, workloads-other, nodes). Stored
+ *                      as a hidden-set rather than visible-set so adding
+ *                      a new column doesn't silently disappear for
+ *                      existing users (default = visible).
+ *
+ *   • `shortcuts`     — user-overridable keybindings for the global
+ *                      shortcut registry. Map of action-id → key chord.
+ *                      Empty by default; defaults live in the registry.
  */
+
+export type ColumnView = "workloads-pod" | "workloads-other" | "nodes";
 
 export type UiSettings = {
   readOnly: boolean;
+  /** Per-view set of column keys the user has explicitly hidden. */
+  hiddenColumns: Record<ColumnView, string[]>;
+  /** Per-action override of the default key chord (e.g. "Cmd+K" → "Ctrl+/"). */
+  shortcuts: Record<string, string>;
 };
 
 const STORAGE_KEY = UI_SETTINGS_STORAGE_KEY;
 
+const EMPTY_HIDDEN: UiSettings["hiddenColumns"] = {
+  "workloads-pod": [],
+  "workloads-other": [],
+  nodes: [],
+};
+
+function defaults(): UiSettings {
+  return { readOnly: false, hiddenColumns: { ...EMPTY_HIDDEN }, shortcuts: {} };
+}
+
 function readPersisted(): UiSettings {
-  if (typeof window === "undefined") return { readOnly: false };
+  if (typeof window === "undefined") return defaults();
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { readOnly: false };
+    if (!raw) return defaults();
     const parsed = JSON.parse(raw) as Partial<UiSettings>;
-    return { readOnly: parsed.readOnly === true };
+    const hidden = (parsed.hiddenColumns ?? {}) as Partial<
+      Record<ColumnView, unknown>
+    >;
+    const safeArray = (key: ColumnView): string[] => {
+      const v = hidden[key];
+      return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    };
+    return {
+      readOnly: parsed.readOnly === true,
+      hiddenColumns: {
+        "workloads-pod": safeArray("workloads-pod"),
+        "workloads-other": safeArray("workloads-other"),
+        nodes: safeArray("nodes"),
+      },
+      shortcuts:
+        parsed.shortcuts && typeof parsed.shortcuts === "object"
+          ? Object.fromEntries(
+              Object.entries(parsed.shortcuts).filter(
+                ([, v]) => typeof v === "string",
+              ),
+            )
+          : {},
+    };
   } catch {
-    return { readOnly: false };
+    return defaults();
   }
 }
 
@@ -49,6 +96,10 @@ function writePersisted(settings: UiSettings): void {
 type Store = UiSettings & {
   setReadOnly: (next: boolean) => void;
   toggleReadOnly: () => void;
+  toggleColumn: (view: ColumnView, columnKey: string) => void;
+  resetColumns: (view: ColumnView) => void;
+  setShortcut: (actionId: string, chord: string | null) => void;
+  resetShortcuts: () => void;
 };
 
 export const useUiSettings = create<Store>((set, get) => {
@@ -56,13 +107,48 @@ export const useUiSettings = create<Store>((set, get) => {
   return {
     ...initial,
     setReadOnly: (next) => {
-      writePersisted({ readOnly: next });
+      const snapshot = { ...get(), readOnly: next };
+      writePersisted(snapshot);
       set({ readOnly: next });
     },
     toggleReadOnly: () => {
       const next = !get().readOnly;
-      writePersisted({ readOnly: next });
+      const snapshot = { ...get(), readOnly: next };
+      writePersisted(snapshot);
       set({ readOnly: next });
+    },
+    toggleColumn: (view, columnKey) => {
+      const current = get().hiddenColumns[view];
+      const isHidden = current.includes(columnKey);
+      const nextList = isHidden
+        ? current.filter((k) => k !== columnKey)
+        : [...current, columnKey];
+      const nextHidden = { ...get().hiddenColumns, [view]: nextList };
+      const snapshot = { ...get(), hiddenColumns: nextHidden };
+      writePersisted(snapshot);
+      set({ hiddenColumns: nextHidden });
+    },
+    resetColumns: (view) => {
+      const nextHidden = { ...get().hiddenColumns, [view]: [] };
+      const snapshot = { ...get(), hiddenColumns: nextHidden };
+      writePersisted(snapshot);
+      set({ hiddenColumns: nextHidden });
+    },
+    setShortcut: (actionId, chord) => {
+      const next = { ...get().shortcuts };
+      if (chord && chord.trim().length > 0) {
+        next[actionId] = chord.trim();
+      } else {
+        delete next[actionId];
+      }
+      const snapshot = { ...get(), shortcuts: next };
+      writePersisted(snapshot);
+      set({ shortcuts: next });
+    },
+    resetShortcuts: () => {
+      const snapshot = { ...get(), shortcuts: {} };
+      writePersisted(snapshot);
+      set({ shortcuts: {} });
     },
   };
 });

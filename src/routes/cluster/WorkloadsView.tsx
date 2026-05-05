@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import React, { memo, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
@@ -32,6 +32,8 @@ import {
 import { StatusBadge } from "@/components/ui/status-badge";
 import { LumenPage, PageHeader, SectionPanel, ToolbarSurface } from "@/components/lumen/page";
 import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
+import { ColumnPicker } from "@/components/ColumnPicker";
+import { useUiSettings } from "@/state/uiSettings";
 
 // ─── URL slug ↔ WorkloadKind ──────────────────────────────────────────────
 
@@ -326,91 +328,179 @@ function ResourceKindNav({
   );
 }
 
-// ─── Generic row (non-pod kinds) ──────────────────────────────────────────
+// ─── Column descriptors ──────────────────────────────────────────────────
+//
+// Each row is rendered by mapping over a descriptor list, filtered by
+// the user's `hiddenColumns` setting (see ColumnPicker). `alwaysOn`
+// columns can't be hidden — `name` is the row anchor and would leave
+// rows visually un-keyable if removed.
+//
+// `key` is stable across renames (used for persistence), `label` is the
+// header text, `cell` returns the JSX for one row.
 
-const Row = memo(function Row({
-  w,
-  onClick,
-}: {
-  w: WorkloadSummary;
-  onClick: (w: WorkloadSummary) => void;
-}) {
-  return (
-    <DataTableRow
-      className="cursor-pointer"
-      onClick={() => onClick(w)}
-    >
-      <DataTableCell className={cn("w-1 p-0", severityBg(w))} aria-hidden="true" />
+type WorkloadColumn = {
+  key: string;
+  label: string;
+  alwaysOn?: boolean;
+  cell: (w: WorkloadSummary) => React.ReactNode;
+};
+
+const OTHER_COLUMNS: WorkloadColumn[] = [
+  {
+    key: "name",
+    label: "name",
+    alwaysOn: true,
+    cell: (w) => (
       <DataTableCell className="px-4">
-        <span className="text-[13px] font-medium text-text-primary">{w.name}</span>
+        <span className="text-[13px] font-medium text-text-primary">
+          {w.name}
+        </span>
       </DataTableCell>
-      <DataTableCell mono className="text-[11px]">{w.namespace}</DataTableCell>
+    ),
+  },
+  {
+    key: "namespace",
+    label: "namespace",
+    cell: (w) => (
+      <DataTableCell mono className="text-[11px]">
+        {w.namespace}
+      </DataTableCell>
+    ),
+  },
+  {
+    key: "kind",
+    label: "kind",
+    cell: (w) => (
       <DataTableCell>
         <span className="rounded border border-border-default bg-elevated px-1.5 py-0.5 text-[10px] lowercase text-text-secondary">
           {w.kind}
         </span>
       </DataTableCell>
+    ),
+  },
+  {
+    key: "ready",
+    label: "ready",
+    cell: (w) => (
       <DataTableCell mono className="text-[11px] tabular-nums">
         {w.ready || "—"}
       </DataTableCell>
+    ),
+  },
+  {
+    key: "health",
+    label: "health",
+    cell: (w) => (
       <DataTableCell>
         <StatusBadge status={w.health} />
       </DataTableCell>
+    ),
+  },
+  {
+    key: "age",
+    label: "age",
+    cell: (w) => (
       <DataTableCell className="text-[11px] tabular-nums">
         {formatAge(w.age_seconds)}
       </DataTableCell>
-    </DataTableRow>
-  );
-});
+    ),
+  },
+];
 
-// ─── Pod-specific row (Lens-style enrichment, Lumen aesthetic) ────────────
-
-const PodRow = memo(function PodRow({
-  w,
-  onClick,
-}: {
-  w: WorkloadSummary;
-  onClick: (w: WorkloadSummary) => void;
-}) {
-  const ready = w.container_ready_count ?? 0;
-  const total = w.container_count ?? 0;
-  const restarts = w.restart_count ?? 0;
-  return (
-    <DataTableRow
-      className="cursor-pointer"
-      onClick={() => onClick(w)}
-    >
-      <DataTableCell className={cn("w-1 p-0", severityBg(w))} aria-hidden="true" />
+const POD_COLUMNS: WorkloadColumn[] = [
+  {
+    key: "name",
+    label: "name",
+    alwaysOn: true,
+    cell: (w) => (
       <DataTableCell className="max-w-[260px] px-4">
         <span className="block truncate font-mono text-[13px] font-medium text-text-primary">
           {w.name}
         </span>
       </DataTableCell>
-      <DataTableCell mono className="text-[11px]">{w.namespace}</DataTableCell>
-      <DataTableCell>
-        <ContainerChiclets ready={ready} total={total} />
+    ),
+  },
+  {
+    key: "namespace",
+    label: "namespace",
+    cell: (w) => (
+      <DataTableCell mono className="text-[11px]">
+        {w.namespace}
       </DataTableCell>
+    ),
+  },
+  {
+    key: "containers",
+    label: "containers",
+    cell: (w) => (
+      <DataTableCell>
+        <ContainerChiclets
+          ready={w.container_ready_count ?? 0}
+          total={w.container_count ?? 0}
+        />
+      </DataTableCell>
+    ),
+  },
+  {
+    key: "cpu",
+    label: "cpu",
+    cell: (w) => (
       <DataTableCell mono className="text-[11px] tabular-nums">
         {w.cpu_milli !== undefined ? formatCpu(w.cpu_milli) : "—"}
       </DataTableCell>
+    ),
+  },
+  {
+    key: "memory",
+    label: "memory",
+    cell: (w) => (
       <DataTableCell mono className="text-[11px] tabular-nums">
         {w.mem_bytes !== undefined ? formatBytes(w.mem_bytes) : "—"}
       </DataTableCell>
-      <DataTableCell
-        mono
-        className={cn(
-          "text-[11px] tabular-nums",
-          restarts > 0 ? "text-warning" : "text-text-secondary",
-        )}
-      >
-        {restarts}
-      </DataTableCell>
+    ),
+  },
+  {
+    key: "restarts",
+    label: "restarts",
+    cell: (w) => {
+      const restarts = w.restart_count ?? 0;
+      return (
+        <DataTableCell
+          mono
+          className={cn(
+            "text-[11px] tabular-nums",
+            restarts > 0 ? "text-warning" : "text-text-secondary",
+          )}
+        >
+          {restarts}
+        </DataTableCell>
+      );
+    },
+  },
+  {
+    key: "controlled-by",
+    label: "controlled by",
+    cell: (w) => (
       <DataTableCell mono className="max-w-[160px] truncate text-[11px]">
-        {w.controlled_by ? `${w.controlled_by.kind} ${w.controlled_by.name}` : "—"}
+        {w.controlled_by
+          ? `${w.controlled_by.kind} ${w.controlled_by.name}`
+          : "—"}
       </DataTableCell>
+    ),
+  },
+  {
+    key: "node",
+    label: "node",
+    cell: (w) => (
       <DataTableCell mono className="max-w-[200px] truncate text-[11px]">
         {w.node_name ?? "—"}
       </DataTableCell>
+    ),
+  },
+  {
+    key: "qos",
+    label: "qos",
+    cell: (w) => (
       <DataTableCell>
         {w.qos_class ? (
           <span
@@ -425,12 +515,80 @@ const PodRow = memo(function PodRow({
           <span className="text-[10px] text-term-subtle">—</span>
         )}
       </DataTableCell>
+    ),
+  },
+  {
+    key: "status",
+    label: "status",
+    cell: (w) => (
       <DataTableCell className={cn("text-[11px]", statusColor(w.pod_phase))}>
         {w.pod_phase ?? "—"}
       </DataTableCell>
+    ),
+  },
+  {
+    key: "age",
+    label: "age",
+    cell: (w) => (
       <DataTableCell className="text-[11px] tabular-nums">
         {formatAge(w.age_seconds)}
       </DataTableCell>
+    ),
+  },
+];
+
+function visibleColumns(
+  columns: WorkloadColumn[],
+  hidden: string[],
+): WorkloadColumn[] {
+  if (hidden.length === 0) return columns;
+  return columns.filter((c) => c.alwaysOn || !hidden.includes(c.key));
+}
+
+// ─── Generic row (non-pod kinds) ──────────────────────────────────────────
+
+const Row = memo(function Row({
+  w,
+  columns,
+  onClick,
+}: {
+  w: WorkloadSummary;
+  columns: WorkloadColumn[];
+  onClick: (w: WorkloadSummary) => void;
+}) {
+  return (
+    <DataTableRow className="cursor-pointer" onClick={() => onClick(w)}>
+      <DataTableCell
+        className={cn("w-1 p-0", severityBg(w))}
+        aria-hidden="true"
+      />
+      {columns.map((c) => (
+        <React.Fragment key={c.key}>{c.cell(w)}</React.Fragment>
+      ))}
+    </DataTableRow>
+  );
+});
+
+// ─── Pod-specific row (Lens-style enrichment, Lumen aesthetic) ────────────
+
+const PodRow = memo(function PodRow({
+  w,
+  columns,
+  onClick,
+}: {
+  w: WorkloadSummary;
+  columns: WorkloadColumn[];
+  onClick: (w: WorkloadSummary) => void;
+}) {
+  return (
+    <DataTableRow className="cursor-pointer" onClick={() => onClick(w)}>
+      <DataTableCell
+        className={cn("w-1 p-0", severityBg(w))}
+        aria-hidden="true"
+      />
+      {columns.map((c) => (
+        <React.Fragment key={c.key}>{c.cell(w)}</React.Fragment>
+      ))}
     </DataTableRow>
   );
 });
@@ -473,14 +631,21 @@ const QUICK_FILTERS: Array<{ id: QuickFilter; label: string }> = [
   { id: "failed", label: "failed" },
 ];
 
-function SkeletonRows({ isPodView }: { isPodView: boolean }) {
-  const columns = isPodView ? 12 : 7;
+function SkeletonRows({
+  isPodView,
+  columnCount,
+}: {
+  isPodView: boolean;
+  columnCount: number;
+}) {
+  // +1 for the leading severity strip column.
+  const total = columnCount + 1;
   return (
     <DataTableShell>
       <DataTable className={cn(isPodView && "min-w-[1100px]")}>
         <DataTableHeader>
           <DataTableRow>
-            {Array.from({ length: columns }).map((_, i) => (
+            {Array.from({ length: total }).map((_, i) => (
               <Th key={i}>{i === 0 ? "" : " "}</Th>
             ))}
           </DataTableRow>
@@ -488,7 +653,7 @@ function SkeletonRows({ isPodView }: { isPodView: boolean }) {
         <DataTableBody>
           {Array.from({ length: 8 }).map((_, row) => (
             <DataTableRow key={row}>
-              {Array.from({ length: columns }).map((_, col) => (
+              {Array.from({ length: total }).map((_, col) => (
                 <DataTableCell key={col}>
                   <div className="h-3 animate-pulse rounded bg-elevated" />
                 </DataTableCell>
@@ -512,6 +677,20 @@ export function WorkloadsView() {
     ? SLUG_TO_KIND[kindSlug] ?? null
     : null;
   const isPodView = filterKind === "pod";
+
+  // Column visibility — D10. Watching only this view's slot keeps the
+  // store subscription scoped; flipping a checkbox doesn't re-render
+  // anything outside this route.
+  const podHidden = useUiSettings((s) => s.hiddenColumns["workloads-pod"]);
+  const otherHidden = useUiSettings((s) => s.hiddenColumns["workloads-other"]);
+  const podVisible = useMemo(
+    () => visibleColumns(POD_COLUMNS, podHidden),
+    [podHidden],
+  );
+  const otherVisible = useMemo(
+    () => visibleColumns(OTHER_COLUMNS, otherHidden),
+    [otherHidden],
+  );
 
   const kindsToFetch = filterKind ? [filterKind] : ALL_KINDS;
 
@@ -695,6 +874,14 @@ export function WorkloadsView() {
                   </option>
                 ))}
               </select>
+              <ColumnPicker
+                view={isPodView ? "workloads-pod" : "workloads-other"}
+                columns={(isPodView ? POD_COLUMNS : OTHER_COLUMNS).map((c) => ({
+                  key: c.key,
+                  label: c.label,
+                  alwaysOn: c.alwaysOn,
+                }))}
+              />
               <Button onClick={refetchAll} disabled={isFetching}>
                 <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
                 refresh
@@ -798,7 +985,10 @@ export function WorkloadsView() {
                 </Button>
               </div>
             ) : isLoading ? (
-              <SkeletonRows isPodView={isPodView} />
+              <SkeletonRows
+                isPodView={isPodView}
+                columnCount={(isPodView ? podVisible : otherVisible).length}
+              />
             ) : filteredItems.length === 0 ? (
               <div className="flex items-center justify-between gap-4 rounded-panel border border-border-default bg-surface p-4 text-sm text-text-secondary">
                 <span>
@@ -821,32 +1011,12 @@ export function WorkloadsView() {
               <DataTableShell>
                 <DataTable className={cn(isPodView && "min-w-[1100px]")}>
                   <DataTableHeader>
-                    {isPodView ? (
-                      <DataTableRow>
-                        <Th />
-                        <Th>name</Th>
-                        <Th>namespace</Th>
-                        <Th>containers</Th>
-                        <Th>cpu</Th>
-                        <Th>memory</Th>
-                        <Th>restarts</Th>
-                        <Th>controlled by</Th>
-                        <Th>node</Th>
-                        <Th>qos</Th>
-                        <Th>status</Th>
-                        <Th>age</Th>
-                      </DataTableRow>
-                    ) : (
-                      <DataTableRow>
-                        <Th />
-                        <Th>name</Th>
-                        <Th>namespace</Th>
-                        <Th>kind</Th>
-                        <Th>ready</Th>
-                        <Th>health</Th>
-                        <Th>age</Th>
-                      </DataTableRow>
-                    )}
+                    <DataTableRow>
+                      <Th />
+                      {(isPodView ? podVisible : otherVisible).map((c) => (
+                        <Th key={c.key}>{c.label}</Th>
+                      ))}
+                    </DataTableRow>
                   </DataTableHeader>
                   <DataTableBody>
                     {filteredItems.map((w) =>
@@ -854,12 +1024,14 @@ export function WorkloadsView() {
                         <PodRow
                           key={`${w.kind}/${w.namespace}/${w.name}`}
                           w={w}
+                          columns={podVisible}
                           onClick={openResource}
                         />
                       ) : (
                         <Row
                           key={`${w.kind}/${w.namespace}/${w.name}`}
                           w={w}
+                          columns={otherVisible}
                           onClick={openResource}
                         />
                       ),

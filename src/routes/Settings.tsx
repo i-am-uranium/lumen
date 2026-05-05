@@ -1,7 +1,9 @@
-import { Laptop, Lock, LockOpen, Moon, Sun } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Keyboard, Laptop, Lock, LockOpen, Moon, RotateCcw, Sun } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
 import { cn } from "@/lib/utils";
+import { captureChord, REGISTRY } from "@/lib/shortcuts";
 
 /**
  * Lumen settings page (D7 — minimal scope).
@@ -131,15 +133,19 @@ export function Settings() {
           </button>
         </Section>
 
+        <ShortcutsSection />
+
         <Section
           title="Coming soon"
           description="Settings landing here in future Lumen releases."
         >
           <ul className="space-y-1 text-[12px] text-text-secondary">
-            <li>• Configurable keyboard shortcuts</li>
             <li>• Default cluster context + namespace</li>
             <li>• Activity-stream filter presets</li>
-            <li>• Column ordering + favorite resources per workload list</li>
+            <li>
+              • Column reorder + favorite resources (current release ships{" "}
+              <em>show/hide</em> only)
+            </li>
           </ul>
         </Section>
       </div>
@@ -164,5 +170,101 @@ function Section({
       )}
       <div className="mt-3">{children}</div>
     </section>
+  );
+}
+
+/**
+ * Shortcut editor (D7 stretch). Each row shows the active chord
+ * (override or default) and a "record" button that captures the next
+ * keystroke. Esc cancels the recorder. Reset clears every override.
+ */
+function ShortcutsSection() {
+  const overrides = useUiSettings((s) => s.shortcuts);
+  const setShortcut = useUiSettings((s) => s.setShortcut);
+  const resetShortcuts = useUiSettings((s) => s.resetShortcuts);
+  const [recording, setRecording] = useState<string | null>(null);
+
+  // Capture the next keypress when recording is active. Bound here (not
+  // in the row) so only one listener is alive at a time.
+  useEffect(() => {
+    if (!recording) return;
+    const cleanup = captureChord((chord) => {
+      if (chord !== null) setShortcut(recording, chord);
+      setRecording(null);
+    });
+    return cleanup;
+  }, [recording, setShortcut]);
+
+  return (
+    <Section
+      title="Keyboard shortcuts"
+      description="Override the global chords. Press a key combination to record. Esc cancels."
+    >
+      <div className="space-y-2">
+        {REGISTRY.map((action) => {
+          const active = overrides[action.id] ?? action.defaultChord;
+          const isOverride = !!overrides[action.id];
+          const isRecording = recording === action.id;
+          return (
+            <div
+              key={action.id}
+              className="flex items-center justify-between gap-3 rounded border border-border-subtle bg-elevated p-2.5"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <Keyboard className="size-3 text-text-muted" />
+                  <span className="text-[12px] font-medium text-text-primary">
+                    {action.label}
+                  </span>
+                  {isOverride && (
+                    <span className="rounded bg-accent-primary-soft px-1 text-[9px] uppercase tracking-wide text-accent-primary">
+                      custom
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[11px] text-text-muted">
+                  {action.description}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setRecording(isRecording ? null : action.id)}
+                  className={cn(
+                    "rounded border px-2 py-1 font-mono text-[11px]",
+                    isRecording
+                      ? "border-accent-primary bg-accent-primary-soft text-accent-primary"
+                      : "border-border-default bg-surface text-text-primary hover:bg-hover",
+                  )}
+                >
+                  {isRecording ? "press a key…" : active}
+                </button>
+                {isOverride && (
+                  <button
+                    type="button"
+                    onClick={() => setShortcut(action.id, null)}
+                    title="reset to default"
+                    className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+                  >
+                    <RotateCcw className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {Object.keys(overrides).length > 0 && (
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={resetShortcuts}
+            className="text-[11px] text-text-muted hover:text-text-primary"
+          >
+            reset all overrides
+          </button>
+        </div>
+      )}
+    </Section>
   );
 }

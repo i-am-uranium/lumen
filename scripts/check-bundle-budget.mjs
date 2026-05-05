@@ -4,11 +4,14 @@ import { join } from "node:path";
 const budgets = [
   { label: "main app chunk", pattern: /^index-.*\.js$/, maxKb: 500 },
   { label: "terminal chunk", pattern: /^ShellTerminalHost-.*\.js$/, maxKb: 430 },
-  // Workloads chunk includes ResourceDetailDrawer + every drawer dialog
-  // (set-image, compare-across-clusters, vuln-scan section). Bumped
-  // 90 → 110 in the Bundle-CD combined PR. If this climbs further,
-  // code-split the dialogs into their own lazy chunks before raising again.
-  { label: "workloads route", pattern: /^WorkloadsView-.*\.js$/, maxKb: 110 },
+  // Workloads chunk includes ResourceDetailDrawer + the inline scan/severity
+  // helpers. Set-image, compare-across-clusters, and vuln-scan dialogs are
+  // lazy-loaded into their own chunks (see ResourceDetailDrawer.tsx). After
+  // that split landed, the chunk dropped from ~90 KiB back to ~85 KiB; the
+  // budget is set with a small headroom for future drawer additions. If
+  // this climbs back toward 100 KiB, lazy-split the next-largest section
+  // (likely PropertiesTab subtrees) before raising the cap.
+  { label: "workloads route", pattern: /^WorkloadsView-.*\.js$/, maxKb: 95 },
 ];
 
 const assetsDir = join(process.cwd(), "dist", "assets");
