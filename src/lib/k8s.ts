@@ -595,6 +595,28 @@ export type ArgoApplicationDetail = {
   history: ArgoHistoryEntry[];
 };
 
+/** Mirrors src-tauri/src/k8s/argocd.rs `SyncOptions`. Field names use
+ *  camelCase because serde-rename converts the Rust snake_case form. */
+export type ArgoResourceRef = {
+  group: string;
+  kind: string;
+  namespace?: string;
+  name: string;
+};
+export type ArgoSyncOptions = {
+  revision?: string;
+  prune?: boolean;
+  dryRun?: boolean;
+  force?: boolean;
+  replace?: boolean;
+  serverSideApply?: boolean;
+  applyOutOfSyncOnly?: boolean;
+  respectIgnoreDifferences?: boolean;
+  pruneLast?: boolean;
+  retryLimit?: number | null;
+  resources?: ArgoResourceRef[];
+};
+
 // ─── API ──────────────────────────────────────────────────────────────────
 
 export const k8s = {
@@ -947,20 +969,31 @@ export const k8s = {
       name,
     }),
   /** Trigger a sync. Sets `.operation.sync` on the Application CRD —
-   *  the ArgoCD controller picks up the operation and reconciles. */
+   *  the ArgoCD controller picks up the operation and reconciles.
+   *  See {@link ArgoSyncOptions} for the full set of canonical flags. */
   syncArgocdApplication: (
     context: string | undefined,
     namespace: string,
     name: string,
-    prune: boolean,
-    dryRun: boolean,
+    options: ArgoSyncOptions,
   ) =>
     invoke<void>("sync_argocd_application", {
       context,
       namespace,
       name,
-      prune,
-      dryRun,
+      options,
+    }),
+  /** Cancel an in-flight sync operation. Patches `.operation` to null —
+   *  same path as the upstream ArgoCD UI's "Terminate" button. */
+  terminateArgocdOperation: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+  ) =>
+    invoke<void>("terminate_argocd_operation", {
+      context,
+      namespace,
+      name,
     }),
   /** Annotation-based refresh. `hard=true` re-clones the repo. */
   refreshArgocdApplication: (
