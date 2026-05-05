@@ -352,6 +352,23 @@ export type CrInstance = {
   status_hint: string | null;
 };
 
+// ─── CronJob manual runs (C3) ─────────────────────────────────────────────
+
+/**
+ * Mirrors src-tauri/src/k8s/actions.rs `ManualRunSummary` — a single Job
+ * created by a manual CronJob trigger, flattened to what the drawer
+ * inline panel renders.
+ */
+export type ManualRunSummary = {
+  name: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  succeeded: number;
+  failed: number;
+  active: number;
+};
+
 // ─── Team Access ──────────────────────────────────────────────────────────
 
 export type AccessTemplate = "viewer" | "editor" | "admin";
@@ -627,6 +644,38 @@ export const k8s = {
       kind,
       name,
       replicas,
+      context,
+    }),
+  /**
+   * List Jobs that were created by manual triggers of a CronJob — used by
+   * the drawer's "Manual runs" section. Filtered server-side by the
+   * cronjob.kubernetes.io/instantiate=manual label and by ownerReference.
+   */
+  listManualCronjobRuns: (namespace: string, name: string, context?: string) =>
+    invoke<ManualRunSummary[]>("list_manual_cronjob_runs", {
+      namespace,
+      name,
+      context,
+    }),
+  /**
+   * Hot-swap a container's image on a Deployment / StatefulSet / DaemonSet —
+   * equivalent to `kubectl set image <kind>/<name> <container>=<image>`.
+   * Triggers a normal rolling update through the controller.
+   */
+  setWorkloadImage: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    container: string,
+    image: string,
+    context?: string,
+  ) =>
+    invoke<void>("set_workload_image", {
+      namespace,
+      kind,
+      name,
+      container,
+      image,
       context,
     }),
   deletePod: (namespace: string, name: string, context?: string) =>
