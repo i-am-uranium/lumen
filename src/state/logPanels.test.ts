@@ -48,6 +48,20 @@ describe("panelReducer (leaf only)", () => {
     expect((s as LeafPanel).activeTab).toBe("t1");
   });
 
+  it("replaceTab can replace the only placeholder tab", () => {
+    let s: PanelTree = initialPanel({ id: "tab-deploy-api", podName: "api" });
+    s = panelReducer(s, {
+      type: "replaceTab",
+      tabId: "tab-deploy-api",
+      tab: { id: "tab-api-7f9d", podName: "api-7f9d" },
+    });
+
+    expect((s as LeafPanel).tabs).toEqual([
+      { id: "tab-api-7f9d", podName: "api-7f9d" },
+    ]);
+    expect((s as LeafPanel).activeTab).toBe("tab-api-7f9d");
+  });
+
   it("initial leaf has stable id", () => {
     const s0 = initialPanel(tab("t1"));
     expect(s0.id).toBe(ROOT_LEAF_ID);

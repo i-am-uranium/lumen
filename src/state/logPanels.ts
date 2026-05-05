@@ -23,6 +23,7 @@ export type PanelTree = LeafPanel | SplitPanel;
 
 export type PanelAction =
   | { type: "addTab"; tab: Tab; leafId?: string }
+  | { type: "replaceTab"; tabId: TabId; tab: Tab }
   | { type: "closeTab"; tabId: TabId }
   | { type: "setActiveTab"; tabId: TabId }
   | { type: "splitPanel"; sourceLeafId: string; direction: "h" | "v"; movingTabId?: TabId }
@@ -135,6 +136,22 @@ export function panelReducer(state: PanelTree, action: PanelAction): PanelTree {
         activeTab: action.tab.id,
       };
       return replaceLeaf(state, targetLeafId, updated);
+    }
+    case "replaceTab": {
+      const owner = findLeafForTab(state, action.tabId);
+      if (!owner) return state;
+      if (
+        action.tab.id !== action.tabId &&
+        allLeaves(state).some((l) => l.tabs.some((t) => t.id === action.tab.id))
+      ) {
+        return state;
+      }
+      const updated: LeafPanel = {
+        ...owner,
+        tabs: owner.tabs.map((t) => (t.id === action.tabId ? action.tab : t)),
+        activeTab: owner.activeTab === action.tabId ? action.tab.id : owner.activeTab,
+      };
+      return replaceLeaf(state, owner.id, updated);
     }
     case "closeTab": {
       const owner = findLeafForTab(state, action.tabId);

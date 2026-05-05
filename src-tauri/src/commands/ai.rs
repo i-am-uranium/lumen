@@ -1,6 +1,7 @@
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeSet,
     env,
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -235,11 +236,21 @@ pub async fn run_ai_command(request: AiCommandRunRequest) -> AppResult<AiCommand
         Ok(output) => {
             let output =
                 output.map_err(|e| AppError::Internal(format!("failed to run command: {e}")))?;
+            let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let mut exit_code = output.status.code();
+            if output.status.success() {
+                if let Some(filter) = parsed.grep_filter.as_ref() {
+                    let filtered = apply_grep_filter(&stdout, filter);
+                    stdout = filtered.stdout;
+                    exit_code = Some(filtered.exit_code);
+                }
+            }
+
             Ok(AiCommandRunResult {
                 command: parsed.display_command,
-                stdout: truncate_utf8(&String::from_utf8_lossy(&output.stdout), MAX_OUTPUT_BYTES),
+                stdout: truncate_utf8(&stdout, MAX_OUTPUT_BYTES),
                 stderr: truncate_utf8(&String::from_utf8_lossy(&output.stderr), MAX_OUTPUT_BYTES),
-                exit_code: output.status.code(),
+                exit_code,
                 timed_out: false,
             })
         }
@@ -261,6 +272,22 @@ struct ParsedAiCommand {
     program: String,
     args: Vec<String>,
     display_command: String,
+    grep_filter: Option<GrepFilter>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GrepFilter {
+    pattern: String,
+    before_context: usize,
+    after_context: usize,
+    case_insensitive: bool,
+    display_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GrepOutput {
+    stdout: String,
+    exit_code: i32,
 }
 
 fn parse_ai_command(command: &str, context: Option<&str>) -> AppResult<ParsedAiCommand> {
@@ -268,20 +295,51 @@ fn parse_ai_command(command: &str, context: Option<&str>) -> AppResult<ParsedAiC
     if tokens.is_empty() {
         return Err(AppError::Internal("command is empty".into()));
     }
-    if tokens.iter().any(|token| is_shell_operator(token)) {
-        return Err(AppError::Internal(
-            "shell operators and pipelines are not supported for assistant-run commands".into(),
-        ));
+    let pipe_index = tokens.iter().position(|token| token == "|");
+    let (kubectl_tokens, grep_filter) = if let Some(index) = pipe_index {
+        if tokens[index + 1..].iter().any(|token| token == "|") {
+            return Err(AppError::Internal(
+                "only one safe grep pipeline is supported for assistant-run commands".into(),
+            ));
+        }
+        if index == 0 || index + 1 >= tokens.len() {
+            return Err(AppError::Internal(
+                "pipeline must contain a kubectl command followed by grep".into(),
+            ));
+        }
+        let left = tokens[..index].to_vec();
+        let right = tokens[index + 1..].to_vec();
+        if left.iter().any(|token| is_shell_operator(token))
+            || right.iter().any(|token| is_shell_operator(token))
+        {
+            return Err(AppError::Internal(
+                "shell operators are not supported for assistant-run commands".into(),
+            ));
+        }
+        (left, Some(parse_safe_grep_filter(&right)?))
+    } else {
+        if tokens.iter().any(|token| is_shell_operator(token)) {
+            return Err(AppError::Internal(
+                "shell operators and pipelines are not supported for assistant-run commands".into(),
+            ));
+        }
+        (tokens, None)
+    };
+
+    if kubectl_tokens.is_empty() {
+        return Err(AppError::Internal("command is empty".into()));
     }
 
-    let program = tokens[0].trim_start_matches("`").trim_end_matches("`");
+    let program = kubectl_tokens[0]
+        .trim_start_matches("`")
+        .trim_end_matches("`");
     if program != "kubectl" {
         return Err(AppError::Internal(
             "only kubectl inspection commands can be run from the assistant".into(),
         ));
     }
 
-    let mut args = tokens[1..].to_vec();
+    let mut args = kubectl_tokens[1..].to_vec();
     let verb = first_kubectl_verb(&args)
         .ok_or_else(|| AppError::Internal("could not identify kubectl verb".into()))?;
     if !is_read_only_kubectl_verb(&verb, &args) {
@@ -301,12 +359,184 @@ fn parse_ai_command(command: &str, context: Option<&str>) -> AppResult<ParsedAiC
         .chain(args.iter().map(|arg| quote_arg(arg)))
         .collect::<Vec<_>>()
         .join(" ");
+    let display_command = if let Some(filter) = grep_filter.as_ref() {
+        format!(
+            "{display_command} | grep {}",
+            filter
+                .display_args
+                .iter()
+                .map(|arg| quote_arg(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    } else {
+        display_command
+    };
 
     Ok(ParsedAiCommand {
         program: program.to_string(),
         args,
         display_command,
+        grep_filter,
     })
+}
+
+fn parse_safe_grep_filter(tokens: &[String]) -> AppResult<GrepFilter> {
+    let program = tokens
+        .first()
+        .map(|token| token.trim_start_matches("`").trim_end_matches("`"))
+        .unwrap_or_default();
+    if program != "grep" {
+        return Err(AppError::Internal(
+            "assistant-run pipelines only support grep after kubectl".into(),
+        ));
+    }
+
+    let mut filter = GrepFilter {
+        pattern: String::new(),
+        before_context: 0,
+        after_context: 0,
+        case_insensitive: false,
+        display_args: tokens[1..].to_vec(),
+    };
+    let mut i = 1;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        match token.as_str() {
+            "-i" | "--ignore-case" => filter.case_insensitive = true,
+            "-F" | "--fixed-strings" => {}
+            "-A" | "--after-context" => {
+                i += 1;
+                filter.after_context = parse_grep_context(tokens.get(i), token)?;
+            }
+            "-B" | "--before-context" => {
+                i += 1;
+                filter.before_context = parse_grep_context(tokens.get(i), token)?;
+            }
+            "-C" | "--context" => {
+                i += 1;
+                let context = parse_grep_context(tokens.get(i), token)?;
+                filter.before_context = context;
+                filter.after_context = context;
+            }
+            "-e" | "--regexp" => {
+                i += 1;
+                filter.pattern = tokens.get(i).cloned().ok_or_else(|| {
+                    AppError::Internal(format!("{token} requires a grep pattern"))
+                })?;
+            }
+            _ if token.starts_with("--after-context=") => {
+                filter.after_context = parse_context_value(
+                    token.trim_start_matches("--after-context="),
+                    "--after-context",
+                )?;
+            }
+            _ if token.starts_with("--before-context=") => {
+                filter.before_context = parse_context_value(
+                    token.trim_start_matches("--before-context="),
+                    "--before-context",
+                )?;
+            }
+            _ if token.starts_with("--context=") => {
+                let context =
+                    parse_context_value(token.trim_start_matches("--context="), "--context")?;
+                filter.before_context = context;
+                filter.after_context = context;
+            }
+            _ if token.starts_with("-A") && token.len() > 2 => {
+                filter.after_context = parse_context_value(&token[2..], "-A")?;
+            }
+            _ if token.starts_with("-B") && token.len() > 2 => {
+                filter.before_context = parse_context_value(&token[2..], "-B")?;
+            }
+            _ if token.starts_with("-C") && token.len() > 2 => {
+                let context = parse_context_value(&token[2..], "-C")?;
+                filter.before_context = context;
+                filter.after_context = context;
+            }
+            _ if token.starts_with('-') => {
+                return Err(AppError::Internal(format!(
+                    "grep option {token} is not supported for assistant-run commands"
+                )));
+            }
+            _ => {
+                if filter.pattern.is_empty() {
+                    filter.pattern = token.clone();
+                } else {
+                    return Err(AppError::Internal(
+                        "assistant-run grep pipelines support one pattern".into(),
+                    ));
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if filter.pattern.is_empty() {
+        return Err(AppError::Internal(
+            "grep pipeline requires a pattern".into(),
+        ));
+    }
+    Ok(filter)
+}
+
+fn parse_grep_context(value: Option<&String>, flag: &str) -> AppResult<usize> {
+    parse_context_value(
+        value
+            .map(String::as_str)
+            .ok_or_else(|| AppError::Internal(format!("{flag} requires a context value")))?,
+        flag,
+    )
+}
+
+fn parse_context_value(value: &str, flag: &str) -> AppResult<usize> {
+    value.parse::<usize>().map_err(|_| {
+        AppError::Internal(format!(
+            "{flag} requires a non-negative integer context value"
+        ))
+    })
+}
+
+fn apply_grep_filter(stdout: &str, filter: &GrepFilter) -> GrepOutput {
+    let lines: Vec<&str> = stdout.lines().collect();
+    let mut selected = BTreeSet::new();
+    let pattern = if filter.case_insensitive {
+        filter.pattern.to_lowercase()
+    } else {
+        filter.pattern.clone()
+    };
+
+    for (index, line) in lines.iter().enumerate() {
+        let haystack = if filter.case_insensitive {
+            line.to_lowercase()
+        } else {
+            (*line).to_string()
+        };
+        if haystack.contains(&pattern) {
+            let start = index.saturating_sub(filter.before_context);
+            let end = usize::min(
+                lines.len().saturating_sub(1),
+                index.saturating_add(filter.after_context),
+            );
+            for selected_index in start..=end {
+                selected.insert(selected_index);
+            }
+        }
+    }
+
+    let stdout = selected
+        .iter()
+        .map(|index| lines[*index])
+        .collect::<Vec<_>>()
+        .join("\n");
+    GrepOutput {
+        stdout: if stdout.is_empty() {
+            stdout
+        } else {
+            format!("{stdout}\n")
+        },
+        exit_code: if selected.is_empty() { 1 } else { 0 },
+    }
 }
 
 fn shell_split(input: &str) -> AppResult<Vec<String>> {
@@ -578,9 +808,45 @@ mod tests {
     }
 
     #[test]
-    fn rejects_shell_pipeline() {
-        let err = parse_ai_command("kubectl get pods | grep CrashLoop", Some("ctx")).unwrap_err();
-        assert!(err.to_string().contains("shell operators"));
+    fn parses_read_only_kubectl_command_with_safe_grep_pipeline() {
+        let parsed = parse_ai_command(
+            "kubectl describe pod metabase-867b759b5b-fg7j8 -n metabase | grep -A 10 'Last State'",
+            Some("ctx"),
+        )
+        .expect("safe grep pipeline should parse");
+
+        assert_eq!(parsed.program, "kubectl");
+        assert_eq!(parsed.args[0], "--context=ctx");
+        assert!(parsed.args.iter().any(|arg| arg == "describe"));
+        assert!(parsed.display_command.contains("| grep -A 10 'Last State'"));
+    }
+
+    #[test]
+    fn filters_grep_output_with_after_context() {
+        let filter = parse_safe_grep_filter(&[
+            "grep".to_string(),
+            "-A".to_string(),
+            "2".to_string(),
+            "Last State".to_string(),
+        ])
+        .expect("grep filter should parse");
+
+        let output = apply_grep_filter(
+            "Name: api\nState: Running\nLast State: Terminated\nReason: OOMKilled\nExit Code: 137\nReady: False\n",
+            &filter,
+        );
+
+        assert_eq!(
+            output.stdout,
+            "Last State: Terminated\nReason: OOMKilled\nExit Code: 137\n"
+        );
+        assert_eq!(output.exit_code, 0);
+    }
+
+    #[test]
+    fn rejects_non_grep_pipeline() {
+        let err = parse_ai_command("kubectl get pods | awk '{print $1}'", Some("ctx")).unwrap_err();
+        assert!(err.to_string().contains("only support grep"));
     }
 
     #[test]
