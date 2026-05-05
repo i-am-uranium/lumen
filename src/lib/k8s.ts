@@ -616,6 +616,12 @@ export const k8s = {
     }),
   deletePod: (namespace: string, name: string, context?: string) =>
     invoke<void>("delete_pod", { namespace, name, context }),
+  /**
+   * Manually trigger a CronJob — equivalent to `kubectl create job
+   * --from=cronjob/<name>`. Resolves to the name of the freshly-created Job.
+   */
+  triggerCronjob: (namespace: string, name: string, context?: string) =>
+    invoke<string>("trigger_cronjob", { namespace, name, context }),
   deleteResource: (
     namespace: string,
     kind: WorkloadKind,
