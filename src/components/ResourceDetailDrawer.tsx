@@ -31,6 +31,7 @@ import { useUiSettings } from "@/state/uiSettings";
 import { aiResourceUrl } from "@/lib/aiNavigation";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { useShortcut } from "@/lib/shortcuts";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
@@ -180,34 +181,33 @@ export function ResourceDetailDrawer({
     }
   }, [resource?.kind, resource?.namespace, resource?.name]);
 
-  // Hotkeys (only when drawer is open).
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      switch (e.key.toLowerCase()) {
-        case "escape":
-          onClose();
-          break;
-        case "l":
-          if (canViewLogs) handleViewLogs();
-          break;
-        case "s":
-          if (isPod) openShell();
-          break;
-        case "d":
-          if (isPod) handleDownloadLogs();
-          break;
-        case "y":
-          setActiveTab("yaml");
-          break;
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isPod, resource]);
+  // Hotkeys (only when drawer is open). Registered through the shortcut
+  // registry so users can rebind them from Settings — see shortcuts.ts
+  // for the per-action ids. `enabled: open` keeps the listeners off when
+  // no resource is focused.
+  useShortcut("drawerClose", () => onClose(), { enabled: open });
+  useShortcut(
+    "drawerLogs",
+    () => {
+      if (canViewLogs) handleViewLogs();
+    },
+    { enabled: open },
+  );
+  useShortcut(
+    "drawerShell",
+    () => {
+      if (isPod) openShell();
+    },
+    { enabled: open },
+  );
+  useShortcut(
+    "drawerDownload",
+    () => {
+      if (isPod) handleDownloadLogs();
+    },
+    { enabled: open },
+  );
+  useShortcut("drawerYaml", () => setActiveTab("yaml"), { enabled: open });
 
   // Lumen-distinct: clicking "view logs" stays in-context — switch the
   // drawer to the Logs tab (which streams inline) instead of navigating
