@@ -8,9 +8,12 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{registry, time, types::WorkloadKind};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
+use k8s_openapi::api::batch::v1::{CronJob, Job, JobSpec};
 use k8s_openapi::api::core::v1::{Event, Node, Pod};
 use k8s_openapi::api::policy::v1::Eviction;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{DeleteOptions, ObjectMeta, Preconditions};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
+    DeleteOptions, ObjectMeta, OwnerReference, Preconditions,
+};
 use kube::{
     api::{DeleteParams, ListParams, Patch, PatchParams, PostParams},
     core::{ApiResource, GroupVersionKind},
@@ -289,6 +292,111 @@ pub async fn drain_node(client: &Client, name: &str) -> AppResult<DrainSummary> 
     Ok(summary)
 }
 
+// ─── CronJob manual trigger ─────────────────────────────────────────────
+
+/// Build the name of the one-off Job created for a manual CronJob trigger.
+///
+/// Job/Pod names are DNS-1123 labels: ≤ 63 chars and they must end in an
+/// alphanumeric. We append `-manual-<unix-secs>` (always alphanumeric-tailed)
+/// to the cronjob name and truncate the *prefix* if the combined string would
+/// exceed 63. If the truncated prefix ends in `-` or `.` we trim it so the
+/// boundary char is never an illegal terminator on its own.
+fn derive_manual_job_name(cronjob_name: &str, unix_secs: i64) -> String {
+    const MAX: usize = 63;
+    let suffix = format!("-manual-{unix_secs}");
+    let max_prefix = MAX.saturating_sub(suffix.len());
+    let mut prefix: String = cronjob_name.chars().take(max_prefix).collect();
+    // Strip any trailing non-alphanumeric chars from the truncated prefix so
+    // the join point (`<prefix>-manual-...`) starts cleanly.
+    while prefix
+        .chars()
+        .last()
+        .map(|c| !c.is_ascii_alphanumeric())
+        .unwrap_or(false)
+    {
+        prefix.pop();
+    }
+    format!("{prefix}{suffix}")
+}
+
+/// Manually trigger a CronJob by creating a one-off Job from its
+/// `spec.jobTemplate`. Mirrors `kubectl create job --from=cronjob/<name>`:
+/// the new Job's name is `<cronjob>-manual-<unix-secs>`, it carries an
+/// ownerReference to the CronJob (so the existing GC and history limits
+/// apply), and inherits the cronjob's job-template labels & annotations.
+pub async fn trigger_cronjob(client: &Client, namespace: &str, name: &str) -> AppResult<String> {
+    let cronjobs: Api<CronJob> = Api::namespaced(client.clone(), namespace);
+    let cj = cronjobs
+        .get(name)
+        .await
+        .map_err(|e| AppError::K8s(format!("fetch cronjob {name}: {e}")))?;
+
+    let template = cj
+        .spec
+        .as_ref()
+        .map(|s| &s.job_template)
+        .ok_or_else(|| AppError::K8s(format!("cronjob {name} has no spec")))?;
+
+    let job_spec: JobSpec = template
+        .spec
+        .clone()
+        .ok_or_else(|| AppError::K8s(format!("cronjob {name} jobTemplate has no spec")))?;
+
+    let unix_secs = chrono::Utc::now().timestamp();
+    let job_name = derive_manual_job_name(name, unix_secs);
+
+    let cj_uid = cj
+        .metadata
+        .uid
+        .clone()
+        .ok_or_else(|| AppError::K8s(format!("cronjob {name} has no uid")))?;
+
+    let owner = OwnerReference {
+        api_version: "batch/v1".to_string(),
+        kind: "CronJob".to_string(),
+        name: name.to_string(),
+        uid: cj_uid,
+        controller: Some(true),
+        block_owner_deletion: Some(true),
+    };
+
+    // Carry forward labels/annotations from the cronjob's job template, then
+    // overlay the standard `cronjob.kubernetes.io/instantiate=manual` marker
+    // so the new Job is easy to spot in `kubectl get jobs`.
+    let mut labels = template
+        .metadata
+        .as_ref()
+        .and_then(|m| m.labels.clone())
+        .unwrap_or_default();
+    labels
+        .entry("cronjob.kubernetes.io/instantiate".to_string())
+        .or_insert_with(|| "manual".to_string());
+
+    let annotations = template
+        .metadata
+        .as_ref()
+        .and_then(|m| m.annotations.clone());
+
+    let job = Job {
+        metadata: ObjectMeta {
+            name: Some(job_name.clone()),
+            namespace: Some(namespace.to_string()),
+            labels: Some(labels),
+            annotations,
+            owner_references: Some(vec![owner]),
+            ..Default::default()
+        },
+        spec: Some(job_spec),
+        status: None,
+    };
+
+    let jobs: Api<Job> = Api::namespaced(client.clone(), namespace);
+    jobs.create(&PostParams::default(), &job)
+        .await
+        .map(|_| job_name)
+        .map_err(|e| AppError::K8s(format!("create job from cronjob {name}: {e}")))
+}
+
 /// Delete a single pod. The controller (ReplicaSet / StatefulSet / DaemonSet
 /// / Job) recreates it unless it's a bare pod.
 pub async fn delete_pod(client: &Client, namespace: &str, name: &str) -> AppResult<()> {
@@ -516,8 +624,41 @@ pub async fn apply_resource(
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_apply_manifest;
+    use super::{derive_manual_job_name, prepare_apply_manifest};
     use crate::k8s::types::WorkloadKind;
+
+    #[test]
+    fn derive_manual_job_name_short_cronjob_passes_through() {
+        let n = derive_manual_job_name("nightly-backup", 1_700_000_000);
+        assert_eq!(n, "nightly-backup-manual-1700000000");
+        assert!(n.len() <= 63);
+    }
+
+    #[test]
+    fn derive_manual_job_name_truncates_long_cronjob_to_dns_label_limit() {
+        // 60-char name + `-manual-1700000000` (18 chars) would be 78 — must be capped at 63.
+        let cj = "a".repeat(60);
+        let n = derive_manual_job_name(&cj, 1_700_000_000);
+        assert!(n.len() <= 63, "got {} chars: {}", n.len(), n);
+        assert!(n.ends_with("-manual-1700000000"));
+    }
+
+    #[test]
+    fn derive_manual_job_name_strips_dash_at_truncation_boundary() {
+        // Truncation lands exactly on a `-`; the trailing dash must be removed
+        // so `<prefix>-manual-...` doesn't become `<prefix>--manual-...`.
+        let cj = "abcdef-".to_string() + &"x".repeat(60);
+        let n = derive_manual_job_name(&cj, 1_700_000_000);
+        assert!(!n.contains("--manual"), "got: {n}");
+        assert!(n.len() <= 63);
+    }
+
+    #[test]
+    fn derive_manual_job_name_handles_empty_cronjob_name() {
+        // Edge case: should not panic on empty/whitespace input.
+        let n = derive_manual_job_name("", 1_700_000_000);
+        assert_eq!(n, "-manual-1700000000");
+    }
 
     #[test]
     fn prepare_apply_manifest_pins_namespaced_metadata() {

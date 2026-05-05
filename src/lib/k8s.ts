@@ -644,6 +644,12 @@ export const k8s = {
    */
   drainNode: (name: string, context?: string) =>
     invoke<DrainSummary>("drain_node", { name, context }),
+  /**
+   * Manually trigger a CronJob — equivalent to `kubectl create job
+   * --from=cronjob/<name>`. Resolves to the name of the freshly-created Job.
+   */
+  triggerCronjob: (namespace: string, name: string, context?: string) =>
+    invoke<string>("trigger_cronjob", { namespace, name, context }),
   deleteResource: (
     namespace: string,
     kind: WorkloadKind,

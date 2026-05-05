@@ -7,9 +7,12 @@ import {
   findLeafForTab,
   allLeaves,
   allTabsSorted,
+  isAggregateTab,
+  tabLabel,
   type PanelTree,
   type LeafPanel,
   type SplitPanel,
+  type AggregateTab,
 } from "./logPanels";
 
 function tab(id: string) {
@@ -243,5 +246,73 @@ describe("panelReducer (split)", () => {
     expect(allTabsSorted(s).map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
     expect(findLeafForTab(s, "t1")?.tabs.map((t) => t.id)).toEqual(["t1"]);
     expect(findLeafForTab(s, "t2")?.tabs.map((t) => t.id).sort()).toEqual(["t2", "t3"]);
+  });
+});
+
+describe("aggregate tab support", () => {
+  function aggTab(id: string, pods: string[], title?: string): AggregateTab {
+    return { id, kind: "aggregate", title: title ?? `${pods.length} pods`, pods };
+  }
+
+  it("isAggregateTab discriminates by kind", () => {
+    expect(isAggregateTab({ id: "t1", podName: "api-1" })).toBe(false);
+    expect(isAggregateTab({ id: "t1", kind: "single", podName: "api-1" })).toBe(false);
+    expect(isAggregateTab(aggTab("agg-1", ["a", "b"]))).toBe(true);
+  });
+
+  it("tabLabel returns podName for single tabs and title for aggregates", () => {
+    expect(tabLabel({ id: "t1", podName: "api-7f9d" })).toBe("api-7f9d");
+    expect(tabLabel(aggTab("agg-1", ["a", "b", "c"], "api fleet"))).toBe("api fleet");
+  });
+
+  it("addTab accepts aggregate tabs alongside single tabs", () => {
+    let s: PanelTree = initialPanel(tab("t1"));
+    s = panelReducer(s, { type: "addTab", tab: aggTab("agg-1", ["a", "b"], "two pods") });
+    const leaf = s as LeafPanel;
+    expect(leaf.tabs).toHaveLength(2);
+    expect(leaf.activeTab).toBe("agg-1");
+    const agg = leaf.tabs[1];
+    expect(isAggregateTab(agg)).toBe(true);
+    if (isAggregateTab(agg)) {
+      expect(agg.pods).toEqual(["a", "b"]);
+      expect(agg.title).toBe("two pods");
+    }
+  });
+
+  it("addTab dedupes aggregate tabs by id", () => {
+    let s: PanelTree = initialPanel(tab("t1"));
+    s = panelReducer(s, { type: "addTab", tab: aggTab("agg-1", ["a", "b"]) });
+    s = panelReducer(s, { type: "addTab", tab: aggTab("agg-1", ["c", "d"]) });
+    const leaf = s as LeafPanel;
+    expect(leaf.tabs).toHaveLength(2);
+    // Second add was ignored — still the original ["a","b"] aggregate.
+    const agg = leaf.tabs[1];
+    if (isAggregateTab(agg)) expect(agg.pods).toEqual(["a", "b"]);
+    else throw new Error("expected aggregate tab");
+  });
+
+  it("closeTab removes an aggregate tab and selects neighbor", () => {
+    let s: PanelTree = initialPanel(tab("t1"));
+    s = panelReducer(s, { type: "addTab", tab: aggTab("agg-1", ["a", "b"]) });
+    s = panelReducer(s, { type: "addTab", tab: tab("t2") });
+    s = panelReducer(s, { type: "closeTab", tabId: "agg-1" });
+    const leaf = s as LeafPanel;
+    expect(leaf.tabs.map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(leaf.activeTab).toBe("t2");
+  });
+
+  it("a single-pod tab and an aggregate containing the same pod can coexist", () => {
+    // The "+" menu for solo pods excludes pods already open as singles, but
+    // aggregates may include a pod that has its own solo tab. The reducer
+    // must permit both because their tab ids are distinct.
+    let s: PanelTree = initialPanel({ id: "tab-api-1", podName: "api-1" });
+    s = panelReducer(s, {
+      type: "addTab",
+      tab: aggTab("agg-1", ["api-1", "api-2"], "api fleet"),
+    });
+    const leaf = s as LeafPanel;
+    expect(leaf.tabs).toHaveLength(2);
+    expect(leaf.tabs[0].id).toBe("tab-api-1");
+    expect(leaf.tabs[1].id).toBe("agg-1");
   });
 });

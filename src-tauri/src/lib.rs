@@ -75,6 +75,7 @@ pub fn run() {
             commands::k8s::uncordon_node,
             commands::k8s::drain_node,
             commands::k8s::delete_resource,
+            commands::k8s::trigger_cronjob,
             commands::k8s::start_port_forward,
             commands::k8s::list_port_forwards,
             commands::k8s::stop_port_forward,
