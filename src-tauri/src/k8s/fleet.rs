@@ -190,10 +190,16 @@ pub fn detect_distribution(nodes: &[Node]) -> Option<String> {
             if labels.keys().any(|k| k.starts_with("eks.amazonaws.com/")) {
                 return Some("eks".into());
             }
-            if labels.keys().any(|k| k.starts_with("cloud.google.com/gke-")) {
+            if labels
+                .keys()
+                .any(|k| k.starts_with("cloud.google.com/gke-"))
+            {
                 return Some("gke".into());
             }
-            if labels.keys().any(|k| k.starts_with("kubernetes.azure.com/")) {
+            if labels
+                .keys()
+                .any(|k| k.starts_with("kubernetes.azure.com/"))
+            {
                 return Some("aks".into());
             }
             if labels.contains_key("node.openshift.io/os_id") {
@@ -201,7 +207,8 @@ pub fn detect_distribution(nodes: &[Node]) -> Option<String> {
             }
             if labels
                 .get("node-role.kubernetes.io/master")
-                .map(|v| v.as_str()) == Some("")
+                .map(|v| v.as_str())
+                == Some("")
                 && labels.contains_key("node.kubernetes.io/instance-type")
                 && labels
                     .get("node.kubernetes.io/instance-type")
@@ -532,7 +539,10 @@ mod tests {
 
     #[test]
     fn detects_gke_via_node_label() {
-        let nodes = vec![node_with_label("cloud.google.com/gke-os-distribution", "cos")];
+        let nodes = vec![node_with_label(
+            "cloud.google.com/gke-os-distribution",
+            "cos",
+        )];
         assert_eq!(detect_distribution(&nodes), Some("gke".into()));
     }
 
@@ -550,7 +560,9 @@ mod tests {
 
     #[test]
     fn detects_kind_via_provider_id() {
-        let nodes = vec![node_with_provider_id("kind://docker/lumen-test/lumen-test-control-plane")];
+        let nodes = vec![node_with_provider_id(
+            "kind://docker/lumen-test/lumen-test-control-plane",
+        )];
         assert_eq!(detect_distribution(&nodes), Some("kind".into()));
     }
 

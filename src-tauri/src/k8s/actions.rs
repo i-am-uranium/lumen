@@ -492,8 +492,7 @@ pub async fn list_manual_cronjob_runs(
     cronjob_name: &str,
 ) -> AppResult<Vec<ManualRunSummary>> {
     let jobs: Api<Job> = Api::namespaced(client.clone(), namespace);
-    let lp = ListParams::default()
-        .labels(&format!("{MANUAL_INSTANTIATE_LABEL}=manual"));
+    let lp = ListParams::default().labels(&format!("{MANUAL_INSTANTIATE_LABEL}=manual"));
     let list = jobs
         .list(&lp)
         .await

@@ -107,7 +107,8 @@ pub async fn scan_image(image: &str) -> AppResult<VulnReport> {
             image: image.to_string(),
             scanner_available: false,
             note: Some(
-                "trivy not detected on PATH — install via brew/apt/scoop to enable image scanning".into(),
+                "trivy not detected on PATH — install via brew/apt/scoop to enable image scanning"
+                    .into(),
             ),
             counts: VulnSeverityCounts::default(),
             findings: Vec::new(),
@@ -136,7 +137,11 @@ pub async fn scan_image(image: &str) -> AppResult<VulnReport> {
             note: Some(format!(
                 "trivy exited {} — {}",
                 output.status.code().unwrap_or(-1),
-                if stderr.is_empty() { "no stderr".to_string() } else { stderr }
+                if stderr.is_empty() {
+                    "no stderr".to_string()
+                } else {
+                    stderr
+                }
             )),
             counts: VulnSeverityCounts::default(),
             findings: Vec::new(),
