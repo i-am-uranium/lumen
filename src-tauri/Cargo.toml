@@ -1,6 +1,6 @@
 [package]
 name = "lumen"
-version = "0.6.3"
+version = "0.6.4"
 description = "Lumen - Kubernetes cluster workbench"
 authors = ["Lumen contributors"]
 edition = "2021"
