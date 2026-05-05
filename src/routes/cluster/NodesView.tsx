@@ -1,9 +1,22 @@
+import { useState } from "react";
 import { useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { Cpu, MemoryStick, RefreshCw, Server, SignalZero } from "lucide-react";
-import { k8s, type NodeSummary } from "@/lib/k8s";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Cpu,
+  Loader2,
+  Lock,
+  LockOpen,
+  MemoryStick,
+  RefreshCw,
+  Server,
+  ShieldOff,
+  SignalZero,
+} from "lucide-react";
+import { toast } from "sonner";
+import { k8s, type DrainSummary, type NodeSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 
 function formatBytes(n: number): string {
   const u = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -28,7 +41,20 @@ function barColor(pct: number): string {
   return "bg-danger";
 }
 
-function Row({ n }: { n: NodeSummary }) {
+type NodeAction =
+  | { kind: "cordon"; nodeName: string }
+  | { kind: "uncordon"; nodeName: string }
+  | { kind: "drain"; nodeName: string };
+
+function Row({
+  n,
+  busy,
+  onAction,
+}: {
+  n: NodeSummary;
+  busy: boolean;
+  onAction: (a: NodeAction) => void;
+}) {
   const cpuPct = n.cpu_usage_milli !== null && n.cpu_allocatable_milli > 0
     ? (n.cpu_usage_milli / n.cpu_allocatable_milli) * 100
     : null;
@@ -43,6 +69,14 @@ function Row({ n }: { n: NodeSummary }) {
             className={cn("size-2 rounded-full", n.ready ? "bg-success" : "bg-danger")}
           />
           <span className="text-[13px] text-text-primary font-medium">{n.name}</span>
+          {n.unschedulable && (
+            <span
+              className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-[10px] text-warning font-mono"
+              title="cordoned — scheduler will not place new pods here"
+            >
+              cordoned
+            </span>
+          )}
         </div>
         <div className="mt-0.5 flex flex-wrap gap-1">
           {n.roles.map((r) => (
@@ -94,6 +128,40 @@ function Row({ n }: { n: NodeSummary }) {
           </div>
         )}
       </td>
+      <td className="px-3 py-2.5">
+        <div className="flex items-center gap-1">
+          {n.unschedulable ? (
+            <button
+              type="button"
+              onClick={() => onAction({ kind: "uncordon", nodeName: n.name })}
+              disabled={busy}
+              title="uncordon (allow scheduling)"
+              className="p-1 rounded hover:bg-elevated text-text-secondary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <LockOpen className="size-3.5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onAction({ kind: "cordon", nodeName: n.name })}
+              disabled={busy}
+              title="cordon (stop scheduling new pods)"
+              className="p-1 rounded hover:bg-elevated text-text-secondary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Lock className="size-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onAction({ kind: "drain", nodeName: n.name })}
+            disabled={busy}
+            title="drain (cordon + evict workload pods)"
+            className="p-1 rounded hover:bg-elevated text-text-secondary hover:text-warning disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldOff className="size-3.5" />}
+          </button>
+        </div>
+      </td>
     </tr>
   );
 }
@@ -120,6 +188,7 @@ function UsageCell({ value, label }: { value: number | null; label: string }) {
 export function NodesView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
+  const qc = useQueryClient();
   // List query supplies the metrics-server enrichment (cpu/mem usage); the
   // watch only triggers cache invalidation on Node spec/status changes so we
   // refetch with fresh metrics rather than maintaining duplicate state.
@@ -138,6 +207,42 @@ export function NodesView() {
     args: { context: context || undefined },
   });
   const nodes = data ?? [];
+
+  const [pendingAction, setPendingAction] = useState<NodeAction | null>(null);
+  const [actionBusyNode, setActionBusyNode] = useState<string | null>(null);
+
+  async function performPendingAction() {
+    if (!pendingAction) return;
+    const { kind, nodeName } = pendingAction;
+    setActionBusyNode(nodeName);
+    try {
+      if (kind === "cordon") {
+        await k8s.cordonNode(nodeName, context || undefined);
+        toast.success(`cordoned ${nodeName}`);
+      } else if (kind === "uncordon") {
+        await k8s.uncordonNode(nodeName, context || undefined);
+        toast.success(`uncordoned ${nodeName}`);
+      } else {
+        const summary: DrainSummary = await k8s.drainNode(nodeName, context || undefined);
+        const parts = [`evicted ${summary.evicted}`];
+        if (summary.skipped_daemonset > 0) parts.push(`skipped ${summary.skipped_daemonset} daemonset`);
+        if (summary.skipped_mirror > 0) parts.push(`skipped ${summary.skipped_mirror} mirror`);
+        if (summary.failed.length > 0) {
+          toast.warning(
+            `drained ${nodeName}: ${parts.join(", ")} · ${summary.failed.length} failed (likely PDB-blocked)`,
+          );
+        } else {
+          toast.success(`drained ${nodeName}: ${parts.join(", ")}`);
+        }
+      }
+      setPendingAction(null);
+      await qc.invalidateQueries({ queryKey });
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setActionBusyNode(null);
+    }
+  }
   const metricsUnavailable =
     nodes.length > 0 &&
     nodes.every((node) => node.cpu_usage_milli === null && node.mem_usage_bytes === null);
@@ -207,11 +312,19 @@ export function NodesView() {
                     <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
                       taints
                     </th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
+                      actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {nodes.map((n) => (
-                    <Row key={n.name} n={n} />
+                    <Row
+                      key={n.name}
+                      n={n}
+                      busy={actionBusyNode === n.name}
+                      onAction={setPendingAction}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -219,6 +332,31 @@ export function NodesView() {
           </>
         )}
       </div>
+      {pendingAction && (
+        <ConfirmActionDialog
+          open
+          title={
+            pendingAction.kind === "cordon"
+              ? "cordon node"
+              : pendingAction.kind === "uncordon"
+                ? "uncordon node"
+                : "drain node"
+          }
+          description={
+            pendingAction.kind === "cordon"
+              ? `This marks ${pendingAction.nodeName} unschedulable. Existing pods stay running; new pods will be placed on other nodes.`
+              : pendingAction.kind === "uncordon"
+                ? `This clears the unschedulable flag on ${pendingAction.nodeName}. The scheduler will resume placing pods here.`
+                : `This cordons ${pendingAction.nodeName} and evicts every workload pod scheduled on it. DaemonSet and mirror pods are skipped. Pods blocked by a PodDisruptionBudget are reported back rather than force-deleted.`
+          }
+          target={pendingAction.nodeName}
+          confirmLabel={pendingAction.kind}
+          intent={pendingAction.kind === "drain" ? "danger" : "warning"}
+          busy={actionBusyNode === pendingAction.nodeName}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={performPendingAction}
+        />
+      )}
     </div>
   );
 }
