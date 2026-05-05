@@ -8,9 +8,11 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{registry, time, types::WorkloadKind};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
-use k8s_openapi::api::core::v1::{Event, Pod};
+use k8s_openapi::api::core::v1::{Event, Node, Pod};
+use k8s_openapi::api::policy::v1::Eviction;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{DeleteOptions, ObjectMeta, Preconditions};
 use kube::{
-    api::{DeleteParams, ListParams, Patch, PatchParams},
+    api::{DeleteParams, ListParams, Patch, PatchParams, PostParams},
     core::{ApiResource, GroupVersionKind},
     Api, Client,
 };
@@ -150,6 +152,141 @@ pub async fn scale(
         other => return Err(AppError::K8s(format!("scale not supported for {other:?}"))),
     }
     .map_err(|e| AppError::K8s(e.to_string()))
+}
+
+// ─── Node lifecycle (cordon / uncordon / drain) ─────────────────────────
+
+/// Set or clear `spec.unschedulable` on a Node — equivalent to `kubectl
+/// cordon` / `kubectl uncordon`. A cordoned node still runs its existing
+/// pods; the scheduler simply stops placing new ones on it.
+async fn set_unschedulable(client: &Client, name: &str, unschedulable: bool) -> AppResult<()> {
+    let api: Api<Node> = Api::all(client.clone());
+    let patch = serde_json::json!({ "spec": { "unschedulable": unschedulable } });
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .map(|_| ())
+        .map_err(|e| AppError::K8s(format!("patch node {name}: {e}")))
+}
+
+pub async fn cordon_node(client: &Client, name: &str) -> AppResult<()> {
+    set_unschedulable(client, name, true).await
+}
+
+pub async fn uncordon_node(client: &Client, name: &str) -> AppResult<()> {
+    set_unschedulable(client, name, false).await
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct DrainSummary {
+    pub evicted: u32,
+    pub skipped_daemonset: u32,
+    pub skipped_mirror: u32,
+    /// Pod name + reason — surfaced to the user so they can act on stuck pods
+    /// (PDB blocking, finalizer, etc.) without re-running drain blindly.
+    pub failed: Vec<DrainFailure>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DrainFailure {
+    pub namespace: String,
+    pub name: String,
+    pub reason: String,
+}
+
+const MIRROR_POD_ANNOTATION: &str = "kubernetes.io/config.mirror";
+
+/// Returns true if this pod is owned by a DaemonSet — those should never be
+/// evicted by drain; the DS controller would just recreate them on the same
+/// node.
+fn is_daemonset_pod(pod: &Pod) -> bool {
+    pod.metadata
+        .owner_references
+        .as_ref()
+        .map(|refs| {
+            refs.iter()
+                .any(|r| r.controller.unwrap_or(false) && r.kind == "DaemonSet")
+        })
+        .unwrap_or(false)
+}
+
+/// Mirror pods (static pods reflected by the kubelet into the API) cannot be
+/// evicted via the API — they're owned by the kubelet on disk. Skip silently.
+fn is_mirror_pod(pod: &Pod) -> bool {
+    pod.metadata
+        .annotations
+        .as_ref()
+        .map(|m| m.contains_key(MIRROR_POD_ANNOTATION))
+        .unwrap_or(false)
+}
+
+/// Try a PDB-respecting eviction first; on the typical "cannot evict" error
+/// (which the API server returns as a 429 with a structured cause) the caller
+/// can choose to fall back to a plain delete. For v1 we surface the eviction
+/// error as a failure rather than auto-overriding PDBs — that's the safer
+/// default and matches `kubectl drain` without `--force`.
+async fn evict_pod(client: &Client, namespace: &str, name: &str) -> AppResult<()> {
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
+    let eviction = Eviction {
+        delete_options: Some(DeleteOptions {
+            preconditions: Some(Preconditions {
+                resource_version: None,
+                uid: None,
+            }),
+            ..Default::default()
+        }),
+        metadata: ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some(namespace.to_string()),
+            ..Default::default()
+        },
+    };
+    let body = serde_json::to_vec(&eviction)
+        .map_err(|e| AppError::Internal(format!("serialize eviction: {e}")))?;
+    pods.create_subresource::<_, Eviction>("eviction", name, &PostParams::default(), &body)
+        .await
+        .map(|_| ())
+        .map_err(|e| AppError::K8s(e.to_string()))
+}
+
+/// Drain a node: cordon, then evict every non-DaemonSet, non-mirror pod
+/// scheduled on it. Returns a `DrainSummary` so the UI can show a per-pod
+/// breakdown rather than a single boolean. PDB-blocked pods become entries
+/// in `failed` — we never force-delete; that's a separate, deliberate action.
+pub async fn drain_node(client: &Client, name: &str) -> AppResult<DrainSummary> {
+    cordon_node(client, name).await?;
+
+    let pods_api: Api<Pod> = Api::all(client.clone());
+    let lp = ListParams::default().fields(&format!("spec.nodeName={name}"));
+    let pods = pods_api
+        .list(&lp)
+        .await
+        .map_err(|e| AppError::K8s(format!("list pods on node {name}: {e}")))?;
+
+    let mut summary = DrainSummary::default();
+    for pod in pods.items {
+        if is_mirror_pod(&pod) {
+            summary.skipped_mirror += 1;
+            continue;
+        }
+        if is_daemonset_pod(&pod) {
+            summary.skipped_daemonset += 1;
+            continue;
+        }
+        let pod_ns = pod.metadata.namespace.clone().unwrap_or_default();
+        let pod_name = pod.metadata.name.clone().unwrap_or_default();
+        if pod_name.is_empty() || pod_ns.is_empty() {
+            continue;
+        }
+        match evict_pod(client, &pod_ns, &pod_name).await {
+            Ok(()) => summary.evicted += 1,
+            Err(e) => summary.failed.push(DrainFailure {
+                namespace: pod_ns,
+                name: pod_name,
+                reason: e.to_string(),
+            }),
+        }
+    }
+    Ok(summary)
 }
 
 /// Delete a single pod. The controller (ReplicaSet / StatefulSet / DaemonSet

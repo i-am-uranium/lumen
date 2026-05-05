@@ -1521,6 +1521,36 @@ pub async fn delete_pod(
 }
 
 #[tauri::command]
+pub async fn cordon_node(
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    act::cordon_node(&client, &name).await
+}
+
+#[tauri::command]
+pub async fn uncordon_node(
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    act::uncordon_node(&client, &name).await
+}
+
+#[tauri::command]
+pub async fn drain_node(
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<act::DrainSummary> {
+    let client = client_for(&state, context.as_deref()).await?;
+    act::drain_node(&client, &name).await
+}
+
+#[tauri::command]
 pub async fn delete_resource(
     namespace: String,
     kind: WorkloadKind,

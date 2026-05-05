@@ -32,6 +32,7 @@ function node(overrides: Partial<NodeSummary> = {}): NodeSummary {
     age_seconds: 86_400,
     cpu_usage_milli: null,
     mem_usage_bytes: null,
+    unschedulable: false,
     ...overrides,
   };
 }
@@ -64,5 +65,31 @@ describe("NodesView", () => {
     expect(screen.getByText("ip-10-0-0-12")).toBeInTheDocument();
     expect(screen.getByText("3.90")).toBeInTheDocument();
     expect(screen.getByText("15 GiB")).toBeInTheDocument();
+  });
+
+  it("renders a cordoned badge for unschedulable nodes and shows uncordon affordance", async () => {
+    renderNodes([node({ unschedulable: true })]);
+
+    // The badge identifies cordoned state at-a-glance.
+    expect(await screen.findByText(/cordoned/i)).toBeInTheDocument();
+    // The uncordon button replaces the cordon button when the node is
+    // already cordoned — assert by tooltip since the icon-only button has
+    // no accessible name otherwise.
+    expect(
+      screen.getByTitle(/uncordon \(allow scheduling\)/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTitle(/^cordon \(stop scheduling/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows cordon and drain affordances for a schedulable node", async () => {
+    renderNodes([node({ unschedulable: false })]);
+
+    expect(
+      await screen.findByTitle(/^cordon \(stop scheduling/i),
+    ).toBeInTheDocument();
+    expect(screen.getByTitle(/drain \(cordon \+ evict/i)).toBeInTheDocument();
+    expect(screen.queryByText(/cordoned/i)).not.toBeInTheDocument();
   });
 });

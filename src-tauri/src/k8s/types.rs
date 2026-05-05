@@ -221,6 +221,10 @@ pub struct NodeSummary {
     pub age_seconds: i64,
     pub cpu_usage_milli: Option<i64>,
     pub mem_usage_bytes: Option<i64>,
+    /// Mirrors `spec.unschedulable`. `true` means the node is cordoned —
+    /// kube-scheduler will not place new pods on it. Existing pods stay put
+    /// until they are explicitly drained or rescheduled.
+    pub unschedulable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

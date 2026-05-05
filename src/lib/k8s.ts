@@ -227,6 +227,21 @@ export type NodeSummary = {
   age_seconds: number;
   cpu_usage_milli: number | null;
   mem_usage_bytes: number | null;
+  /** Mirrors `spec.unschedulable` — true when the node is cordoned. */
+  unschedulable: boolean;
+};
+
+export type DrainFailure = {
+  namespace: string;
+  name: string;
+  reason: string;
+};
+
+export type DrainSummary = {
+  evicted: number;
+  skipped_daemonset: number;
+  skipped_mirror: number;
+  failed: DrainFailure[];
 };
 
 // ─── CloudMap ─────────────────────────────────────────────────────────────
@@ -616,6 +631,19 @@ export const k8s = {
     }),
   deletePod: (namespace: string, name: string, context?: string) =>
     invoke<void>("delete_pod", { namespace, name, context }),
+  /** Mark a node unschedulable. New pods won't be placed on it; existing pods stay. */
+  cordonNode: (name: string, context?: string) =>
+    invoke<void>("cordon_node", { name, context }),
+  /** Clear `spec.unschedulable` so the scheduler resumes placing pods. */
+  uncordonNode: (name: string, context?: string) =>
+    invoke<void>("uncordon_node", { name, context }),
+  /**
+   * Cordon then evict all non-DaemonSet, non-mirror pods from the node.
+   * Returns a per-pod summary; PDB-blocked pods land in `failed` rather
+   * than being force-deleted.
+   */
+  drainNode: (name: string, context?: string) =>
+    invoke<DrainSummary>("drain_node", { name, context }),
   deleteResource: (
     namespace: string,
     kind: WorkloadKind,
