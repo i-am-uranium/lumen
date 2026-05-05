@@ -25,6 +25,7 @@ import {
   ShieldAlert,
   Star,
   UserPlus,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { PortForwardsChip } from "@/components/PortForwardsChip";
@@ -201,28 +202,47 @@ const SECTIONS: Item[] = [
   { kind: "leaf", to: "map", label: "cloudmap", icon: MapIcon },
 ];
 
-// Variant rendered when the cluster has ArgoCD installed. The detection
-// query in ClusterWorkspace picks one of these arrays — keeps the leaf
-// out of the menu for clusters without GitOps so users aren't confused
-// by an entry that would just say "ArgoCD not installed".
+// Optional in-cluster integrations. Each leaf is gated by a CRD-detection
+// query in ClusterWorkspace and only inserted into the rail when present —
+// keeps clusters without GitOps / Tekton / etc. clean of menu entries that
+// would just say "not installed".
 const ARGOCD_LEAF: Item = {
   kind: "leaf",
   to: "argocd",
   label: "argocd",
   icon: ServerCog,
 };
-const SECTIONS_WITH_ARGOCD: Item[] = (() => {
-  // Insert just after the helm leaf — both are GitOps-adjacent and
-  // sit naturally next to each other.
+const TEKTON_LEAF: Item = {
+  kind: "leaf",
+  to: "tekton",
+  label: "tekton",
+  icon: Workflow,
+};
+
+/**
+ * Build the rail's section list, splicing in optional integration leaves
+ * (ArgoCD, Tekton) when their CRDs are detected. Both sit next to the
+ * helm leaf — they're all "what's running on this cluster beyond raw
+ * K8s" entries and read naturally together. Tekton goes after ArgoCD
+ * so users with both see GitOps then CI in deploy-pipeline order.
+ */
+function buildSections({
+  argocdAvailable,
+  tektonAvailable,
+}: {
+  argocdAvailable: boolean;
+  tektonAvailable: boolean;
+}): Item[] {
   const out: Item[] = [];
   for (const item of SECTIONS) {
     out.push(item);
     if (item.kind === "leaf" && item.to === "helm") {
-      out.push(ARGOCD_LEAF);
+      if (argocdAvailable) out.push(ARGOCD_LEAF);
+      if (tektonAvailable) out.push(TEKTON_LEAF);
     }
   }
   return out;
-})();
+}
 
 const navRow = ({ isActive }: { isActive: boolean }, collapsed: boolean) =>
   cn(
@@ -681,10 +701,20 @@ export function ClusterWorkspace() {
     staleTime: 60 * 60 * 1000,
     enabled: !!context,
   });
-  const sections = useMemo(() => {
-    if (argocdAvailable.data) return SECTIONS_WITH_ARGOCD;
-    return SECTIONS;
-  }, [argocdAvailable.data]);
+  const tektonAvailable = useQuery({
+    queryKey: ["tekton", "available", context],
+    queryFn: () => k8s.detectTekton(context || undefined),
+    staleTime: 60 * 60 * 1000,
+    enabled: !!context,
+  });
+  const sections = useMemo(
+    () =>
+      buildSections({
+        argocdAvailable: argocdAvailable.data === true,
+        tektonAvailable: tektonAvailable.data === true,
+      }),
+    [argocdAvailable.data, tektonAvailable.data],
+  );
 
   return (
     <div className="flex h-full">

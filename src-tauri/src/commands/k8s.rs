@@ -1,7 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
     actions as act, argocd, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
-    rbac_details, registry, resource_insights, resources, security, storage_details, time,
+    rbac_details, registry, resource_insights, resources, security, storage_details, tekton, time,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
         PodDetails, RbacDetail, ResourceDetail, ResourceInsights, SecurityReport, StorageDetail,
@@ -2141,4 +2141,44 @@ pub async fn terminate_argocd_operation(
 ) -> AppResult<()> {
     let client = client_for(&state, context.as_deref()).await?;
     argocd::terminate_operation(&client, &namespace, &name).await
+}
+
+// ─── Tekton ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn detect_tekton(context: Option<String>, state: State<'_, AppState>) -> AppResult<bool> {
+    let client = client_for(&state, context.as_deref()).await?;
+    tekton::detect(&client).await
+}
+
+#[tauri::command]
+pub async fn list_pipeline_runs(
+    context: Option<String>,
+    namespace: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<tekton::PipelineRunSummary>> {
+    let client = client_for(&state, context.as_deref()).await?;
+    tekton::list_pipeline_runs(&client, namespace.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn get_pipeline_run(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<tekton::PipelineRunDetail> {
+    let client = client_for(&state, context.as_deref()).await?;
+    tekton::get_pipeline_run(&client, &namespace, &name).await
+}
+
+#[tauri::command]
+pub async fn cancel_pipeline_run(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    tekton::cancel_pipeline_run(&client, &namespace, &name).await
 }
