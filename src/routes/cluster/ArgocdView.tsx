@@ -5,7 +5,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   CircleStop,
+  ExternalLink,
   GitBranch,
   History as HistoryIcon,
   Loader2,
@@ -16,6 +18,7 @@ import {
   ShieldQuestion,
   Sliders,
   X,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -39,6 +42,7 @@ import {
 } from "@/components/ui/data-table";
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import { useUiSettings } from "@/state/uiSettings";
 
 /**
@@ -53,6 +57,39 @@ import { useUiSettings } from "@/state/uiSettings";
  * key off context so the cache resets cleanly when the user switches
  * clusters.
  */
+// ─── Per-resource deep-dive helpers ───────────────────────────────────────
+//
+// ArgoCD reports `destination.server` per Application. When that's the
+// in-cluster URL, the K8s objects ArgoCD manages live in the same
+// cluster Lumen is already talking to — so we can open them in the
+// standard ResourceDetailDrawer for full CTAs (YAML / events / logs /
+// scale / restart / delete / set-image).
+//
+// External destinations (ArgoCD managing remote clusters via its
+// secret-based registration) are out of scope for this v1: Lumen would
+// need to either find a matching kubeconfig context or proxy through
+// ArgoCD's HTTP API. Both are reasonable follow-ups; for now we render
+// a tooltip and keep the row non-clickable.
+const IN_CLUSTER_SERVER_VALUES = new Set([
+  "",
+  "https://kubernetes.default.svc",
+  "https://kubernetes.default.svc.cluster.local",
+  "https://kubernetes.default",
+]);
+
+function isInClusterDestination(destinationServer: string | undefined): boolean {
+  return IN_CLUSTER_SERVER_VALUES.has(destinationServer ?? "");
+}
+
+// ArgoCD reports `kind` capitalized (e.g. "Deployment"). Lumen's
+// ResourceDetailDrawer matches against lowercased identifiers from the
+// WorkloadKind enum. Lowercasing covers 95%+ of K8s kinds; a handful
+// of compound names (PodDisruptionBudget → poddisruptionbudget) match
+// because the enum strips word boundaries the same way.
+function argocdKindToLumenKind(kind: string): string {
+  return kind.toLowerCase();
+}
+
 const SYNC_STATUSES = ["Synced", "OutOfSync", "Unknown"] as const;
 const HEALTH_STATUSES = [
   "Healthy",
@@ -387,9 +424,23 @@ function ApplicationDetailPanel({
   const [terminateConfirm, setTerminateConfirm] = useState(false);
   const [pendingRollback, setPendingRollback] =
     useState<ArgoHistoryEntry | null>(null);
+  // Selected managed-resource: opens Lumen's ResourceDetailDrawer for the
+  // underlying K8s object so users get full per-resource CTAs (YAML, events,
+  // logs, scale, restart, delete, set-image) without leaving Lumen.
+  const [drawerResource, setDrawerResource] = useState<{
+    kind: string;
+    namespace: string;
+    name: string;
+  } | null>(null);
+  // Per-resource sync — visually distinct from the app-level sync busy state
+  // so the two can run independently if needed.
+  const [perResourceSyncBusy, setPerResourceSyncBusy] = useState<string | null>(
+    null,
+  );
 
   const lockedTitle = readOnly ? " (read-only mode)" : "";
   const operationRunning = detail.data?.operation_state?.phase === "Running";
+  const inCluster = isInClusterDestination(app.destination_server);
 
   async function performSync(options: ArgoSyncOptions) {
     setBusyAction("sync");
@@ -428,6 +479,39 @@ function ApplicationDetailPanel({
       toast.error((e as Error).message ?? String(e));
     } finally {
       setBusyAction(null);
+    }
+  }
+
+  /**
+   * Sync a single managed resource — translates to a normal sync with the
+   * `resources` array narrowed to one entry. ArgoCD's controller honors
+   * the subset and skips everything else.
+   */
+  async function performSyncResource(r: ArgoApplicationResource) {
+    const key = resourceKey(r);
+    setPerResourceSyncBusy(key);
+    try {
+      await k8s.syncArgocdApplication(
+        context || undefined,
+        app.namespace,
+        app.name,
+        {
+          resources: [
+            {
+              group: r.group,
+              kind: r.kind,
+              name: r.name,
+              namespace: r.namespace ?? undefined,
+            },
+          ],
+        },
+      );
+      toast.success(`sync requested for ${r.kind}/${r.name}`);
+      onMutated();
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setPerResourceSyncBusy(null);
     }
   }
 
@@ -471,6 +555,7 @@ function ApplicationDetailPanel({
   }
 
   return (
+    <>
     <SectionPanel className="self-start">
       <div className="mb-3 flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -587,6 +672,11 @@ function ApplicationDetailPanel({
       <ResourceList
         loading={detail.isLoading}
         resources={detail.data?.resources}
+        inCluster={inCluster}
+        readOnly={readOnly}
+        syncBusyKey={perResourceSyncBusy}
+        onOpen={(r) => setDrawerResource(toDrawerResource(r))}
+        onSync={(r) => void performSyncResource(r)}
       />
 
       {detail.data?.history && detail.data.history.length > 0 && (
@@ -642,6 +732,19 @@ function ApplicationDetailPanel({
         }}
       />
     </SectionPanel>
+    {/*
+      Per-resource drawer — opens when a managed-resource row is clicked.
+      Lumen's standard drawer fronts the YAML / events / logs / scale /
+      restart / delete / set-image CTAs for the underlying K8s object.
+      Mounted at panel level (not under SectionPanel) so the slide-in
+      overlay isn't constrained by the panel's box.
+    */}
+    <ResourceDetailDrawer
+      ctx={context}
+      resource={drawerResource}
+      onClose={() => setDrawerResource(null)}
+    />
+    </>
   );
 }
 
@@ -1102,12 +1205,41 @@ function CheckRow({
 
 // ─── Resource + history rendering ─────────────────────────────────────────
 
+function resourceKey(r: ArgoApplicationResource): string {
+  return `${r.group}/${r.kind}/${r.namespace ?? ""}/${r.name}`;
+}
+
+function toDrawerResource(r: ArgoApplicationResource): {
+  kind: string;
+  namespace: string;
+  name: string;
+} {
+  return {
+    kind: argocdKindToLumenKind(r.kind),
+    // ResourceDetailDrawer expects a string namespace; cluster-scoped
+    // resources get an empty string and the drawer's K8s queries handle
+    // that via `Api::all`.
+    namespace: r.namespace ?? "",
+    name: r.name,
+  };
+}
+
 function ResourceList({
   loading,
   resources,
+  inCluster,
+  readOnly,
+  syncBusyKey,
+  onOpen,
+  onSync,
 }: {
   loading: boolean;
   resources: ArgoApplicationResource[] | undefined;
+  inCluster: boolean;
+  readOnly: boolean;
+  syncBusyKey: string | null;
+  onOpen: (r: ArgoApplicationResource) => void;
+  onSync: (r: ArgoApplicationResource) => void;
 }) {
   if (loading) {
     return (
@@ -1123,33 +1255,123 @@ function ResourceList({
   }
   return (
     <div>
-      <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
-        managed resources · {resources.length}
+      <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
+        <span>managed resources · {resources.length}</span>
+        {!inCluster && (
+          <span
+            className="rounded border border-border-subtle px-1.5 py-0.5 text-[9px] text-text-muted normal-case tracking-normal"
+            title="Application targets an external cluster — Lumen can sync via the Application CRD but can't open the K8s drawer for resources outside this kubeconfig context."
+          >
+            external dest
+          </span>
+        )}
       </div>
       <ul className="max-h-72 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
         {resources.map((r) => {
-          const id = `${r.kind}/${r.namespace ?? "-"}/${r.name}`;
+          const key = resourceKey(r);
+          const syncBusy = syncBusyKey === key;
           return (
-            <li key={id} className="flex items-center gap-2">
-              <ResourceDot sync={r.sync_status} health={r.health_status} />
-              <span className="text-text-muted">{r.kind}</span>
-              <span className="text-text-primary">{r.name}</span>
-              {r.namespace && (
-                <span className="text-text-muted">· {r.namespace}</span>
-              )}
-              {r.health_message && (
-                <span
-                  className="ml-auto truncate text-warning"
-                  title={r.health_message}
-                >
-                  {r.health_message}
-                </span>
-              )}
-            </li>
+            <ResourceRow
+              key={key}
+              resource={r}
+              inCluster={inCluster}
+              readOnly={readOnly}
+              syncBusy={syncBusy}
+              onOpen={() => onOpen(r)}
+              onSync={() => onSync(r)}
+            />
           );
         })}
       </ul>
     </div>
+  );
+}
+
+/**
+ * One managed-resource row. Click → opens the Lumen drawer. Hover →
+ * exposes a per-resource Sync button. Lockable by readOnly.
+ */
+function ResourceRow({
+  resource,
+  inCluster,
+  readOnly,
+  syncBusy,
+  onOpen,
+  onSync,
+}: {
+  resource: ArgoApplicationResource;
+  inCluster: boolean;
+  readOnly: boolean;
+  syncBusy: boolean;
+  onOpen: () => void;
+  onSync: () => void;
+}) {
+  const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const openLabel = inCluster
+    ? `open ${resource.kind}/${resource.name} in drawer`
+    : `external destination — drawer is only available for in-cluster resources`;
+  return (
+    <li
+      className={cn(
+        "group relative flex items-center gap-2 rounded px-1 py-0.5 transition-colors",
+        inCluster ? "cursor-pointer hover:bg-elevated" : "opacity-90",
+      )}
+      onClick={inCluster ? onOpen : undefined}
+      title={openLabel}
+    >
+      <ResourceDot sync={resource.sync_status} health={resource.health_status} />
+      <span className="text-text-muted">{resource.kind}</span>
+      <span className="text-text-primary">{resource.name}</span>
+      {resource.namespace && (
+        <span className="text-text-muted">· {resource.namespace}</span>
+      )}
+      {resource.health_message && (
+        <span
+          className="truncate text-warning"
+          title={resource.health_message}
+        >
+          {resource.health_message}
+        </span>
+      )}
+      {/*
+        Per-resource actions, revealed on hover. We deliberately don't
+        nest a button inside the clickable <li> for the sync action —
+        instead we use stopPropagation so the row click still works on
+        the rest of the row.
+      */}
+      <span className="ml-auto inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSync();
+          }}
+          disabled={syncBusy || readOnly}
+          title={`sync only this resource${lockedTitle}`}
+          className={cn(
+            "invisible inline-flex items-center gap-1 rounded border border-border-default bg-surface px-1.5 py-0.5 text-[10px] text-text-muted hover:text-text-primary group-hover:visible disabled:invisible",
+          )}
+        >
+          {syncBusy ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <Zap className="size-3" />
+          )}
+          sync
+        </button>
+        {inCluster ? (
+          <ChevronRight
+            className="size-3 text-text-muted opacity-0 group-hover:opacity-70"
+            aria-hidden="true"
+          />
+        ) : (
+          <ExternalLink
+            className="size-3 text-text-muted opacity-50"
+            aria-hidden="true"
+          />
+        )}
+      </span>
+    </li>
   );
 }
 
