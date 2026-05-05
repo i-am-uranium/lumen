@@ -1,9 +1,39 @@
 export type TabId = string;
 
-export type Tab = {
+/**
+ * Single-pod tab: streams logs for one pod (and one or more of its containers).
+ * `kind` is optional for back-compat — older callers and persisted state may
+ * omit it; absence means "single".
+ */
+export type SinglePodTab = {
   id: TabId;
+  kind?: "single";
   podName: string;
 };
+
+/**
+ * Aggregate tab: streams logs for N pods, merge-sorted by arrival time and
+ * rendered with a per-pod color chip. The user picks pods up-front via the
+ * multi-pod selector; the set is fixed for the tab's lifetime.
+ */
+export type AggregateTab = {
+  id: TabId;
+  kind: "aggregate";
+  /** Display name shown in the tab strip — defaults to "N pods" if not set. */
+  title: string;
+  pods: string[];
+};
+
+export type Tab = SinglePodTab | AggregateTab;
+
+export function isAggregateTab(t: Tab): t is AggregateTab {
+  return t.kind === "aggregate";
+}
+
+/** Returns the display label for a tab (single → podName, aggregate → title). */
+export function tabLabel(t: Tab): string {
+  return isAggregateTab(t) ? t.title : t.podName;
+}
 
 export type LeafPanel = {
   type: "leaf";

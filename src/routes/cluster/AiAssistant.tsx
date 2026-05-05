@@ -168,6 +168,31 @@ export function AiAssistant() {
       TASKS.find((t) => t.id === initialTask)!.prompt,
   );
   const [notes, setNotes] = useState(focusText);
+
+  // One-shot consumption of an external "aiContext" payload. Other features
+  // (e.g. the aggregated logs viewer's "AI Summarize" button) hand off a
+  // pre-built context string by writing it to sessionStorage and navigating
+  // here with `?aiContext=<storageKey>`. We read it once on mount, prepend
+  // it to `notes` (so it flows through redactForAi), and clear the key so
+  // the payload doesn't leak into a later, unrelated session.
+  useEffect(() => {
+    const key = searchParams.get("aiContext");
+    if (!key || typeof window === "undefined") return;
+    let payload: string | null = null;
+    try {
+      payload = window.sessionStorage.getItem(key);
+      if (payload != null) window.sessionStorage.removeItem(key);
+    } catch {
+      // sessionStorage disabled or blocked — fall back to focus-only notes.
+    }
+    if (payload) {
+      setNotes((prev) => (prev ? `${prev}\n\n${payload}` : payload));
+    }
+    // Empty deps: this is a mount-time handoff, not a reactive subscription.
+    // A subsequent navigation with a different aiContext key will remount the
+    // route and re-run the effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [provider, setProvider] = useState<"codex" | "claude">(
     () => readAiAssistantSettings().provider,
   );

@@ -3,12 +3,14 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { k8s } from "@/lib/k8s";
 import type { WorkloadKind } from "@/lib/k8s";
 import { LogsPanel } from "./LogsPanel";
+import { LogsAggregatePanel } from "./LogsAggregatePanel";
 import { LogsTabStrip } from "./LogsTabStrip";
 import {
   panelReducer,
   initialPanel,
   allTabsSorted,
-  type Tab,
+  isAggregateTab,
+  type SinglePodTab,
   type PanelTree,
   type LeafPanel,
   type PanelAction,
@@ -50,6 +52,7 @@ export function LogsViewer({
   useEffect(() => {
     if (!isWorkload || childPods.length === 0 || allTabs.length !== 1) return;
     const [tab] = allTabs;
+    if (isAggregateTab(tab)) return;
     const firstChildPod = childPods[0];
     if (tab.podName !== name || tab.podName === firstChildPod) return;
     dispatch({
@@ -59,16 +62,29 @@ export function LogsViewer({
     });
   }, [allTabs, childPods, isWorkload, name]);
 
-  const containerOptionsByPod = useContainerOptionsForTabs(ctx, namespace, allTabs);
+  // Pod-detail queries are needed for both single-pod and aggregate tabs; the
+  // aggregate path needs container lists for every member pod. Flatten to the
+  // union of pod names across all tabs.
+  const allPodNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of allTabs) {
+      if (isAggregateTab(t)) for (const p of t.pods) set.add(p);
+      else set.add(t.podName);
+    }
+    return [...set].sort();
+  }, [allTabs]);
+  const containerOptionsByPod = useContainerOptionsForPods(ctx, namespace, allPodNames);
 
-  const openPodNames = useMemo(
-    () => new Set(allTabs.map((t) => t.podName)),
-    [allTabs],
-  );
   const availablePods = useMemo(() => {
     if (!isWorkload) return [];
-    return childPods.filter((p) => !openPodNames.has(p));
-  }, [childPods, openPodNames, isWorkload]);
+    // For the "+" menu we want pods not yet open in *any* single-pod tab —
+    // aggregate tabs don't claim a pod exclusively, so a pod inside an
+    // aggregate is still available for its own single-pod tab.
+    const claimed = new Set(
+      allTabs.filter((t): t is SinglePodTab => !isAggregateTab(t)).map((t) => t.podName),
+    );
+    return childPods.filter((p) => !claimed.has(p));
+  }, [childPods, allTabs, isWorkload]);
 
   // Single split level: only allow split when the root is a single leaf.
   const canSplit = panel.type === "leaf";
@@ -83,9 +99,22 @@ export function LogsViewer({
           onSelect={(id) => dispatch({ type: "setActiveTab", tabId: id })}
           onClose={(id) => dispatch({ type: "closeTab", tabId: id })}
           availablePods={availablePods}
+          // For aggregate selection, every child pod is fair game — the same
+          // pod can have its own single-pod tab AND appear in an aggregate.
+          aggregateCandidatePods={childPods}
           onAddTab={(podName) =>
             dispatch({ type: "addTab", tab: { id: `tab-${podName}`, podName }, leafId: leaf.id })
           }
+          onAddAggregateTab={(podNames, title) => {
+            // Tab id includes a timestamp so multiple aggregates with the
+            // same pod set don't collide on the addTab dedupe check.
+            const id = `agg-${Date.now().toString(36)}-${podNames.length}`;
+            dispatch({
+              type: "addTab",
+              tab: { id, kind: "aggregate", title, pods: podNames },
+              leafId: leaf.id,
+            });
+          }}
           onSplit={(dir, movingTabId) =>
             dispatch({ type: "splitPanel", sourceLeafId: leaf.id, direction: dir, movingTabId })
           }
@@ -102,13 +131,26 @@ export function LogsViewer({
             className="absolute inset-0"
             style={{ display: t.id === leaf.activeTab ? "flex" : "none", flexDirection: "column" }}
           >
-            <LogsPanel
-              ctx={ctx}
-              namespace={namespace}
-              pod={t.podName}
-              containers={containerOptionsByPod[t.podName] ?? []}
-              resourceName={t.podName}
-            />
+            {isAggregateTab(t) ? (
+              <LogsAggregatePanel
+                ctx={ctx}
+                namespace={namespace}
+                pods={t.pods}
+                title={t.title}
+                containersByPod={t.pods.reduce<Record<string, ContainerOption[]>>((acc, p) => {
+                  acc[p] = containerOptionsByPod[p] ?? [];
+                  return acc;
+                }, {})}
+              />
+            ) : (
+              <LogsPanel
+                ctx={ctx}
+                namespace={namespace}
+                pod={t.podName}
+                containers={containerOptionsByPod[t.podName] ?? []}
+                resourceName={t.podName}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -146,23 +188,30 @@ function PanelView({
   );
 }
 
-/** Run a pod-details query per open tab and return container options. */
-function useContainerOptionsForTabs(
+/**
+ * Run a pod-details query per pod and return container options.
+ *
+ * Takes a flat, sorted list of pod names rather than tabs because aggregate
+ * tabs cover N pods each — keying queries by tab id would either over-fetch
+ * (per-tab × per-pod) or fight react-query's hook-order rule. Pod names
+ * are the natural cache key.
+ */
+function useContainerOptionsForPods(
   ctx: string,
   namespace: string,
-  tabs: Tab[],
+  pods: string[],
 ): Record<string, ContainerOption[]> {
   const queries = useQueries({
-    queries: tabs.map((t) => ({
-      queryKey: ["k8s", "pod-details", ctx, namespace, t.podName],
-      queryFn: () => k8s.getPodDetails(ctx, namespace, t.podName),
+    queries: pods.map((p) => ({
+      queryKey: ["k8s", "pod-details", ctx, namespace, p],
+      queryFn: () => k8s.getPodDetails(ctx, namespace, p),
       staleTime: 10_000,
     })),
   });
   const out: Record<string, ContainerOption[]> = {};
-  for (const [index, t] of tabs.entries()) {
+  for (const [index, p] of pods.entries()) {
     const q = queries[index];
-    out[t.podName] = (q.data?.containers ?? []).map((c) => ({ name: c.name, kind: "regular" as const }));
+    out[p] = (q.data?.containers ?? []).map((c) => ({ name: c.name, kind: "regular" as const }));
   }
   return out;
 }
