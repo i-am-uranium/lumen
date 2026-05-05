@@ -1,21 +1,29 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  CircleStop,
   GitBranch,
+  History as HistoryIcon,
   Loader2,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   ServerCog,
   ShieldQuestion,
+  Sliders,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   k8s,
-  type ArgoApplicationDetail,
+  type ArgoApplicationResource,
   type ArgoApplicationSummary,
+  type ArgoHistoryEntry,
+  type ArgoSyncOptions,
 } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -30,21 +38,32 @@ import {
   DataTableShell,
 } from "@/components/ui/data-table";
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useUiSettings } from "@/state/uiSettings";
 
 /**
  * ArgoCD Applications view.
  *
- * Lists every Application CRD in the cluster (across namespaces by
- * default — most ArgoCD installs put Applications in the `argocd`
- * namespace anyway, but we don't hard-code that). Click a row to open
- * the detail panel on the right; sync/refresh actions live in the panel.
+ * Master/detail layout with multi-select status filtering, a full sync
+ * dialog (parity with `argocd app sync --help`), terminate-running-op
+ * support, and rollback-from-history. Detection is gated by ClusterWorkspace
+ * so this route only renders when the cluster has the Application CRD.
  *
- * The list query runs every 15s when the route is mounted so users
- * watching a sync progress see the OutOfSync → Progressing → Synced
- * transition without manual refresh. The detail query polls slightly
- * faster (5s) while a row is selected.
+ * Polling cadence: list 15s, detail 5s while a row is open. Both queries
+ * key off context so the cache resets cleanly when the user switches
+ * clusters.
  */
+const SYNC_STATUSES = ["Synced", "OutOfSync", "Unknown"] as const;
+const HEALTH_STATUSES = [
+  "Healthy",
+  "Degraded",
+  "Progressing",
+  "Suspended",
+  "Missing",
+] as const;
+type SyncStatus = (typeof SYNC_STATUSES)[number];
+type HealthStatus = (typeof HEALTH_STATUSES)[number];
+
 export function ArgocdView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
@@ -54,6 +73,11 @@ export function ArgocdView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedKey = searchParams.get("app") ?? null;
   const [filter, setFilter] = useState("");
+  const [syncFilter, setSyncFilter] = useState<Set<SyncStatus>>(new Set());
+  const [healthFilter, setHealthFilter] = useState<Set<HealthStatus>>(
+    new Set(),
+  );
+  const [projectFilter, setProjectFilter] = useState<string>("");
 
   const apps = useQuery({
     queryKey: ["argocd", "apps", context],
@@ -62,18 +86,49 @@ export function ArgocdView() {
     refetchInterval: 15_000,
   });
 
+  const projects = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of apps.data ?? []) set.add(a.project);
+    return Array.from(set).sort();
+  }, [apps.data]);
+
   const filteredApps = useMemo(() => {
-    const list = apps.data ?? [];
-    if (!filter.trim()) return list;
-    const f = filter.toLowerCase();
-    return list.filter(
-      (a) =>
-        a.name.toLowerCase().includes(f) ||
-        a.namespace.toLowerCase().includes(f) ||
-        a.project.toLowerCase().includes(f) ||
-        a.repo_url.toLowerCase().includes(f),
-    );
-  }, [apps.data, filter]);
+    let list = apps.data ?? [];
+    if (filter.trim()) {
+      const f = filter.toLowerCase();
+      list = list.filter(
+        (a) =>
+          a.name.toLowerCase().includes(f) ||
+          a.namespace.toLowerCase().includes(f) ||
+          a.project.toLowerCase().includes(f) ||
+          a.repo_url.toLowerCase().includes(f),
+      );
+    }
+    if (syncFilter.size > 0) {
+      list = list.filter((a) => syncFilter.has(a.sync_status as SyncStatus));
+    }
+    if (healthFilter.size > 0) {
+      list = list.filter((a) =>
+        healthFilter.has(a.health_status as HealthStatus),
+      );
+    }
+    if (projectFilter) {
+      list = list.filter((a) => a.project === projectFilter);
+    }
+    return list;
+  }, [apps.data, filter, syncFilter, healthFilter, projectFilter]);
+
+  // Counts per status, computed off the unfiltered list so chips show
+  // "how many would I see" rather than "how many are visible right now".
+  const counts = useMemo(() => {
+    const sync = new Map<string, number>();
+    const health = new Map<string, number>();
+    for (const a of apps.data ?? []) {
+      sync.set(a.sync_status, (sync.get(a.sync_status) ?? 0) + 1);
+      health.set(a.health_status, (health.get(a.health_status) ?? 0) + 1);
+    }
+    return { sync, health };
+  }, [apps.data]);
 
   const selected = useMemo(() => {
     if (!selectedKey) return null;
@@ -92,35 +147,91 @@ export function ArgocdView() {
     setSearchParams(next, { replace: true });
   }
 
+  const totalActiveFilters =
+    syncFilter.size +
+    healthFilter.size +
+    (projectFilter ? 1 : 0) +
+    (filter.trim() ? 1 : 0);
+
   return (
     <LumenPage>
       <PageHeader
         eyebrow="argocd"
         title="Applications"
-        description="GitOps state of every ArgoCD Application reachable in this cluster. Sync / refresh actions write directly to the CRD."
+        description="GitOps state of every ArgoCD Application reachable in this cluster. Sync / refresh / rollback actions write directly to the CRD."
         icon={<ServerCog className="size-4" />}
         actions={
-          <div className="flex items-center gap-2">
-            <Input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="filter by name / namespace / repo"
-              className="h-8 w-72"
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => apps.refetch()}
+            disabled={apps.isFetching}
+          >
+            <RefreshCw
+              className={cn("size-3.5", apps.isFetching && "animate-spin")}
             />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => apps.refetch()}
-              disabled={apps.isFetching}
-            >
-              <RefreshCw
-                className={cn("size-3.5", apps.isFetching && "animate-spin")}
-              />
-              refresh
-            </Button>
-          </div>
+            refresh list
+          </Button>
         }
       />
+
+      {/* ── Filter strip ───────────────────────────────────────────────── */}
+      <SectionPanel className="py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="filter by name / namespace / repo"
+            className="h-8 w-72"
+          />
+          <FilterChipGroup
+            label="sync"
+            options={SYNC_STATUSES}
+            selected={syncFilter}
+            counts={counts.sync}
+            onToggle={(v) => setSyncFilter((prev) => toggleSet(prev, v))}
+          />
+          <FilterChipGroup
+            label="health"
+            options={HEALTH_STATUSES}
+            selected={healthFilter}
+            counts={counts.health}
+            onToggle={(v) => setHealthFilter((prev) => toggleSet(prev, v))}
+          />
+          {projects.length > 1 && (
+            <select
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+              className="h-8 rounded-control border border-border-default bg-elevated px-2 text-[11px] text-text-primary"
+              title="filter by project"
+            >
+              <option value="">project: any</option>
+              {projects.map((p) => (
+                <option key={p} value={p}>
+                  project: {p}
+                </option>
+              ))}
+            </select>
+          )}
+          {totalActiveFilters > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilter("");
+                setSyncFilter(new Set());
+                setHealthFilter(new Set());
+                setProjectFilter("");
+              }}
+              className="text-[11px] text-text-muted hover:text-text-primary"
+            >
+              clear filters
+            </button>
+          )}
+          <span className="ml-auto text-[11px] text-text-muted tabular-nums">
+            {filteredApps.length} of {apps.data?.length ?? 0}
+          </span>
+        </div>
+      </SectionPanel>
 
       {apps.error ? (
         <SectionPanel className="border border-danger/30 bg-[var(--status-error-soft)]">
@@ -142,7 +253,7 @@ export function ArgocdView() {
           </p>
         </SectionPanel>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
           <SectionPanel className="overflow-hidden p-0">
             <DataTableShell>
               <DataTable>
@@ -202,6 +313,11 @@ export function ArgocdView() {
                 </DataTableBody>
               </DataTable>
             </DataTableShell>
+            {filteredApps.length === 0 && (
+              <p className="px-4 py-3 text-[11px] text-text-muted">
+                No applications match the current filters.
+              </p>
+            )}
           </SectionPanel>
 
           {selected ? (
@@ -237,6 +353,13 @@ export function ArgocdView() {
   );
 }
 
+function toggleSet<T>(prev: Set<T>, value: T): Set<T> {
+  const next = new Set(prev);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return next;
+}
+
 function ApplicationDetailPanel({
   context,
   app,
@@ -257,34 +380,41 @@ function ApplicationDetailPanel({
     staleTime: 1_000,
     refetchInterval: 5_000,
   });
-  const [syncing, setSyncing] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const [busyAction, setBusyAction] = useState<
+    null | "sync" | "refresh-soft" | "refresh-hard" | "terminate" | "rollback"
+  >(null);
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [terminateConfirm, setTerminateConfirm] = useState(false);
+  const [pendingRollback, setPendingRollback] =
+    useState<ArgoHistoryEntry | null>(null);
 
   const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const operationRunning = detail.data?.operation_state?.phase === "Running";
 
-  async function doSync(prune: boolean, dryRun: boolean) {
-    setSyncing(true);
+  async function performSync(options: ArgoSyncOptions) {
+    setBusyAction("sync");
     try {
       await k8s.syncArgocdApplication(
         context || undefined,
         app.namespace,
         app.name,
-        prune,
-        dryRun,
+        options,
       );
       toast.success(
-        dryRun ? "dry-run sync requested" : `sync requested for ${app.name}`,
+        options.dryRun
+          ? "dry-run sync requested"
+          : `sync requested for ${app.name}`,
       );
       onMutated();
     } catch (e) {
       toast.error((e as Error).message ?? String(e));
     } finally {
-      setSyncing(false);
+      setBusyAction(null);
     }
   }
 
-  async function doRefresh(hard: boolean) {
-    setRefreshing(true);
+  async function performRefresh(hard: boolean) {
+    setBusyAction(hard ? "refresh-hard" : "refresh-soft");
     try {
       await k8s.refreshArgocdApplication(
         context || undefined,
@@ -297,7 +427,46 @@ function ApplicationDetailPanel({
     } catch (e) {
       toast.error((e as Error).message ?? String(e));
     } finally {
-      setRefreshing(false);
+      setBusyAction(null);
+    }
+  }
+
+  async function performTerminate() {
+    setBusyAction("terminate");
+    try {
+      await k8s.terminateArgocdOperation(
+        context || undefined,
+        app.namespace,
+        app.name,
+      );
+      toast.success("operation termination requested");
+      onMutated();
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setBusyAction(null);
+      setTerminateConfirm(false);
+    }
+  }
+
+  async function performRollback(entry: ArgoHistoryEntry) {
+    setBusyAction("rollback");
+    try {
+      // Rollback is just a sync with the historical revision pinned and
+      // prune enabled — same semantics as `argocd app rollback`.
+      await k8s.syncArgocdApplication(
+        context || undefined,
+        app.namespace,
+        app.name,
+        { revision: entry.revision, prune: true },
+      );
+      toast.success(`rollback to ${entry.revision.slice(0, 7)} requested`);
+      onMutated();
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setBusyAction(null);
+      setPendingRollback(null);
     }
   }
 
@@ -318,7 +487,7 @@ function ApplicationDetailPanel({
           className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
           aria-label="close"
         >
-          ×
+          <X className="size-3.5" />
         </button>
       </div>
 
@@ -328,6 +497,12 @@ function ApplicationDetailPanel({
         {detail.data?.auto_sync && (
           <span className="rounded border border-info/40 bg-info-soft px-1.5 py-0.5 font-mono text-[10px] text-info">
             auto-sync{detail.data?.self_heal ? " + heal" : ""}
+          </span>
+        )}
+        {operationRunning && (
+          <span className="inline-flex items-center gap-1 rounded border border-info/40 bg-info-soft px-1.5 py-0.5 font-mono text-[10px] text-info">
+            <Loader2 className="size-2.5 animate-spin" />
+            running
           </span>
         )}
       </div>
@@ -351,58 +526,41 @@ function ApplicationDetailPanel({
       <div className="mb-4 flex flex-wrap gap-2">
         <Button
           size="sm"
-          onClick={() => void doSync(false, false)}
-          disabled={syncing || readOnly}
-          title={`sync now${lockedTitle}`}
+          onClick={() => setSyncDialogOpen(true)}
+          disabled={busyAction === "sync" || readOnly}
+          title={`sync${lockedTitle}`}
         >
-          {syncing ? (
+          {busyAction === "sync" ? (
             <Loader2 className="size-3.5 animate-spin" />
           ) : (
             <RotateCw className="size-3.5" />
           )}
-          sync
+          sync…
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void doSync(false, true)}
-          disabled={syncing || readOnly}
-          title={`dry-run sync${lockedTitle}`}
-        >
-          dry-run
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void doSync(true, false)}
-          disabled={syncing || readOnly}
-          title={`sync with prune (deletes resources removed from Git)${lockedTitle}`}
-        >
-          sync + prune
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void doRefresh(false)}
-          disabled={refreshing || readOnly}
-          title={`refresh (re-render manifests against cached repo)${lockedTitle}`}
-        >
-          {refreshing ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="size-3.5" />
-          )}
-          refresh
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void doRefresh(true)}
-          disabled={refreshing || readOnly}
-          title={`hard refresh (re-clone the repo)${lockedTitle}`}
-        >
-          hard refresh
-        </Button>
+        <RefreshDropdown
+          onSoft={() => void performRefresh(false)}
+          onHard={() => void performRefresh(true)}
+          softBusy={busyAction === "refresh-soft"}
+          hardBusy={busyAction === "refresh-hard"}
+          disabled={readOnly}
+          lockedTitle={lockedTitle}
+        />
+        {operationRunning && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setTerminateConfirm(true)}
+            disabled={busyAction === "terminate" || readOnly}
+            title={`terminate running sync${lockedTitle}`}
+          >
+            {busyAction === "terminate" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <CircleStop className="size-3.5" />
+            )}
+            terminate
+          </Button>
+        )}
       </div>
 
       {detail.data?.operation_state && (
@@ -426,38 +584,530 @@ function ApplicationDetailPanel({
         </div>
       )}
 
-      <ResourceList detail={detail.data} loading={detail.isLoading} />
+      <ResourceList
+        loading={detail.isLoading}
+        resources={detail.data?.resources}
+      />
 
       {detail.data?.history && detail.data.history.length > 0 && (
-        <div className="mt-4">
-          <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
-            history
-          </div>
-          <ul className="space-y-0.5 font-mono text-[11px]">
-            {detail.data.history.slice(0, 5).map((h) => (
-              <li
-                key={`${h.revision}-${h.deployed_at ?? ""}`}
-                className="flex items-baseline gap-2"
-              >
-                <span className="text-text-muted">{h.revision.slice(0, 7)}</span>
-                <span className="text-text-secondary">
-                  {h.deployed_at ?? ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <HistoryList
+          history={detail.data.history}
+          onRollback={(entry) => setPendingRollback(entry)}
+          disabled={readOnly}
+          lockedTitle={lockedTitle}
+        />
       )}
+
+      {syncDialogOpen && (
+        <SyncDialog
+          app={app}
+          defaultRevision={app.target_revision || "HEAD"}
+          managedResources={detail.data?.resources ?? []}
+          busy={busyAction === "sync"}
+          onCancel={() => setSyncDialogOpen(false)}
+          onSubmit={(opts) => {
+            setSyncDialogOpen(false);
+            void performSync(opts);
+          }}
+        />
+      )}
+
+      <ConfirmActionDialog
+        open={terminateConfirm}
+        title="terminate running sync"
+        description={`This clears the .operation field on ${app.name} — ArgoCD treats that as a terminate signal. Resources that have already started reconciling won't be rolled back; only the in-flight orchestration stops.`}
+        target={`${app.namespace}/${app.name}`}
+        confirmLabel="terminate"
+        intent="warning"
+        busy={busyAction === "terminate"}
+        onCancel={() => setTerminateConfirm(false)}
+        onConfirm={performTerminate}
+      />
+
+      <ConfirmActionDialog
+        open={!!pendingRollback}
+        title="rollback to historical revision"
+        description={
+          pendingRollback
+            ? `This will sync ${app.name} back to ${pendingRollback.revision.slice(0, 7)} with prune enabled. Resources added since that revision will be deleted from the cluster.`
+            : ""
+        }
+        target={`${app.namespace}/${app.name}`}
+        confirmLabel="rollback"
+        intent="warning"
+        busy={busyAction === "rollback"}
+        onCancel={() => setPendingRollback(null)}
+        onConfirm={() => {
+          if (pendingRollback) void performRollback(pendingRollback);
+        }}
+      />
     </SectionPanel>
   );
 }
 
-function ResourceList({
-  detail,
-  loading,
+// ─── Filter chips ─────────────────────────────────────────────────────────
+
+function FilterChipGroup<T extends string>({
+  label,
+  options,
+  selected,
+  counts,
+  onToggle,
 }: {
-  detail: ArgoApplicationDetail | undefined;
+  label: string;
+  options: readonly T[];
+  selected: Set<T>;
+  counts: Map<string, number>;
+  onToggle: (v: T) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] uppercase tracking-wide text-text-muted">
+        {label}
+      </span>
+      {options.map((opt) => {
+        const active = selected.has(opt);
+        const count = counts.get(opt) ?? 0;
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onToggle(opt)}
+            disabled={count === 0 && !active}
+            className={cn(
+              "rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors",
+              active
+                ? "border-accent-primary bg-accent-primary-soft text-accent-primary"
+                : "border-border-default bg-surface text-text-secondary hover:bg-hover",
+              count === 0 && !active && "opacity-40",
+            )}
+            title={`${count} ${opt}`}
+          >
+            {opt}
+            {count > 0 && (
+              <span className="ml-1 text-text-muted">{count}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Refresh split-button ─────────────────────────────────────────────────
+
+function RefreshDropdown({
+  onSoft,
+  onHard,
+  softBusy,
+  hardBusy,
+  disabled,
+  lockedTitle,
+}: {
+  onSoft: () => void;
+  onHard: () => void;
+  softBusy: boolean;
+  hardBusy: boolean;
+  disabled: boolean;
+  lockedTitle: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative inline-flex">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={onSoft}
+        disabled={softBusy || disabled}
+        title={`refresh (re-render manifests against cached repo)${lockedTitle}`}
+        className="rounded-r-none"
+      >
+        {softBusy ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <RefreshCw className="size-3.5" />
+        )}
+        refresh
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        className="-ml-px rounded-l-none px-1.5"
+        aria-label="more refresh options"
+      >
+        <ChevronDown className="size-3" />
+      </Button>
+      {open && (
+        <div className="absolute left-0 top-[calc(100%+4px)] z-30 w-44 rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onHard();
+            }}
+            disabled={hardBusy}
+            className="block w-full px-3 py-2 text-left text-[12px] hover:bg-hover"
+          >
+            <div className="flex items-center gap-2 text-text-primary">
+              {hardBusy ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              hard refresh
+            </div>
+            <div className="mt-0.5 text-[10px] text-text-muted">
+              re-clone the source repository
+            </div>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Sync dialog ──────────────────────────────────────────────────────────
+
+function SyncDialog({
+  app,
+  defaultRevision,
+  managedResources,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  app: ArgoApplicationSummary;
+  defaultRevision: string;
+  managedResources: ArgoApplicationResource[];
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (opts: ArgoSyncOptions) => void;
+}) {
+  const [revision, setRevision] = useState(defaultRevision);
+  const [prune, setPrune] = useState(false);
+  const [dryRun, setDryRun] = useState(false);
+  const [force, setForce] = useState(false);
+  const [replace, setReplace] = useState(false);
+  const [serverSideApply, setServerSideApply] = useState(false);
+  const [applyOutOfSyncOnly, setApplyOutOfSyncOnly] = useState(false);
+  const [respectIgnoreDifferences, setRespectIgnoreDifferences] =
+    useState(false);
+  const [pruneLast, setPruneLast] = useState(false);
+  const [retryEnabled, setRetryEnabled] = useState(false);
+  const [retryLimit, setRetryLimit] = useState(5);
+  const [resourceFilter, setResourceFilter] = useState(false);
+  const [selectedResources, setSelectedResources] = useState<Set<string>>(
+    new Set(),
+  );
+
+  function resKey(r: ArgoApplicationResource): string {
+    return `${r.group}/${r.kind}/${r.namespace ?? ""}/${r.name}`;
+  }
+
+  function buildOptions(): ArgoSyncOptions {
+    const opts: ArgoSyncOptions = {
+      revision: revision.trim() || undefined,
+      prune,
+      dryRun,
+      force,
+      replace,
+      serverSideApply,
+      applyOutOfSyncOnly,
+      respectIgnoreDifferences,
+      pruneLast,
+      retryLimit: retryEnabled ? retryLimit : null,
+    };
+    if (resourceFilter && selectedResources.size > 0) {
+      opts.resources = managedResources
+        .filter((r) => selectedResources.has(resKey(r)))
+        .map((r) => ({
+          group: r.group,
+          kind: r.kind,
+          name: r.name,
+          namespace: r.namespace ?? undefined,
+        }));
+    }
+    return opts;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border-default px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Sliders className="size-3.5 text-accent-primary" />
+            <div>
+              <div className="text-[13px] font-medium text-text-primary">
+                Sync {app.name}
+              </div>
+              <div className="text-[11px] text-text-muted">
+                {app.namespace} · {app.project}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+            aria-label="cancel"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto px-4 py-3">
+          <Field label="revision">
+            <Input
+              value={revision}
+              onChange={(e) => setRevision(e.target.value)}
+              placeholder="HEAD or specific tag / branch / SHA"
+              className="font-mono"
+            />
+            <p className="mt-1 text-[10px] text-text-muted">
+              Leave as <code>HEAD</code> to use what's currently in the
+              Application spec.
+            </p>
+          </Field>
+
+          <FieldGroup label="sync options">
+            <CheckRow
+              checked={prune}
+              onChange={setPrune}
+              label="Prune"
+              hint="Delete resources removed from Git."
+            />
+            <CheckRow
+              checked={dryRun}
+              onChange={setDryRun}
+              label="Dry run"
+              hint="Server-side preview only — no changes applied."
+            />
+            <CheckRow
+              checked={force}
+              onChange={setForce}
+              label="Force"
+              hint="Pass --force to apply (overwrites conflicts)."
+            />
+            <CheckRow
+              checked={applyOutOfSyncOnly}
+              onChange={setApplyOutOfSyncOnly}
+              label="Apply out-of-sync only"
+              hint="Skip resources already at the target revision."
+            />
+            <CheckRow
+              checked={replace}
+              onChange={setReplace}
+              label="Replace"
+              hint="kubectl replace semantics instead of patch."
+            />
+            <CheckRow
+              checked={serverSideApply}
+              onChange={setServerSideApply}
+              label="Server-side apply"
+              hint="Apply with field-manager tracking."
+            />
+            <CheckRow
+              checked={respectIgnoreDifferences}
+              onChange={setRespectIgnoreDifferences}
+              label="Respect ignoreDifferences"
+              hint="Honor the spec.ignoreDifferences settings."
+            />
+            <CheckRow
+              checked={pruneLast}
+              onChange={setPruneLast}
+              label="Prune last"
+              hint="Run prune after the sync wave instead of before."
+            />
+          </FieldGroup>
+
+          <FieldGroup label="retry">
+            <CheckRow
+              checked={retryEnabled}
+              onChange={setRetryEnabled}
+              label="Retry on failure"
+              hint="Backoff: 5s start, x2 factor, 3min max."
+            />
+            {retryEnabled && (
+              <div className="mt-1 flex items-center gap-2 pl-6 text-[11px]">
+                <span className="text-text-muted">limit</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={retryLimit}
+                  onChange={(e) =>
+                    setRetryLimit(
+                      Math.max(
+                        1,
+                        Math.min(20, Number.parseInt(e.target.value, 10) || 1),
+                      ),
+                    )
+                  }
+                  className="h-7 w-16 rounded border border-border-default bg-elevated px-2 text-text-primary"
+                />
+              </div>
+            )}
+          </FieldGroup>
+
+          <FieldGroup label="resources">
+            <CheckRow
+              checked={resourceFilter}
+              onChange={(v) => {
+                setResourceFilter(v);
+                if (!v) setSelectedResources(new Set());
+              }}
+              label="Sync a subset of resources"
+              hint={
+                managedResources.length > 0
+                  ? `${managedResources.length} resources currently managed.`
+                  : "Detail data not loaded yet — leave off to sync all."
+              }
+            />
+            {resourceFilter && managedResources.length > 0 && (
+              <div className="mt-2 max-h-44 overflow-auto rounded border border-border-subtle bg-elevated p-2">
+                {managedResources.map((r) => {
+                  const key = resKey(r);
+                  const checked = selectedResources.has(key);
+                  return (
+                    <label
+                      key={key}
+                      className="flex items-center gap-2 py-0.5 text-[11px]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setSelectedResources((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(key)) next.delete(key);
+                            else next.add(key);
+                            return next;
+                          })
+                        }
+                      />
+                      <span className="font-mono text-text-muted">
+                        {r.kind}
+                      </span>
+                      <span className="font-mono text-text-primary">
+                        {r.name}
+                      </span>
+                      {r.namespace && (
+                        <span className="font-mono text-text-muted">
+                          · {r.namespace}
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </FieldGroup>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border-default px-4 py-3">
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => onSubmit(buildOptions())}
+            disabled={busy}
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {dryRun ? "dry-run sync" : "sync"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="mb-3 block">
+      <span className="mb-1 block text-[11px] uppercase tracking-wide text-text-muted">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function FieldGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <fieldset className="mb-3">
+      <legend className="mb-1 text-[11px] uppercase tracking-wide text-text-muted">
+        {label}
+      </legend>
+      <div className="space-y-1">{children}</div>
+    </fieldset>
+  );
+}
+
+function CheckRow({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <label className="flex items-start gap-2 text-[12px] text-text-primary">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5"
+      />
+      <div>
+        <div>{label}</div>
+        {hint && <div className="text-[10px] text-text-muted">{hint}</div>}
+      </div>
+    </label>
+  );
+}
+
+// ─── Resource + history rendering ─────────────────────────────────────────
+
+function ResourceList({
+  loading,
+  resources,
+}: {
   loading: boolean;
+  resources: ArgoApplicationResource[] | undefined;
 }) {
   if (loading) {
     return (
@@ -466,7 +1116,7 @@ function ResourceList({
       </div>
     );
   }
-  if (!detail || detail.resources.length === 0) {
+  if (!resources || resources.length === 0) {
     return (
       <p className="text-[11px] text-text-muted">no managed resources yet</p>
     );
@@ -474,17 +1124,14 @@ function ResourceList({
   return (
     <div>
       <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
-        managed resources · {detail.resources.length}
+        managed resources · {resources.length}
       </div>
       <ul className="max-h-72 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
-        {detail.resources.map((r) => {
+        {resources.map((r) => {
           const id = `${r.kind}/${r.namespace ?? "-"}/${r.name}`;
           return (
             <li key={id} className="flex items-center gap-2">
-              <ResourceDot
-                sync={r.sync_status}
-                health={r.health_status}
-              />
+              <ResourceDot sync={r.sync_status} health={r.health_status} />
               <span className="text-text-muted">{r.kind}</span>
               <span className="text-text-primary">{r.name}</span>
               {r.namespace && (
@@ -505,6 +1152,52 @@ function ResourceList({
     </div>
   );
 }
+
+function HistoryList({
+  history,
+  onRollback,
+  disabled,
+  lockedTitle,
+}: {
+  history: ArgoHistoryEntry[];
+  onRollback: (entry: ArgoHistoryEntry) => void;
+  disabled: boolean;
+  lockedTitle: string;
+}) {
+  return (
+    <div className="mt-4">
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-text-muted">
+        <HistoryIcon className="size-3" />
+        history
+      </div>
+      <ul className="space-y-0.5 font-mono text-[11px]">
+        {history.slice(0, 5).map((h) => (
+          <li
+            key={`${h.revision}-${h.deployed_at ?? ""}`}
+            className="group flex items-center gap-2 rounded px-1 py-0.5 hover:bg-elevated"
+          >
+            <span className="text-text-muted">{h.revision.slice(0, 7)}</span>
+            <span className="flex-1 truncate text-text-secondary">
+              {h.deployed_at ?? ""}
+            </span>
+            <button
+              type="button"
+              onClick={() => onRollback(h)}
+              disabled={disabled}
+              title={`rollback to ${h.revision.slice(0, 7)}${lockedTitle}`}
+              className="invisible inline-flex items-center gap-1 rounded border border-border-default bg-surface px-1.5 py-0.5 text-[10px] text-text-muted hover:text-text-primary group-hover:visible disabled:invisible"
+            >
+              <RotateCcw className="size-3" />
+              rollback
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ─── Pills + helpers ──────────────────────────────────────────────────────
 
 function SyncPill({ status }: { status: string }) {
   const cls =
@@ -540,9 +1233,7 @@ function HealthPill({ status }: { status: string }) {
         ? "border-danger/40 bg-danger-soft text-danger"
         : status === "Progressing"
           ? "border-info/40 bg-info-soft text-info"
-          : status === "Suspended"
-            ? "border-border-default bg-elevated text-text-muted"
-            : "border-border-default bg-elevated text-text-muted";
+          : "border-border-default bg-elevated text-text-muted";
   return (
     <span
       className={cn(
@@ -562,9 +1253,6 @@ function ResourceDot({
   sync: string | null;
   health: string | null;
 }) {
-  // Health dominates color (a healthy resource that's drifted is more
-  // notable than an unhealthy one that matches Git, since the unhealthy
-  // case has its own message); fall back to sync when health is null.
   let color = "bg-border-subtle";
   if (health === "Healthy") color = "bg-success";
   else if (health === "Degraded") color = "bg-danger";
@@ -590,7 +1278,10 @@ function DetailRow({
         {icon ? " " : ""}
         {label}
       </span>
-      <span className="min-w-0 truncate font-mono text-text-primary" title={value}>
+      <span
+        className="min-w-0 truncate font-mono text-text-primary"
+        title={value}
+      >
         {value}
       </span>
     </div>

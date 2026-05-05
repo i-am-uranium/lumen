@@ -25,7 +25,7 @@ use crate::k8s::time;
 use kube::api::{Api, ListParams, Patch, PatchParams};
 use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
 use kube::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const ARGO_GROUP: &str = "argoproj.io";
@@ -155,36 +155,141 @@ pub async fn get_application(
     Ok(detail(&obj))
 }
 
-/// Trigger a sync. Sets `.operation.sync` on the Application — exactly
-/// what `argocd app sync` does. The ArgoCD controller picks up the
-/// operation field and reconciles.
-///
-/// `prune` removes resources that are no longer in Git. `dry_run`
-/// performs a server-side sync-preview without applying changes.
-pub async fn sync_application(
-    client: &Client,
-    namespace: &str,
-    name: &str,
-    prune: bool,
-    dry_run: bool,
-) -> AppResult<()> {
-    let ar = application_api_resource();
-    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+/// Sync options — mirrors the canonical surface of `argocd app sync` so
+/// the wizard in the UI can offer parity with the CLI without us
+/// inventing new vocabulary.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SyncOptions {
+    /// Override `spec.source.targetRevision` for this one sync only.
+    /// Empty / None means "use what's in the spec".
+    pub revision: Option<String>,
+    pub prune: bool,
+    pub dry_run: bool,
+    /// Force apply (apply `--force`, ignores conflicts).
+    pub force: bool,
+    /// `Replace=true` sync option — uses `kubectl replace` semantics.
+    pub replace: bool,
+    /// `ServerSideApply=true` sync option.
+    pub server_side_apply: bool,
+    /// `ApplyOutOfSyncOnly=true` sync option.
+    pub apply_out_of_sync_only: bool,
+    /// `RespectIgnoreDifferences=true` sync option.
+    pub respect_ignore_differences: bool,
+    /// `PruneLast=true` sync option (prune at the end of the wave).
+    pub prune_last: bool,
+    /// Optional retry-on-failure limit. None means no retry.
+    pub retry_limit: Option<u32>,
+    /// Optional resource subset to sync. Empty / None means "all".
+    pub resources: Option<Vec<ResourceRef>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceRef {
+    pub group: String,
+    pub kind: String,
+    pub namespace: Option<String>,
+    pub name: String,
+}
+
+/// Build the Application `.operation` patch from a SyncOptions struct.
+/// Pure — split out from `sync_application` so we can unit-test the
+/// translation rules without a live cluster.
+pub(crate) fn build_sync_operation(opts: &SyncOptions) -> Value {
+    let mut sync_options: Vec<&str> = Vec::new();
+    if opts.replace {
+        sync_options.push("Replace=true");
+    }
+    if opts.server_side_apply {
+        sync_options.push("ServerSideApply=true");
+    }
+    if opts.apply_out_of_sync_only {
+        sync_options.push("ApplyOutOfSyncOnly=true");
+    }
+    if opts.respect_ignore_differences {
+        sync_options.push("RespectIgnoreDifferences=true");
+    }
+    if opts.prune_last {
+        sync_options.push("PruneLast=true");
+    }
+
     let mut sync = json!({
-        "syncStrategy": { "apply": { "force": false } }
+        "syncStrategy": { "apply": { "force": opts.force } }
     });
-    if prune {
+    if opts.prune {
         sync["prune"] = Value::Bool(true);
     }
-    if dry_run {
+    if opts.dry_run {
         sync["dryRun"] = Value::Bool(true);
     }
-    let body = json!({
+    if let Some(rev) = opts.revision.as_deref() {
+        let trimmed = rev.trim();
+        if !trimmed.is_empty() {
+            sync["revision"] = Value::String(trimmed.to_string());
+        }
+    }
+    if !sync_options.is_empty() {
+        sync["syncOptions"] = Value::Array(
+            sync_options
+                .into_iter()
+                .map(|s| Value::String(s.into()))
+                .collect(),
+        );
+    }
+    if let Some(limit) = opts.retry_limit {
+        sync["retry"] = json!({
+            "limit": limit,
+            "backoff": {
+                "duration": "5s",
+                "factor": 2,
+                "maxDuration": "3m"
+            }
+        });
+    }
+    if let Some(resources) = opts.resources.as_deref() {
+        let cleaned: Vec<Value> = resources
+            .iter()
+            .filter(|r| !r.kind.is_empty() && !r.name.is_empty())
+            .map(|r| {
+                let mut entry = json!({
+                    "group": r.group,
+                    "kind": r.kind,
+                    "name": r.name,
+                });
+                if let Some(ns) = r.namespace.as_deref() {
+                    if !ns.is_empty() {
+                        entry["namespace"] = Value::String(ns.into());
+                    }
+                }
+                entry
+            })
+            .collect();
+        if !cleaned.is_empty() {
+            sync["resources"] = Value::Array(cleaned);
+        }
+    }
+
+    json!({
         "operation": {
             "initiatedBy": { "username": "lumen" },
             "sync": sync,
         }
-    });
+    })
+}
+
+/// Trigger a sync with the given options. Sets `.operation.sync` on
+/// the Application — same field the ArgoCD controller picks up when
+/// `argocd app sync` is invoked.
+pub async fn sync_application(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    opts: &SyncOptions,
+) -> AppResult<()> {
+    let ar = application_api_resource();
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    let body = build_sync_operation(opts);
     let pp = PatchParams::default();
     api.patch(name, &pp, &Patch::Merge(&body))
         .await
@@ -211,6 +316,20 @@ pub async fn refresh_application(
             }
         }
     });
+    let pp = PatchParams::default();
+    api.patch(name, &pp, &Patch::Merge(&body))
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    Ok(())
+}
+
+/// Cancel a running sync. We patch `.operation` to null — the ArgoCD
+/// controller treats a clear-while-running as a terminate. This is
+/// the same path the upstream UI uses when the user clicks "Terminate".
+pub async fn terminate_operation(client: &Client, namespace: &str, name: &str) -> AppResult<()> {
+    let ar = application_api_resource();
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    let body = json!({ "operation": Value::Null });
     let pp = PatchParams::default();
     api.patch(name, &pp, &Patch::Merge(&body))
         .await
@@ -480,5 +599,86 @@ mod tests {
             d.operation_state.as_ref().unwrap().phase.as_deref(),
             Some("Running")
         );
+    }
+
+    #[test]
+    fn build_sync_operation_minimal_options() {
+        let body = build_sync_operation(&SyncOptions::default());
+        let sync = &body["operation"]["sync"];
+        assert_eq!(sync["syncStrategy"]["apply"]["force"], json!(false));
+        assert!(sync.get("prune").is_none());
+        assert!(sync.get("dryRun").is_none());
+        assert!(sync.get("syncOptions").is_none());
+        assert!(sync.get("revision").is_none());
+        assert_eq!(body["operation"]["initiatedBy"]["username"], json!("lumen"));
+    }
+
+    #[test]
+    fn build_sync_operation_translates_each_flag_to_canonical_string() {
+        let opts = SyncOptions {
+            revision: Some("HEAD~1".into()),
+            prune: true,
+            dry_run: true,
+            force: true,
+            replace: true,
+            server_side_apply: true,
+            apply_out_of_sync_only: true,
+            respect_ignore_differences: true,
+            prune_last: true,
+            retry_limit: Some(3),
+            resources: None,
+        };
+        let body = build_sync_operation(&opts);
+        let sync = &body["operation"]["sync"];
+        assert_eq!(sync["revision"], json!("HEAD~1"));
+        assert_eq!(sync["prune"], json!(true));
+        assert_eq!(sync["dryRun"], json!(true));
+        assert_eq!(sync["syncStrategy"]["apply"]["force"], json!(true));
+        let opts_arr = sync["syncOptions"].as_array().unwrap();
+        let names: Vec<&str> = opts_arr.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(names.contains(&"Replace=true"));
+        assert!(names.contains(&"ServerSideApply=true"));
+        assert!(names.contains(&"ApplyOutOfSyncOnly=true"));
+        assert!(names.contains(&"RespectIgnoreDifferences=true"));
+        assert!(names.contains(&"PruneLast=true"));
+        assert_eq!(sync["retry"]["limit"], json!(3));
+    }
+
+    #[test]
+    fn build_sync_operation_includes_resource_subset_when_provided() {
+        let opts = SyncOptions {
+            resources: Some(vec![
+                ResourceRef {
+                    group: "apps".into(),
+                    kind: "Deployment".into(),
+                    name: "api".into(),
+                    namespace: Some("prod".into()),
+                },
+                // Garbage entry — empty kind/name should be filtered out.
+                ResourceRef {
+                    group: "".into(),
+                    kind: "".into(),
+                    name: "".into(),
+                    namespace: None,
+                },
+            ]),
+            ..SyncOptions::default()
+        };
+        let body = build_sync_operation(&opts);
+        let resources = body["operation"]["sync"]["resources"].as_array().unwrap();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0]["kind"], json!("Deployment"));
+        assert_eq!(resources[0]["name"], json!("api"));
+        assert_eq!(resources[0]["namespace"], json!("prod"));
+    }
+
+    #[test]
+    fn build_sync_operation_blank_revision_is_dropped() {
+        let opts = SyncOptions {
+            revision: Some("   ".into()),
+            ..SyncOptions::default()
+        };
+        let body = build_sync_operation(&opts);
+        assert!(body["operation"]["sync"].get("revision").is_none());
     }
 }

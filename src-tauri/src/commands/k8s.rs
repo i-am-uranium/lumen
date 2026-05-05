@@ -2113,12 +2113,11 @@ pub async fn sync_argocd_application(
     context: Option<String>,
     namespace: String,
     name: String,
-    prune: bool,
-    dry_run: bool,
+    options: argocd::SyncOptions,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
     let client = client_for(&state, context.as_deref()).await?;
-    argocd::sync_application(&client, &namespace, &name, prune, dry_run).await
+    argocd::sync_application(&client, &namespace, &name, &options).await
 }
 
 #[tauri::command]
@@ -2131,4 +2130,15 @@ pub async fn refresh_argocd_application(
 ) -> AppResult<()> {
     let client = client_for(&state, context.as_deref()).await?;
     argocd::refresh_application(&client, &namespace, &name, hard).await
+}
+
+#[tauri::command]
+pub async fn terminate_argocd_operation(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::terminate_operation(&client, &namespace, &name).await
 }
