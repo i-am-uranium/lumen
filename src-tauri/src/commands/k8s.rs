@@ -1520,6 +1520,18 @@ pub async fn delete_pod(
     act::delete_pod(&client, &namespace, &name).await
 }
 
+/// Trigger a manual run of a CronJob. Returns the name of the freshly-created Job.
+#[tauri::command]
+pub async fn trigger_cronjob(
+    namespace: String,
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<String> {
+    let client = client_for(&state, context.as_deref()).await?;
+    act::trigger_cronjob(&client, &namespace, &name).await
+}
+
 #[tauri::command]
 pub async fn delete_resource(
     namespace: String,

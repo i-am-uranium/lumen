@@ -19,6 +19,7 @@ import {
   TerminalSquare,
   Trash2,
   X,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PinButton } from "@/components/PinButton";
@@ -52,7 +53,8 @@ type Resource = { kind: string; namespace: string; name: string };
 type DrawerTab = "overview" | "logs" | "events" | "yaml";
 type PendingResourceAction =
   | { kind: "restart" }
-  | { kind: "scale"; replicas: number };
+  | { kind: "scale"; replicas: number }
+  | { kind: "trigger" };
 
 function isRestartableKind(kind: string | undefined): boolean {
   return kind === "deployment" || kind === "statefulset" || kind === "daemonset";
@@ -60,6 +62,10 @@ function isRestartableKind(kind: string | undefined): boolean {
 
 function isScalableKind(kind: string | undefined): boolean {
   return kind === "deployment" || kind === "statefulset";
+}
+
+function isTriggerableKind(kind: string | undefined): boolean {
+  return kind === "cronjob";
 }
 
 function desiredReplicasFromReady(ready: string | undefined): number | null {
@@ -94,6 +100,7 @@ export function ResourceDetailDrawer({
   const resourceKind = resource?.kind as WorkloadKind | undefined;
   const restartable = isRestartableKind(resource?.kind);
   const scalable = isScalableKind(resource?.kind);
+  const triggerable = isTriggerableKind(resource?.kind);
 
   // Pre-load pod-details so the Shell action can pick a default container
   // synchronously. SeverityStrip already runs the same query, so this is a
@@ -224,6 +231,13 @@ export function ResourceDetailDrawer({
           ctx || undefined,
         );
         toast.success(`restart triggered for ${resource.kind}/${resource.name}`);
+      } else if (pendingAction.kind === "trigger") {
+        const jobName = await k8s.triggerCronjob(
+          resource.namespace,
+          resource.name,
+          ctx || undefined,
+        );
+        toast.success(`triggered cronjob/${resource.name} → job/${jobName}`);
       } else {
         await k8s.scaleWorkload(
           resource.namespace,
@@ -353,6 +367,7 @@ export function ResourceDetailDrawer({
           onEditYaml={() => setActiveTab("yaml")}
           restartable={restartable}
           scalable={scalable}
+          triggerable={triggerable}
           currentReplicas={desiredReplicas}
           actionBusy={actionBusy}
           actionMetaLoading={actionResource.isLoading}
@@ -365,6 +380,7 @@ export function ResourceDetailDrawer({
             desiredReplicas !== null &&
             setPendingAction({ kind: "scale", replicas: desiredReplicas + 1 })
           }
+          onTrigger={() => setPendingAction({ kind: "trigger" })}
           deleting={deleting}
           onDelete={() => setDeleteConfirmOpen(true)}
           onClose={onClose}
@@ -405,15 +421,25 @@ export function ResourceDetailDrawer({
           title={
             pendingAction.kind === "restart"
               ? `restart ${resource.kind}`
-              : `scale ${resource.kind}`
+              : pendingAction.kind === "trigger"
+                ? `trigger ${resource.kind}`
+                : `scale ${resource.kind}`
           }
           description={
             pendingAction.kind === "restart"
               ? `This will trigger a rolling restart for ${resource.kind}/${resource.name}. Kubernetes will replace pods according to the controller strategy.`
-              : `This will set replicas for ${resource.kind}/${resource.name} to ${pendingAction.replicas}.`
+              : pendingAction.kind === "trigger"
+                ? `This will create a one-off Job from ${resource.kind}/${resource.name}'s spec. The Job will be owned by the CronJob, so the cluster's history limits and cleanup still apply.`
+                : `This will set replicas for ${resource.kind}/${resource.name} to ${pendingAction.replicas}.`
           }
           target={`${resource.namespace || "cluster"}/${resource.name}`}
-          confirmLabel={pendingAction.kind === "restart" ? "restart" : "scale"}
+          confirmLabel={
+            pendingAction.kind === "restart"
+              ? "restart"
+              : pendingAction.kind === "trigger"
+                ? "trigger"
+                : "scale"
+          }
           intent="warning"
           busy={actionBusy}
           onCancel={() => setPendingAction(null)}
@@ -468,12 +494,14 @@ function Header({
   onEditYaml,
   restartable,
   scalable,
+  triggerable,
   currentReplicas,
   actionBusy,
   actionMetaLoading,
   onRestart,
   onScaleDown,
   onScaleUp,
+  onTrigger,
   deleting,
   onDelete,
   onClose,
@@ -491,12 +519,14 @@ function Header({
   onEditYaml: () => void;
   restartable: boolean;
   scalable: boolean;
+  triggerable: boolean;
   currentReplicas: number | null;
   actionBusy: boolean;
   actionMetaLoading: boolean;
   onRestart: () => void;
   onScaleDown: () => void;
   onScaleUp: () => void;
+  onTrigger: () => void;
   deleting: boolean;
   onDelete: () => void;
   onClose: () => void;
@@ -630,6 +660,20 @@ function Header({
           }
           onClick={onScaleUp}
         />
+        {triggerable && (
+          <ActionIcon
+            icon={
+              actionBusy ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Zap className="size-3.5" />
+              )
+            }
+            label="trigger now"
+            disabled={actionBusy}
+            onClick={onTrigger}
+          />
+        )}
         <ActionIcon
           icon={<Pencil className="size-3.5" />}
           label="yaml"
