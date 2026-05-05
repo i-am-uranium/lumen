@@ -82,6 +82,11 @@ pub fn node_summary(n: &Node) -> NodeSummary {
                 .collect()
         })
         .unwrap_or_default();
+    let unschedulable = n
+        .spec
+        .as_ref()
+        .and_then(|s| s.unschedulable)
+        .unwrap_or(false);
     NodeSummary {
         name: n.metadata.name.clone().unwrap_or_default(),
         roles,
@@ -98,6 +103,7 @@ pub fn node_summary(n: &Node) -> NodeSummary {
         age_seconds: crate::k8s::resources::age_seconds(&n.metadata),
         cpu_usage_milli: None,
         mem_usage_bytes: None,
+        unschedulable,
     }
 }
 

@@ -77,12 +77,19 @@ export function CommandPalette() {
     enabled: paletteOpen && !!currentCtx,
     staleTime: 30_000,
   });
+  // Global search: resource queries fire whenever a context is selected,
+  // not just when a namespace is. Backend `list_workloads` treats an empty
+  // namespace as "all namespaces" via Api::all_with, so the same code path
+  // serves both cases. This is the load-bearing change for global cross-
+  // resource search — without it the palette only ever sees the active
+  // namespace's pods/deployments/etc.
+  const searchScope = currentNs ?? "";
   const resourceQueries = useQueries({
     queries: COMMAND_PALETTE_RESOURCE_KINDS.map((kind) => ({
-      queryKey: ["k8s", "workloads", currentCtx, currentNs, kind] as const,
+      queryKey: ["k8s", "workloads", currentCtx, searchScope, kind] as const,
       queryFn: () =>
-        k8s.listWorkloads(currentNs ?? "", kind, currentCtx ?? undefined),
-      enabled: paletteOpen && !!currentNs && shouldSearchResources,
+        k8s.listWorkloads(searchScope, kind, currentCtx ?? undefined),
+      enabled: paletteOpen && !!currentCtx && shouldSearchResources,
       staleTime: 10_000,
     })),
   });
@@ -122,8 +129,10 @@ export function CommandPalette() {
         .slice(0, 15)
         .map((label) => deployments.find((d) => `view logs: ${d.name}` === label))
         .filter(present),
+      // Global search hits N kinds × M namespaces — bumped from 25 to 50 so
+      // the top results aren't dominated by one chatty kind (events, pods).
       resources: fuzzyRank(normalizedQuery, resourceLabels)
-        .slice(0, 25)
+        .slice(0, 50)
         .map((label) =>
           allResources.find((r) => `${r.kind}: ${r.name}` === label),
         )
@@ -223,7 +232,11 @@ export function CommandPalette() {
           <div className="flex items-center gap-2 border-b border-term-border px-4">
             <Search className="size-4 text-term-muted" aria-hidden="true" />
             <CommandInput
-              placeholder="jump to resource, namespace, logs, AI, or command..."
+              placeholder={
+                currentNs
+                  ? `search ${currentNs} · resource, ns, logs, AI, command...`
+                  : "search all namespaces · resource, ns, logs, AI, command..."
+              }
               value={q}
               onValueChange={setQ}
               className="bg-transparent text-[14px] placeholder:text-term-subtle border-0"

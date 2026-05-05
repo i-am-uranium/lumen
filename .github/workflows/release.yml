@@ -237,10 +237,89 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
 
+  build-linux:
+    name: build · linux (${{ matrix.target }})
+    needs: [detect, create-release]
+    if: needs.detect.outputs.should_release == 'true'
+    # Pinning ubuntu-22.04 — its glibc 2.35 baseline is the widest-compatible
+    # Ubuntu LTS that still has webkit2gtk-4.1 packaged. Newer runners (24.04+)
+    # ship glibc 2.39 which shrinks the set of distros that can run our binary.
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: x64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: ${{ matrix.target }}
+
+      # Tauri 2 on Linux needs webkit2gtk-4.1 (the GTK4 webview), GTK3 dev
+      # headers (still required by some bundler crates), libsoup-3, and the
+      # standard rpm/dpkg/appimage tooling. librsvg2-dev is required for icon
+      # rendering inside the bundler.
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf \
+            rpm \
+            file
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ needs.detect.outputs.tag }}
+          releaseName: "Lumen ${{ needs.detect.outputs.tag }}"
+          releaseBody: |
+            Lumen ${{ needs.detect.outputs.tag }}
+
+            Linux builds (unsigned — verify the SHA from the release page if redistributing):
+            - `Lumen_${{ needs.detect.outputs.version }}_amd64.deb` — Debian / Ubuntu
+            - `Lumen_${{ needs.detect.outputs.version }}-1.x86_64.rpm` — Fedora / RHEL
+            - `Lumen_${{ needs.detect.outputs.version }}_amd64.AppImage` — distro-agnostic
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
   publish-release:
     name: publish release
-    needs: [detect, build-macos]
-    if: needs.detect.outputs.should_release == 'true'
+    # build-linux failure should not block macOS release — Linux is a new
+    # surface; if its first runs are flaky we still want macOS published.
+    # Once Linux is proven, tighten this to require both.
+    needs: [detect, build-macos, build-linux]
+    if: needs.detect.outputs.should_release == 'true' && always() && needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Flip draft to published
