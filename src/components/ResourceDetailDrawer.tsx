@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, Channel } from "@tauri-apps/api/core";
@@ -17,6 +17,8 @@ import {
   ScrollText,
   Sparkles,
   TerminalSquare,
+  Container,
+  GitCompareArrows,
   Trash2,
   X,
   Zap,
@@ -25,6 +27,7 @@ import { toast } from "sonner";
 import { PinButton } from "@/components/PinButton";
 import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
+import { useUiSettings } from "@/state/uiSettings";
 import { aiResourceUrl } from "@/lib/aiNavigation";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
@@ -54,7 +57,8 @@ type DrawerTab = "overview" | "logs" | "events" | "yaml";
 type PendingResourceAction =
   | { kind: "restart" }
   | { kind: "scale"; replicas: number }
-  | { kind: "trigger" };
+  | { kind: "trigger" }
+  | { kind: "setImage"; container: string; image: string };
 
 function isRestartableKind(kind: string | undefined): boolean {
   return kind === "deployment" || kind === "statefulset" || kind === "daemonset";
@@ -94,13 +98,30 @@ export function ResourceDetailDrawer({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingResourceAction | null>(null);
+  // Image hot-swap dialog — separate from `pendingAction` because it needs
+  // its own form inputs (container + image) that the user fills before
+  // confirming. Once submitted it folds into pendingAction for the
+  // existing handleResourceAction → toast → invalidate flow.
+  const [setImageOpen, setSetImageOpen] = useState(false);
+  // Cross-cluster diff dialog — read-only view, no action lifecycle so
+  // it doesn't go through pendingAction.
+  const [compareOpen, setCompareOpen] = useState(false);
   const { openSession } = useShellDock();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const resourceKind = resource?.kind as WorkloadKind | undefined;
-  const restartable = isRestartableKind(resource?.kind);
-  const scalable = isScalableKind(resource?.kind);
-  const triggerable = isTriggerableKind(resource?.kind);
+  const readOnly = useUiSettings((s) => s.readOnly);
+  // Capability flags fold the global read-only switch in. Header uses these
+  // for both disabled state and tooltips, so a single `false` propagates
+  // cleanly without touching downstream code paths.
+  const restartable = !readOnly && isRestartableKind(resource?.kind);
+  const scalable = !readOnly && isScalableKind(resource?.kind);
+  const triggerable = !readOnly && isTriggerableKind(resource?.kind);
+  // Image hot-swap reuses the restartable-kind set: only Deployment /
+  // StatefulSet / DaemonSet have a pod template to patch. The dialog does
+  // not list containers — for v1 the user types the container name
+  // directly; future iteration can fetch the spec and prefill.
+  const imageSettable = !readOnly && isRestartableKind(resource?.kind);
 
   // Pre-load pod-details so the Shell action can pick a default container
   // synchronously. SeverityStrip already runs the same query, so this is a
@@ -238,6 +259,18 @@ export function ResourceDetailDrawer({
           ctx || undefined,
         );
         toast.success(`triggered cronjob/${resource.name} → job/${jobName}`);
+      } else if (pendingAction.kind === "setImage") {
+        await k8s.setWorkloadImage(
+          resource.namespace,
+          resourceKind,
+          resource.name,
+          pendingAction.container,
+          pendingAction.image,
+          ctx || undefined,
+        );
+        toast.success(
+          `set ${pendingAction.container}=${pendingAction.image} on ${resource.kind}/${resource.name}`,
+        );
       } else {
         await k8s.scaleWorkload(
           resource.namespace,
@@ -381,8 +414,12 @@ export function ResourceDetailDrawer({
             setPendingAction({ kind: "scale", replicas: desiredReplicas + 1 })
           }
           onTrigger={() => setPendingAction({ kind: "trigger" })}
+          imageSettable={imageSettable}
+          onSetImage={() => setSetImageOpen(true)}
+          onCompare={() => setCompareOpen(true)}
           deleting={deleting}
           onDelete={() => setDeleteConfirmOpen(true)}
+          readOnly={readOnly}
           onClose={onClose}
         />
         <Tabs activeTab={activeTab} onChange={setActiveTab} showLogsTab={canViewLogs} />
@@ -423,14 +460,18 @@ export function ResourceDetailDrawer({
               ? `restart ${resource.kind}`
               : pendingAction.kind === "trigger"
                 ? `trigger ${resource.kind}`
-                : `scale ${resource.kind}`
+                : pendingAction.kind === "setImage"
+                  ? `set image on ${resource.kind}`
+                  : `scale ${resource.kind}`
           }
           description={
             pendingAction.kind === "restart"
               ? `This will trigger a rolling restart for ${resource.kind}/${resource.name}. Kubernetes will replace pods according to the controller strategy.`
               : pendingAction.kind === "trigger"
                 ? `This will create a one-off Job from ${resource.kind}/${resource.name}'s spec. The Job will be owned by the CronJob, so the cluster's history limits and cleanup still apply.`
-                : `This will set replicas for ${resource.kind}/${resource.name} to ${pendingAction.replicas}.`
+                : pendingAction.kind === "setImage"
+                  ? `This will patch container ${pendingAction.container} on ${resource.kind}/${resource.name} to use image ${pendingAction.image}. Kubernetes will roll the workload through its normal update strategy.`
+                  : `This will set replicas for ${resource.kind}/${resource.name} to ${pendingAction.replicas}.`
           }
           target={`${resource.namespace || "cluster"}/${resource.name}`}
           confirmLabel={
@@ -438,7 +479,9 @@ export function ResourceDetailDrawer({
               ? "restart"
               : pendingAction.kind === "trigger"
                 ? "trigger"
-                : "scale"
+                : pendingAction.kind === "setImage"
+                  ? "set image"
+                  : "scale"
           }
           intent="warning"
           busy={actionBusy}
@@ -446,7 +489,291 @@ export function ResourceDetailDrawer({
           onConfirm={handleResourceAction}
         />
       )}
+      {resource && setImageOpen && (
+        <SetImageDialog
+          resource={resource}
+          busy={actionBusy}
+          onCancel={() => setSetImageOpen(false)}
+          onSubmit={(container, image) => {
+            setSetImageOpen(false);
+            setPendingAction({ kind: "setImage", container, image });
+          }}
+        />
+      )}
+      {resource && compareOpen && (
+        <CompareAcrossClustersDialog
+          resource={resource}
+          sourceCtx={ctx}
+          onClose={() => setCompareOpen(false)}
+        />
+      )}
     </>
+  );
+}
+
+// ─── Set-image dialog (C4) ──────────────────────────────────────────────
+
+/**
+ * Tiny form for `kubectl set image` — two text inputs and a submit. We
+ * deliberately don't fetch and prefill from the workload spec for v1: the
+ * drawer doesn't currently load workload container details, and the most
+ * common use case (bumping a tag on a known container) is fast either way.
+ * A future iteration can pull the spec and turn the container input into
+ * a dropdown with the current image preselected.
+ */
+function SetImageDialog({
+  resource,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  resource: Resource;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (container: string, image: string) => void;
+}) {
+  const [container, setContainer] = useState("");
+  const [image, setImage] = useState("");
+  const canSubmit = container.trim().length > 0 && image.trim().length > 0 && !busy;
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-md rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border-default px-4 py-3">
+          <div className="flex flex-col">
+            <span className="text-[13px] font-medium text-text-primary">
+              set image · {resource.kind}/{resource.name}
+            </span>
+            <span className="text-[11px] text-text-muted">
+              {resource.namespace}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+            aria-label="cancel"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+        <div className="space-y-3 px-4 py-3">
+          <label className="block">
+            <span className="mb-1 block text-[11px] uppercase tracking-wide text-text-muted">
+              container
+            </span>
+            <input
+              type="text"
+              autoFocus
+              value={container}
+              onChange={(e) => setContainer(e.target.value)}
+              placeholder="e.g. api"
+              className="term-input w-full"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] uppercase tracking-wide text-text-muted">
+              new image
+            </span>
+            <input
+              type="text"
+              value={image}
+              onChange={(e) => setImage(e.target.value)}
+              placeholder="e.g. registry/api:v1.2.3"
+              className="term-input w-full"
+            />
+          </label>
+          <p className="text-[11px] text-text-muted">
+            Strategic merge patch — Kubernetes will roll the workload through
+            its normal update strategy. Only the named container is touched.
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-border-default px-4 py-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onCancel}
+          >
+            cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!canSubmit}
+            onClick={() => onSubmit(container.trim(), image.trim())}
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : "set image"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Cross-cluster compare dialog (D11) ─────────────────────────────────
+
+/**
+ * Picks a target context (defaulting to "all other reachable contexts"),
+ * fetches the same kind/name there, and shows side-by-side YAML.
+ *
+ * v1 deliberately stays text-only — no inline diff highlighting. The
+ * intent is "is staging the same as prod?", which side-by-side answers
+ * adequately. Future iteration can pull in the `diff` package for
+ * line-level highlighting.
+ */
+function CompareAcrossClustersDialog({
+  resource,
+  sourceCtx,
+  onClose,
+}: {
+  resource: Resource;
+  sourceCtx: string;
+  onClose: () => void;
+}) {
+  const { data: contexts = [] } = useQuery({
+    queryKey: ["k8s", "contexts"],
+    queryFn: k8s.listContexts,
+    staleTime: 30_000,
+  });
+  const otherContexts = contexts.filter((c) => c.name !== sourceCtx);
+  const [targetCtx, setTargetCtx] = useState<string>("");
+
+  // Effect: prefer first non-source context as default once they load.
+  useEffect(() => {
+    if (!targetCtx && otherContexts.length > 0) {
+      setTargetCtx(otherContexts[0].name);
+    }
+  }, [otherContexts, targetCtx]);
+
+  const kind = resource.kind as Parameters<typeof k8s.getResource>[1];
+  const sourceQuery = useQuery({
+    queryKey: ["k8s", "compare-src", sourceCtx, resource.namespace, kind, resource.name],
+    queryFn: () => k8s.getResource(resource.namespace, kind, resource.name, sourceCtx),
+    staleTime: 5_000,
+  });
+  const targetQuery = useQuery({
+    queryKey: ["k8s", "compare-tgt", targetCtx, resource.namespace, kind, resource.name],
+    queryFn: () => k8s.getResource(resource.namespace, kind, resource.name, targetCtx),
+    enabled: !!targetCtx,
+    staleTime: 5_000,
+  });
+
+  // Quick line-set delta — counts lines unique to one side. Not a real
+  // longest-common-subsequence diff, but enough to surface "yes there are
+  // differences, ~N lines" without pulling in a diff library.
+  const summary = useMemo(() => {
+    const a = sourceQuery.data?.yaml ?? "";
+    const b = targetQuery.data?.yaml ?? "";
+    if (!a || !b) return null;
+    const aLines = new Set(a.split("\n"));
+    const bLines = new Set(b.split("\n"));
+    let unique = 0;
+    for (const l of aLines) if (!bLines.has(l)) unique += 1;
+    for (const l of bLines) if (!aLines.has(l)) unique += 1;
+    return { unique, identical: unique === 0 };
+  }, [sourceQuery.data?.yaml, targetQuery.data?.yaml]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[80vh] w-full max-w-5xl flex-col rounded-panel border border-border-default bg-surface shadow-[var(--shadow-popover)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border-default px-4 py-3">
+          <div className="flex flex-col">
+            <span className="text-[13px] font-medium text-text-primary">
+              compare · {resource.kind}/{resource.name}
+            </span>
+            <span className="text-[11px] text-text-muted">{resource.namespace}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {summary && (
+              <span
+                className={cn(
+                  "rounded border px-1.5 py-0.5 font-mono text-[10px]",
+                  summary.identical
+                    ? "border-success/40 bg-success-soft text-success"
+                    : "border-warning/40 bg-warning-soft text-warning",
+                )}
+              >
+                {summary.identical
+                  ? "identical"
+                  : `${summary.unique} unique line${summary.unique === 1 ? "" : "s"}`}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+              aria-label="cancel"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-4 py-2">
+          <span className="text-[11px] text-text-muted">target context</span>
+          <select
+            value={targetCtx}
+            onChange={(e) => setTargetCtx(e.target.value)}
+            className="term-input h-7 px-2 text-[11px]"
+          >
+            {otherContexts.length === 0 ? (
+              <option value="">no other contexts available</option>
+            ) : (
+              otherContexts.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                  {c.is_prod ? " (prod)" : ""}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+        <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-border-subtle">
+          <YamlPane label={sourceCtx} query={sourceQuery} />
+          <YamlPane label={targetCtx || "—"} query={targetQuery} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function YamlPane({
+  label,
+  query,
+}: {
+  label: string;
+  query: { data?: { yaml: string }; isLoading: boolean; error: unknown };
+}) {
+  return (
+    <div className="flex min-w-0 flex-col">
+      <div className="shrink-0 border-b border-border-subtle px-3 py-1.5 font-mono text-[11px] text-text-muted truncate">
+        {label}
+      </div>
+      <div className="flex-1 overflow-auto bg-code-surface p-3 font-mono text-[11px] leading-relaxed text-text-primary">
+        {query.isLoading ? (
+          <span className="text-text-muted">loading…</span>
+        ) : query.error ? (
+          <span className="text-danger">
+            {(query.error as Error).message ?? "failed to fetch"}
+          </span>
+        ) : !query.data ? (
+          <span className="text-text-muted">not found in this context</span>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words">{query.data.yaml}</pre>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -502,8 +829,12 @@ function Header({
   onScaleDown,
   onScaleUp,
   onTrigger,
+  imageSettable,
+  onSetImage,
+  onCompare,
   deleting,
   onDelete,
+  readOnly,
   onClose,
 }: {
   titleId: string;
@@ -527,8 +858,14 @@ function Header({
   onScaleDown: () => void;
   onScaleUp: () => void;
   onTrigger: () => void;
+  imageSettable: boolean;
+  onSetImage: () => void;
+  /** Open the cross-cluster diff dialog. Always available regardless of read-only. */
+  onCompare: () => void;
   deleting: boolean;
   onDelete: () => void;
+  /** Global read-only switch — disables every destructive action with a tooltip. */
+  readOnly: boolean;
   onClose: () => void;
 }) {
   const kind = resource?.kind as WorkloadKind | undefined;
@@ -557,7 +894,12 @@ function Header({
   });
   if (!resource) return null;
   const deleteDisabled =
-    deleting || canDelete.isLoading || canDelete.data?.allowed !== true;
+    deleting || readOnly || canDelete.isLoading || canDelete.data?.allowed !== true;
+  const deleteTitle = readOnly
+    ? "delete (disabled — read-only mode)"
+    : deleteDisabled
+      ? "delete"
+      : "delete";
   return (
     <DrawerHeader>
       <div className="flex flex-col min-w-0 flex-1">
@@ -674,6 +1016,23 @@ function Header({
             onClick={onTrigger}
           />
         )}
+        {imageSettable && (
+          <ActionIcon
+            icon={<Container className="size-3.5" />}
+            label={
+              readOnly
+                ? "set image (read-only mode)"
+                : "set image (rolling update)"
+            }
+            disabled={actionBusy || readOnly}
+            onClick={onSetImage}
+          />
+        )}
+        <ActionIcon
+          icon={<GitCompareArrows className="size-3.5" />}
+          label="compare across clusters"
+          onClick={onCompare}
+        />
         <ActionIcon
           icon={<Pencil className="size-3.5" />}
           label="yaml"
@@ -689,9 +1048,11 @@ function Header({
             )
           }
           label={
-            canDelete.data?.allowed === false
-              ? "delete denied by RBAC"
-              : "delete"
+            readOnly
+              ? "delete (read-only mode)"
+              : canDelete.data?.allowed === false
+                ? "delete denied by RBAC"
+                : deleteTitle
           }
           disabled={deleteDisabled}
           onClick={onDelete}
@@ -1087,10 +1448,109 @@ function NonPodPropertiesTab({
       {hasResourceInsights(s.kind) && (
         <ResourceInsightsSection ctx={ctx} resource={resource} kind={s.kind} />
       )}
+      {s.kind === "cronjob" && (
+        <CronjobManualRunsSection ctx={ctx} resource={resource} />
+      )}
       <Section title="labels">
         <LabelPills entries={s.labels} max={8} />
       </Section>
     </div>
+  );
+}
+
+// ─── CronJob manual-runs section (C3) ───────────────────────────────────
+
+function CronjobManualRunsSection({
+  ctx,
+  resource,
+}: {
+  ctx: string;
+  resource: Resource;
+}) {
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: ["k8s", "cronjob-manual-runs", ctx, resource.namespace, resource.name],
+    queryFn: () =>
+      k8s.listManualCronjobRuns(resource.namespace, resource.name, ctx || undefined),
+    staleTime: 5_000,
+    refetchInterval: 15_000,
+  });
+  return (
+    <Section title={`manual runs · ${data?.length ?? 0}`}>
+      {isLoading ? (
+        <div className="text-[11px] text-text-muted">loading…</div>
+      ) : error ? (
+        <div className="text-[11px] text-danger">
+          {(error as Error).message ?? "failed to load manual runs"}
+        </div>
+      ) : !data || data.length === 0 ? (
+        <div className="text-[11px] text-text-muted">
+          no manual runs yet · use the ⚡ trigger button above to start one
+        </div>
+      ) : (
+        <ul className="space-y-1">
+          {data.map((run) => (
+            <li
+              key={run.name}
+              className="flex items-center gap-2 rounded border border-border-subtle bg-elevated px-2 py-1.5"
+            >
+              <ManualRunStatusDot status={run.status} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-mono text-[11px] text-text-primary">
+                  {run.name}
+                </div>
+                <div className="text-[10px] text-text-muted tabular-nums">
+                  {run.started_at
+                    ? `started ${formatRelativeFromAge(
+                        Math.max(
+                          0,
+                          Math.floor((Date.now() - Date.parse(run.started_at)) / 1000),
+                        ),
+                      )}`
+                    : "not started"}
+                  {run.completed_at &&
+                    ` · finished ${formatRelativeFromAge(
+                      Math.max(
+                        0,
+                        Math.floor((Date.now() - Date.parse(run.completed_at)) / 1000),
+                      ),
+                    )}`}
+                </div>
+              </div>
+              <span className="font-mono text-[10px] text-text-muted tabular-nums">
+                {run.succeeded}/{run.succeeded + run.active + run.failed}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button
+        type="button"
+        onClick={() => refetch()}
+        disabled={isFetching}
+        className="mt-2 inline-flex items-center gap-1 text-[10px] text-text-muted hover:text-text-primary disabled:opacity-50"
+      >
+        <Loader2 className={cn("size-3", isFetching && "animate-spin")} />
+        refresh
+      </button>
+    </Section>
+  );
+}
+
+function ManualRunStatusDot({ status }: { status: string }) {
+  const tone =
+    status === "Succeeded"
+      ? "bg-success"
+      : status === "Failed"
+        ? "bg-danger"
+        : status === "Active"
+          ? "bg-warning animate-pulse"
+          : "bg-text-muted";
+  return (
+    <span
+      className={cn("size-2 shrink-0 rounded-full", tone)}
+      title={status}
+      aria-label={status}
+    />
   );
 }
 

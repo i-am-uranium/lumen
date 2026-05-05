@@ -6,10 +6,11 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ActivityDrawer } from "@/components/ActivityDrawer";
 import { useActivityStream } from "@/state/activityStream";
+import { useUiSettings } from "@/state/uiSettings";
 import { ShellDock } from "@/components/shell/ShellDock";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
-import { Bell, Network, Sparkles } from "lucide-react";
+import { Bell, Lock, Network, Sparkles } from "lucide-react";
 import { useClusterStore } from "@/state/cluster";
 
 const named =
@@ -95,6 +96,28 @@ function StatusBar() {
   );
 }
 
+/**
+ * Tiny topbar chip that appears only when read-only mode is active, so
+ * it never adds visual weight in normal use. Click toggles the setting —
+ * faster than going through Cmd-K for users who flip it often.
+ */
+function ReadOnlyChip() {
+  const readOnly = useUiSettings((s) => s.readOnly);
+  const toggle = useUiSettings((s) => s.toggleReadOnly);
+  if (!readOnly) return null;
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      title="Read-only mode is on — click to disable"
+      className="ml-2 inline-flex items-center gap-1 rounded-[4px] border border-warning/40 bg-warning-soft px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-warning hover:bg-warning/15"
+    >
+      <Lock className="size-3" aria-hidden="true" />
+      read-only
+    </button>
+  );
+}
+
 function NavBar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -126,6 +149,7 @@ function NavBar() {
         <span className="rounded-[4px] border border-term-green/40 bg-term-green/10 px-2 py-1 text-[11px] uppercase tracking-wide text-term-green">
           cluster
         </span>
+        <ReadOnlyChip />
         <div className="flex-1" />
         <ThemeSwitcher />
         <button

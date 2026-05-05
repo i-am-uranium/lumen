@@ -17,6 +17,7 @@ import { k8s, type DrainSummary, type NodeSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { useUiSettings } from "@/state/uiSettings";
 
 function formatBytes(n: number): string {
   const u = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -49,12 +50,19 @@ type NodeAction =
 function Row({
   n,
   busy,
+  readOnly,
   onAction,
 }: {
   n: NodeSummary;
   busy: boolean;
+  readOnly: boolean;
   onAction: (a: NodeAction) => void;
 }) {
+  // `busy` reflects an in-flight server action on this row; `readOnly` is the
+  // global app-level switch. Combine them so the buttons disable for either,
+  // and reach for `readOnly` first when picking the tooltip.
+  const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const disabled = busy || readOnly;
   const cpuPct = n.cpu_usage_milli !== null && n.cpu_allocatable_milli > 0
     ? (n.cpu_usage_milli / n.cpu_allocatable_milli) * 100
     : null;
@@ -134,8 +142,8 @@ function Row({
             <button
               type="button"
               onClick={() => onAction({ kind: "uncordon", nodeName: n.name })}
-              disabled={busy}
-              title="uncordon (allow scheduling)"
+              disabled={disabled}
+              title={`uncordon (allow scheduling)${lockedTitle}`}
               className="p-1 rounded hover:bg-elevated text-text-secondary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <LockOpen className="size-3.5" />
@@ -144,8 +152,8 @@ function Row({
             <button
               type="button"
               onClick={() => onAction({ kind: "cordon", nodeName: n.name })}
-              disabled={busy}
-              title="cordon (stop scheduling new pods)"
+              disabled={disabled}
+              title={`cordon (stop scheduling new pods)${lockedTitle}`}
               className="p-1 rounded hover:bg-elevated text-text-secondary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Lock className="size-3.5" />
@@ -154,8 +162,8 @@ function Row({
           <button
             type="button"
             onClick={() => onAction({ kind: "drain", nodeName: n.name })}
-            disabled={busy}
-            title="drain (cordon + evict workload pods)"
+            disabled={disabled}
+            title={`drain (cordon + evict workload pods)${lockedTitle}`}
             className="p-1 rounded hover:bg-elevated text-text-secondary hover:text-warning disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldOff className="size-3.5" />}
@@ -208,6 +216,7 @@ export function NodesView() {
   });
   const nodes = data ?? [];
 
+  const readOnly = useUiSettings((s) => s.readOnly);
   const [pendingAction, setPendingAction] = useState<NodeAction | null>(null);
   const [actionBusyNode, setActionBusyNode] = useState<string | null>(null);
 
@@ -323,6 +332,7 @@ export function NodesView() {
                       key={n.name}
                       n={n}
                       busy={actionBusyNode === n.name}
+                      readOnly={readOnly}
                       onAction={setPendingAction}
                     />
                   ))}
