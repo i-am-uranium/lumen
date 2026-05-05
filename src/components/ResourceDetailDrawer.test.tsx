@@ -22,7 +22,21 @@ vi.mock("@/hooks/useShellDock", () => ({
 }));
 
 vi.mock("./logs/LogsViewer", () => ({
-  LogsViewer: () => <div />,
+  LogsViewer: ({
+    ctx,
+    namespace,
+    kind,
+    name,
+  }: {
+    ctx: string;
+    namespace: string;
+    kind: string;
+    name: string;
+  }) => (
+    <div data-testid="logs-viewer">
+      {ctx}/{namespace}/{kind}/{name}
+    </div>
+  ),
 }));
 
 vi.mock("@/lib/k8s", () => ({
@@ -77,6 +91,16 @@ function renderDrawer() {
 }
 
 describe("ResourceDetailDrawer confirmations", () => {
+  it("opens inline logs for deployments", async () => {
+    renderDrawer();
+
+    await userEvent.click(screen.getByRole("button", { name: /logs \(L\)/i }));
+
+    expect(screen.getByTestId("logs-viewer")).toHaveTextContent(
+      "dev/default/deployment/api",
+    );
+  });
+
   it("requires typed confirmation before restart, scale, and delete actions", async () => {
     renderDrawer();
 

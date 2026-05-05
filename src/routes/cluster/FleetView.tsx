@@ -37,12 +37,12 @@ import {
 import { StatusBadge } from "@/components/ui/status-badge";
 import { LumenPage, PageHeader, PanelHeading, SectionPanel } from "@/components/lumen/page";
 import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
+import { useClusterStore } from "@/state/cluster";
 
 function pct(n: number | null): string {
   if (n === null) return "—";
   return `${Math.round(n)}%`;
 }
-
 function heatBand(n: number | null): string {
   if (n === null) return "bg-term-panel-2";
   if (n < 50) return "bg-emerald-500/70";
@@ -552,6 +552,7 @@ function PodRatioRing({ card }: { card: FleetCard }) {
 function Card({
   entry,
   labels,
+  selected,
   onOpen,
   onConnect,
   onDisconnect,
@@ -561,6 +562,7 @@ function Card({
 }: {
   entry: FleetEntry;
   labels: string[];
+  selected: boolean;
   onOpen: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
@@ -573,7 +575,10 @@ function Card({
     return (
       <article
         data-testid="fleet-card"
-        className="flex min-h-[214px] flex-col justify-between gap-3 rounded-panel border border-border-default bg-surface p-4 text-left transition-colors hover:border-accent-primary/35 hover:bg-elevated"
+        className={cn(
+          "flex min-h-[214px] flex-col justify-between gap-3 rounded-panel border bg-surface p-4 text-left transition-colors hover:border-accent-primary/35 hover:bg-elevated",
+          selected ? "border-accent-primary/60 ring-1 ring-accent-primary/25" : "border-border-default",
+        )}
       >
         <div className="flex items-start gap-3">
           <div className="size-2 rounded-full mt-1.5 shrink-0 bg-term-subtle" />
@@ -647,7 +652,9 @@ function Card({
       data-testid="fleet-card"
       className={cn(
         "text-left group relative flex flex-col gap-3 p-4 rounded-panel border transition-colors min-h-[214px] justify-between",
-        "border-border-default bg-surface",
+        selected
+          ? "border-accent-primary/60 bg-surface ring-1 ring-accent-primary/25"
+          : "border-border-default bg-surface",
         "hover:border-accent-primary/35 hover:bg-elevated",
         unreachable && "opacity-75 hover:border-term-border-soft",
       )}
@@ -805,6 +812,21 @@ function Card({
   );
 }
 
+const LABEL_TONES = [
+  "border-success/35 bg-success/10 text-success",
+  "border-info/35 bg-info/10 text-info",
+  "border-warning/35 bg-warning/10 text-warning",
+  "border-accent-primary/35 bg-accent-primary-soft text-accent-primary",
+];
+
+function labelTone(label: string): string {
+  let hash = 0;
+  for (const char of label) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return LABEL_TONES[hash % LABEL_TONES.length];
+}
+
 function ClusterLabels({
   contextName,
   labels,
@@ -830,7 +852,10 @@ function ClusterLabels({
       {labels.map((label) => (
         <span
           key={label}
-          className="inline-flex items-center gap-1 rounded border border-border-default bg-elevated px-1.5 py-0.5 text-[10px] text-text-secondary"
+          className={cn(
+            "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium",
+            labelTone(label),
+          )}
         >
           <Tag className="size-2.5" aria-hidden="true" />
           {label}
@@ -873,6 +898,7 @@ function ClusterLabels({
 
 export function FleetView() {
   const nav = useNavigate();
+  const { contextName: activeContextName, setContext } = useClusterStore();
   const [cardsByContext, setCardsByContext] = useState<Record<string, FleetCard>>(
     readStoredCards,
   );
@@ -983,7 +1009,9 @@ export function FleetView() {
     setConnecting((prev) => new Set(prev).add(contextName));
     try {
       const card = await k8s.probeFleetContext(contextName);
+      setContext(card.context.name);
       setCardsByContext((prev) => ({ ...prev, [contextName]: card }));
+      await k8s.setContext(contextName).catch(() => undefined);
     } finally {
       setConnecting((prev) => {
         const next = new Set(prev);
@@ -1187,6 +1215,7 @@ export function FleetView() {
                         key={entry.context.name}
                         entry={entry}
                         labels={labelsByContext[entry.context.name] ?? []}
+                        selected={activeContextName === entry.context.name}
                         onOpen={() =>
                           nav(`/cluster/${encodeURIComponent(entry.context.name)}/workloads`)
                         }

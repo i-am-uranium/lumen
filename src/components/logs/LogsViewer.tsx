@@ -1,5 +1,5 @@
-import { useMemo, useReducer, useState, type Dispatch } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useReducer, type Dispatch } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { k8s } from "@/lib/k8s";
 import type { WorkloadKind } from "@/lib/k8s";
 import { LogsPanel } from "./LogsPanel";
@@ -41,19 +41,24 @@ export function LogsViewer({
     initialPanel({ id: `tab-${firstPod ?? name}`, podName: firstPod ?? name }),
   );
 
-  // Once child pods load, replace the placeholder tab if needed.
-  const [seeded, setSeeded] = useState(false);
-  if (isWorkload && !seeded && childPods.length > 0) {
-    setSeeded(true);
-    if (panel.type === "leaf" && panel.tabs.length === 1 && panel.tabs[0].podName !== childPods[0]) {
-      dispatch({ type: "closeTab", tabId: panel.tabs[0].id });
-      dispatch({ type: "addTab", tab: { id: `tab-${childPods[0]}`, podName: childPods[0] } });
-    }
-  }
-
   // Flat, stable-ordered list of all tabs across the entire tree — used for
   // pod-detail queries (stable hook order) and for computing available pods.
   const allTabs = useMemo(() => allTabsSorted(panel), [panel]);
+
+  // Once child pods load, replace the synthetic workload-name placeholder
+  // with the first real pod. Do this in an effect so render stays pure.
+  useEffect(() => {
+    if (!isWorkload || childPods.length === 0 || allTabs.length !== 1) return;
+    const [tab] = allTabs;
+    const firstChildPod = childPods[0];
+    if (tab.podName !== name || tab.podName === firstChildPod) return;
+    dispatch({
+      type: "replaceTab",
+      tabId: tab.id,
+      tab: { id: `tab-${firstChildPod}`, podName: firstChildPod },
+    });
+  }, [allTabs, childPods, isWorkload, name]);
+
   const containerOptionsByPod = useContainerOptionsForTabs(ctx, namespace, allTabs);
 
   const openPodNames = useMemo(
@@ -147,16 +152,16 @@ function useContainerOptionsForTabs(
   namespace: string,
   tabs: Tab[],
 ): Record<string, ContainerOption[]> {
-  const out: Record<string, ContainerOption[]> = {};
-  // Tabs come pre-sorted by id from `allTabsSorted` so hook order is stable
-  // across renders (independent of which leaf a tab currently lives in).
-  for (const t of tabs) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const q = useQuery({
+  const queries = useQueries({
+    queries: tabs.map((t) => ({
       queryKey: ["k8s", "pod-details", ctx, namespace, t.podName],
       queryFn: () => k8s.getPodDetails(ctx, namespace, t.podName),
       staleTime: 10_000,
-    });
+    })),
+  });
+  const out: Record<string, ContainerOption[]> = {};
+  for (const [index, t] of tabs.entries()) {
+    const q = queries[index];
     out[t.podName] = (q.data?.containers ?? []).map((c) => ({ name: c.name, kind: "regular" as const }));
   }
   return out;

@@ -81,7 +81,7 @@ export function ResourceDetailDrawer({
 }) {
   const open = resource !== null;
   const isPod = resource?.kind === "pod";
-  const showLogsTab = isPod || ["deployment", "statefulset", "daemonset", "replicaset", "job"].includes(resource?.kind ?? "");
+  const canViewLogs = isPod || ["deployment", "statefulset", "daemonset", "replicaset", "job"].includes(resource?.kind ?? "");
   const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
   const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -163,7 +163,7 @@ export function ResourceDetailDrawer({
           onClose();
           break;
         case "l":
-          if (isPod) handleViewLogs();
+          if (canViewLogs) handleViewLogs();
           break;
         case "s":
           if (isPod) openShell();
@@ -344,6 +344,7 @@ export function ResourceDetailDrawer({
           ctx={ctx}
           resource={resource}
           isPod={isPod}
+          canViewLogs={canViewLogs}
           downloading={downloading}
           onViewLogs={handleViewLogs}
           onDownloadLogs={handleDownloadLogs}
@@ -368,7 +369,7 @@ export function ResourceDetailDrawer({
           onDelete={() => setDeleteConfirmOpen(true)}
           onClose={onClose}
         />
-        <Tabs activeTab={activeTab} onChange={setActiveTab} showLogsTab={showLogsTab} />
+        <Tabs activeTab={activeTab} onChange={setActiveTab} showLogsTab={canViewLogs} />
         <div className="flex-1 min-h-0 overflow-y-auto">
           {activeTab === "overview" && (
             <PropertiesTab ctx={ctx} resource={resource!} isPod={isPod} />
@@ -458,6 +459,7 @@ function Header({
   ctx,
   resource,
   isPod,
+  canViewLogs,
   downloading,
   onViewLogs,
   onDownloadLogs,
@@ -480,6 +482,7 @@ function Header({
   ctx: string;
   resource: Resource | null;
   isPod: boolean;
+  canViewLogs: boolean;
   downloading: boolean;
   onViewLogs: () => void;
   onDownloadLogs: () => void;
@@ -564,7 +567,7 @@ function Header({
           icon={<ScrollText className="size-3.5" />}
           label="logs"
           hint="L"
-          disabled={!isPod}
+          disabled={!canViewLogs}
           onClick={onViewLogs}
         />
         <ActionIcon

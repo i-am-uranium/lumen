@@ -23,6 +23,22 @@ import {
 import { toast } from "sonner";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ai, type AiCommandRunResult, type AiProviderStatus, type AiRunResult } from "@/lib/ai";
+import {
+  createSessionId,
+  listAiSessions,
+  saveAiSession,
+  deleteAiSession,
+  type AiAssistantSession,
+  type AiSessionCommandRun,
+} from "@/lib/aiSessions";
+import {
+  parseStructuredAnswer,
+  normalizeSectionLines,
+  isCommandLine,
+  cleanCommand,
+  getCommandSafety,
+  type StructuredAnswerSection as AnswerSection,
+} from "@/lib/aiStructured";
 import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { redactForAi } from "@/lib/aiRedaction";
 import { cn } from "@/lib/utils";
@@ -89,11 +105,22 @@ type AiAssistantSettings = {
   provider: "codex" | "claude";
   model: string;
   detailsOpen: boolean;
+  includeHealth: boolean;
+  includeMetrics: boolean;
+  includeNotes: boolean;
 };
 
 function readAiAssistantSettings(): AiAssistantSettings {
+  const defaults = {
+    provider: "codex" as const,
+    model: "",
+    detailsOpen: false,
+    includeHealth: true,
+    includeMetrics: true,
+    includeNotes: true,
+  };
   if (typeof window === "undefined") {
-    return { provider: "codex", model: "", detailsOpen: false };
+    return defaults;
   }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(AI_SETTINGS_STORAGE_KEY) ?? "{}") as Partial<AiAssistantSettings>;
@@ -101,15 +128,22 @@ function readAiAssistantSettings(): AiAssistantSettings {
       provider: parsed.provider === "claude" ? "claude" : "codex",
       model: typeof parsed.model === "string" ? parsed.model : "",
       detailsOpen: parsed.detailsOpen === true,
+      includeHealth: parsed.includeHealth !== false,
+      includeMetrics: parsed.includeMetrics !== false,
+      includeNotes: parsed.includeNotes !== false,
     };
   } catch {
-    return { provider: "codex", model: "", detailsOpen: false };
+    return defaults;
   }
 }
 
 function writeAiAssistantSettings(settings: AiAssistantSettings) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  try {
+    window.localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Local persistence is best-effort; the assistant remains usable without it.
+  }
 }
 
 export function AiAssistant() {
@@ -138,6 +172,15 @@ export function AiAssistant() {
     () => readAiAssistantSettings().provider,
   );
   const [model, setModel] = useState(() => readAiAssistantSettings().model);
+  const [includeHealth, setIncludeHealth] = useState(
+    () => readAiAssistantSettings().includeHealth,
+  );
+  const [includeMetrics, setIncludeMetrics] = useState(
+    () => readAiAssistantSettings().includeMetrics,
+  );
+  const [includeNotes, setIncludeNotes] = useState(
+    () => readAiAssistantSettings().includeNotes,
+  );
   const [approved, setApproved] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(
     () => readAiAssistantSettings().detailsOpen,
@@ -145,6 +188,9 @@ export function AiAssistant() {
   const [promptEdited, setPromptEdited] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<AiRunResult | null>(null);
+  const [sessions, setSessions] = useState<AiAssistantSession[]>(() => listAiSessions());
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [commandRuns, setCommandRuns] = useState<AiSessionCommandRun[]>([]);
 
   const providers = useQuery({
     queryKey: ["ai", "providers"],
@@ -164,8 +210,12 @@ export function AiAssistant() {
     [workloadQueries],
   );
   const contextPack = useMemo(
-    () => buildContextPack(ctx, workloads, notes),
-    [ctx, workloads, notes],
+    () => buildContextPack(ctx, workloads, notes, {
+      includeHealth,
+      includeMetrics,
+      includeNotes,
+    }),
+    [ctx, workloads, notes, includeHealth, includeMetrics, includeNotes],
   );
   const redacted = useMemo(() => redactForAi(contextPack), [contextPack]);
   const basePrompt = useMemo(
@@ -209,16 +259,109 @@ export function AiAssistant() {
   }, [model, selectedProvider]);
 
   useEffect(() => {
-    writeAiAssistantSettings({ provider, model, detailsOpen });
-  }, [provider, model, detailsOpen]);
+    writeAiAssistantSettings({
+      provider,
+      model,
+      detailsOpen,
+      includeHealth,
+      includeMetrics,
+      includeNotes,
+    });
+  }, [provider, model, detailsOpen, includeHealth, includeMetrics, includeNotes]);
+
+  function buildSession(out: AiRunResult, id = createSessionId(), commandRunsForSession = commandRuns): AiAssistantSession {
+    const now = new Date().toISOString();
+    const existing = sessions.find((session) => session.id === id);
+    return {
+      id,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      title: question.trim().slice(0, 80) || selectedTask.label,
+      task,
+      question,
+      notes,
+      provider,
+      model: selectedModel,
+      prompt,
+      context: contextSignals,
+      redactions: {
+        findings: redacted.findings,
+        count: redactionCount,
+      },
+      result: {
+        stdout: out.stdout,
+        stderr: out.stderr,
+        exitCode: out.exit_code,
+        timedOut: out.timed_out,
+        completedAt: now,
+      },
+      commandRuns: commandRunsForSession,
+    };
+  }
+
+  function persistSession(out: AiRunResult, id = activeSessionId ?? createSessionId()) {
+    const saved = buildSession(out, id);
+    setSessions(saveAiSession(saved));
+    setActiveSessionId(saved.id);
+  }
+
+  function handleCommandResult(run: AiSessionCommandRun) {
+    setCommandRuns((currentRuns) => {
+      const nextRuns = [run, ...currentRuns.filter((item) => item.command !== run.command)];
+      if (result && activeSessionId) {
+        const saved = buildSession(result, activeSessionId, nextRuns);
+        setSessions(saveAiSession(saved));
+      }
+      return nextRuns;
+    });
+  }
+
+  function restoreSession(session: AiAssistantSession) {
+    const restoredTask = parseAiTask(session.task) ?? "ask";
+    setTask(restoredTask);
+    setQuestion(session.question);
+    setNotes(session.notes);
+    if (session.provider === "codex" || session.provider === "claude") {
+      setProvider(session.provider);
+    }
+    setModel(session.model);
+    setPromptDraft(session.prompt);
+    setPromptEdited(true);
+    setApproved(false);
+    setResult(session.result ? {
+      provider: session.provider,
+      stdout: session.result.stdout,
+      stderr: session.result.stderr,
+      exit_code: session.result.exitCode,
+      timed_out: session.result.timedOut,
+    } : null);
+    setCommandRuns(session.commandRuns);
+    setActiveSessionId(session.id);
+  }
+
+  function removeSession(id: string) {
+    setSessions(deleteAiSession(id));
+    if (activeSessionId === id) {
+      setActiveSessionId(null);
+      setCommandRuns([]);
+    }
+  }
+
+  function resetCurrentRun() {
+    setActiveSessionId(null);
+    setCommandRuns([]);
+    setResult(null);
+  }
 
   async function runProvider() {
     if (!approved || !selectedProvider?.available || running) return;
     setRunning(true);
     setResult(null);
+    setCommandRuns([]);
     try {
       const out = await ai.runPrompt(provider, prompt, selectedModel);
       setResult(out);
+      persistSession(out, createSessionId());
       if (out.exit_code === 0 && !out.timed_out) {
         toast.success(`${selectedProvider.label} completed`);
       } else {
@@ -256,13 +399,28 @@ export function AiAssistant() {
             model={selectedModel}
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
+            contextOptions={{
+              includeHealth,
+              includeMetrics,
+              includeNotes,
+            }}
+            onContextOptionsChange={(next) => {
+              if (next.includeHealth !== undefined) setIncludeHealth(next.includeHealth);
+              if (next.includeMetrics !== undefined) setIncludeMetrics(next.includeMetrics);
+              if (next.includeNotes !== undefined) setIncludeNotes(next.includeNotes);
+              setPromptEdited(false);
+              setApproved(false);
+              resetCurrentRun();
+            }}
             onProviderChange={(nextProvider) => {
               setProvider(nextProvider);
               setApproved(false);
+              resetCurrentRun();
             }}
             onModelChange={(nextModel) => {
               setModel(nextModel);
               setApproved(false);
+              resetCurrentRun();
             }}
             prompt={prompt}
             promptEdited={promptEdited}
@@ -274,11 +432,13 @@ export function AiAssistant() {
               setPromptDraft(nextPrompt);
               setPromptEdited(nextPrompt !== basePrompt);
               setApproved(false);
+              resetCurrentRun();
             }}
             onResetPrompt={() => {
               setPromptDraft(basePrompt);
               setPromptEdited(false);
               setApproved(false);
+              resetCurrentRun();
             }}
           />
           <TaskChooser
@@ -288,7 +448,7 @@ export function AiAssistant() {
               setQuestion(item.prompt);
               setPromptEdited(false);
               setApproved(false);
-              setResult(null);
+              resetCurrentRun();
             }}
           />
           <QuestionPanel
@@ -309,11 +469,13 @@ export function AiAssistant() {
               setQuestion(value);
               setPromptEdited(false);
               setApproved(false);
+              resetCurrentRun();
             }}
             onNotesChange={(value) => {
               setNotes(value);
               setPromptEdited(false);
               setApproved(false);
+              resetCurrentRun();
             }}
             onApprovedChange={setApproved}
             onRun={handleQuestionAction}
@@ -327,12 +489,20 @@ export function AiAssistant() {
             model={selectedModel}
             question={question}
             running={running}
+            commandRuns={commandRuns}
+            onCommandResult={handleCommandResult}
           />
           <AiActionQueue
             task={selectedTask}
             approved={approved}
             provider={selectedProvider}
             running={running}
+          />
+          <SessionHistoryPanel
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onRestore={restoreSession}
+            onDelete={removeSession}
           />
         </div>
       </div>
@@ -403,6 +573,70 @@ function ConfigurationPanel({
           </pre>
         </div>
       )}
+    </div>
+  );
+}
+
+function ContextOptionsPanel({
+  options,
+  onChange,
+}: {
+  options: {
+    includeHealth: boolean;
+    includeMetrics: boolean;
+    includeNotes: boolean;
+  };
+  onChange: (next: Partial<typeof options>) => void;
+}) {
+  const rows = [
+    {
+      key: "includeHealth" as const,
+      label: "Health signals",
+      meta: "Unhealthy resources, restarts, readiness, and phase",
+      checked: options.includeHealth,
+    },
+    {
+      key: "includeMetrics" as const,
+      label: "Resource metrics",
+      meta: "Top CPU and memory consumers when metrics are available",
+      checked: options.includeMetrics,
+    },
+    {
+      key: "includeNotes" as const,
+      label: "Operator notes",
+      meta: "Your pasted evidence and selected resource focus",
+      checked: options.includeNotes,
+    },
+  ];
+
+  return (
+    <div className="space-y-2 rounded-control border border-border-default bg-elevated p-3">
+      <div className="text-[10px] uppercase tracking-wide text-text-muted">
+        Context included
+      </div>
+      <div className="grid gap-2">
+        {rows.map((row) => (
+          <label
+            key={row.key}
+            className="flex cursor-pointer items-start gap-2 rounded border border-border-subtle bg-code-surface/50 px-3 py-2"
+          >
+            <input
+              type="checkbox"
+              checked={row.checked}
+              onChange={(event) => onChange({ [row.key]: event.target.checked })}
+              className="mt-0.5 size-4 accent-[var(--accent-primary)]"
+            />
+            <span className="min-w-0">
+              <span className="block text-[12px] font-medium text-text-primary">
+                {row.label}
+              </span>
+              <span className="mt-0.5 block text-[10px] leading-4 text-text-muted">
+                {row.meta}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -550,6 +784,12 @@ type ApprovalPanelProps = {
   model: string;
   detailsOpen: boolean;
   onToggleDetails: () => void;
+  contextOptions: {
+    includeHealth: boolean;
+    includeMetrics: boolean;
+    includeNotes: boolean;
+  };
+  onContextOptionsChange: (next: Partial<ApprovalPanelProps["contextOptions"]>) => void;
   onProviderChange: (value: "codex" | "claude") => void;
   onModelChange: (value: string) => void;
   prompt: string;
@@ -571,6 +811,8 @@ function ApprovalPanel({
   model,
   detailsOpen,
   onToggleDetails,
+  contextOptions,
+  onContextOptionsChange,
   onProviderChange,
   onModelChange,
   prompt,
@@ -646,14 +888,20 @@ function ApprovalPanel({
 
         {detailsOpen && (
           <div className="grid gap-3 xl:grid-cols-[minmax(280px,380px)_minmax(0,1fr)]">
-            <ConfigurationPanel
-              provider={provider}
-              providers={providers}
-              value={providerValue}
-              model={model}
-              onChange={onProviderChange}
-              onModelChange={onModelChange}
-            />
+            <div className="space-y-3">
+              <ConfigurationPanel
+                provider={provider}
+                providers={providers}
+                value={providerValue}
+                model={model}
+                onChange={onProviderChange}
+                onModelChange={onModelChange}
+              />
+              <ContextOptionsPanel
+                options={contextOptions}
+                onChange={onContextOptionsChange}
+              />
+            </div>
             <label className="block">
               <div className="mb-2 text-[10px] uppercase tracking-wide text-text-muted">
                 Prompt
@@ -715,12 +963,16 @@ function AnswerPanel({
   model,
   question,
   running,
+  commandRuns,
+  onCommandResult,
 }: {
   result: AiRunResult | null;
   provider?: AiProviderStatus;
   model: string;
   question: string;
   running: boolean;
+  commandRuns: AiSessionCommandRun[];
+  onCommandResult: (run: AiSessionCommandRun) => void;
 }) {
   return (
     <aside className="min-h-[520px] rounded-panel border border-border-default bg-shell/90 p-4 shadow-[var(--shadow-panel)] xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-auto">
@@ -808,7 +1060,11 @@ function AnswerPanel({
                 {result.stderr}
               </div>
             )}
-            <StructuredAnswer stdout={result.stdout} />
+            <StructuredAnswer
+              stdout={result.stdout}
+              commandRuns={commandRuns}
+              onCommandResult={onCommandResult}
+            />
           </div>
         ) : null}
       </div>
@@ -900,11 +1156,77 @@ function AiActionQueue({
   );
 }
 
-type AnswerSection = {
-  title: string;
-  content: string;
-  tone: "summary" | "evidence" | "cause" | "checks" | "commands" | "remediation" | "confirmation";
-};
+function SessionHistoryPanel({
+  sessions,
+  activeSessionId,
+  onRestore,
+  onDelete,
+}: {
+  sessions: AiAssistantSession[];
+  activeSessionId: string | null;
+  onRestore: (session: AiAssistantSession) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <SectionPanel className="space-y-3 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-text-muted">
+          <Database className="size-3.5" />
+          Sessions
+        </div>
+        <span className="rounded-full border border-border-default bg-elevated px-2 py-0.5 text-[10px] text-text-muted">
+          {sessions.length} saved
+        </span>
+      </div>
+      {sessions.length ? (
+        <div className="max-h-[420px] space-y-2 overflow-auto pr-1">
+          {sessions.map((session) => (
+            <div
+              key={session.id}
+              className={cn(
+                "rounded-control border bg-elevated p-2",
+                activeSessionId === session.id
+                  ? "border-accent-primary/45"
+                  : "border-border-default",
+              )}
+            >
+              <button
+                type="button"
+                className="block w-full min-w-0 text-left"
+                onClick={() => onRestore(session)}
+              >
+                <div className="truncate text-[12px] font-medium text-text-primary">
+                  {session.title}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-text-muted">
+                  <span>{new Date(session.updatedAt).toLocaleString()}</span>
+                  <span>{session.provider}</span>
+                  <span>{session.commandRuns.length} commands</span>
+                </div>
+              </button>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="truncate text-[10px] text-text-muted">
+                  {session.task}
+                </span>
+                <button
+                  type="button"
+                  className="text-[10px] text-text-muted hover:text-danger"
+                  onClick={() => onDelete(session.id)}
+                >
+                  delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-control border border-border-default bg-elevated p-3 text-[11px] leading-5 text-text-muted">
+          Completed AI runs are saved locally and can be reopened here.
+        </div>
+      )}
+    </SectionPanel>
+  );
+}
 
 const ANSWER_SECTION_META: Record<
   AnswerSection["tone"],
@@ -940,9 +1262,17 @@ const ANSWER_SECTION_META: Record<
   },
 };
 
-function StructuredAnswer({ stdout }: { stdout: string }) {
-  const answerText = useMemo(() => extractAssistantAnswer(stdout), [stdout]);
-  const sections = useMemo(() => parseAnswerSections(answerText), [answerText]);
+function StructuredAnswer({
+  stdout,
+  commandRuns,
+  onCommandResult,
+}: {
+  stdout: string;
+  commandRuns: AiSessionCommandRun[];
+  onCommandResult: (run: AiSessionCommandRun) => void;
+}) {
+  const parsed = useMemo(() => parseStructuredAnswer(stdout), [stdout]);
+  const sections = parsed.sections;
   if (!stdout.trim()) {
     return (
       <div className="rounded-control border border-border-default bg-code-surface p-4 text-[12px] text-text-muted">
@@ -955,7 +1285,12 @@ function StructuredAnswer({ stdout }: { stdout: string }) {
     <div className="space-y-3">
       {sections.length ? (
         sections.map((section) => (
-          <AnswerSectionCard key={section.title} section={section} />
+          <AnswerSectionCard
+            key={section.title}
+            section={section}
+            commandRuns={commandRuns}
+            onCommandResult={onCommandResult}
+          />
         ))
       ) : (
         <MissingStructuredAnswer />
@@ -965,7 +1300,15 @@ function StructuredAnswer({ stdout }: { stdout: string }) {
   );
 }
 
-function AnswerSectionCard({ section }: { section: AnswerSection }) {
+function AnswerSectionCard({
+  section,
+  commandRuns,
+  onCommandResult,
+}: {
+  section: AnswerSection;
+  commandRuns: AiSessionCommandRun[];
+  onCommandResult: (run: AiSessionCommandRun) => void;
+}) {
   const meta = ANSWER_SECTION_META[section.tone];
   const lines = normalizeSectionLines(section.content);
   const commandLines =
@@ -1074,14 +1417,21 @@ function AnswerSectionCard({ section }: { section: AnswerSection }) {
 
       {commandLines.length > 0 && (
         <div className="space-y-2">
-          {commandLines.map((line, index) => (
-            <CommandActionRow
-              key={`${line}-${index}`}
-              command={line}
-              intent={section.tone === "confirmation" ? "warning" : "primary"}
-              label={section.tone === "confirmation" ? "Confirm" : "Run"}
-            />
-          ))}
+          {commandLines.map((line, index) => {
+            const command = cleanCommand(line);
+            const requiresConfirmation =
+              getCommandSafety(command, section.tone) === "requires-confirmation";
+            return (
+              <CommandActionRow
+                key={`${line}-${index}`}
+                command={line}
+                intent={requiresConfirmation ? "warning" : "primary"}
+                label={requiresConfirmation ? "Confirm" : "Run"}
+                savedRun={commandRuns.find((run) => run.command === command)}
+                onCommandResult={onCommandResult}
+              />
+            );
+          })}
         </div>
       )}
     </section>
@@ -1159,17 +1509,44 @@ function CommandActionRow({
   command,
   intent,
   label,
+  savedRun,
+  onCommandResult,
 }: {
   command: string;
   intent: "primary" | "warning";
   label: string;
+  savedRun?: AiSessionCommandRun;
+  onCommandResult: (run: AiSessionCommandRun) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<AiCommandRunResult | null>(null);
   const cleaned = cleanCommand(command);
+  const [result, setResult] = useState<(AiCommandRunResult & {
+    durationMs?: number;
+    startedAt?: string;
+  }) | null>(() => savedRun ? {
+    command: savedRun.command,
+    stdout: savedRun.stdout,
+    stderr: savedRun.stderr,
+    exit_code: savedRun.exitCode,
+    timed_out: savedRun.timedOut,
+    durationMs: savedRun.durationMs,
+    startedAt: savedRun.startedAt,
+  } : null);
   const params = useParams();
   const ctx = decodeURIComponent(params.ctx ?? "");
+
+  useEffect(() => {
+    setResult(savedRun ? {
+      command: savedRun.command,
+      stdout: savedRun.stdout,
+      stderr: savedRun.stderr,
+      exit_code: savedRun.exitCode,
+      timed_out: savedRun.timedOut,
+      durationMs: savedRun.durationMs,
+      startedAt: savedRun.startedAt,
+    } : null);
+  }, [savedRun]);
 
   async function copyCommand() {
     await navigator.clipboard.writeText(cleaned);
@@ -1179,11 +1556,24 @@ function CommandActionRow({
 
   async function runCommand() {
     if (running) return;
+    const startedAt = new Date().toISOString();
+    const startedMs = performance.now();
     setRunning(true);
     setResult(null);
     try {
       const out = await ai.runCommand(cleaned, ctx || undefined);
-      setResult(out);
+      const durationMs = Math.round(performance.now() - startedMs);
+      const next = { ...out, durationMs, startedAt };
+      setResult(next);
+      onCommandResult({
+        command: out.command,
+        stdout: out.stdout,
+        stderr: out.stderr,
+        exitCode: out.exit_code,
+        timedOut: out.timed_out,
+        durationMs,
+        startedAt,
+      });
       if (out.exit_code === 0 && !out.timed_out) {
         toast.success("Command completed");
       } else {
@@ -1191,12 +1581,24 @@ function CommandActionRow({
       }
     } catch (e) {
       const message = (e as Error).message ?? String(e);
+      const durationMs = Math.round(performance.now() - startedMs);
       setResult({
         command: cleaned,
         stdout: "",
         stderr: message,
         exit_code: null,
         timed_out: false,
+        durationMs,
+        startedAt,
+      });
+      onCommandResult({
+        command: cleaned,
+        stdout: "",
+        stderr: message,
+        exitCode: null,
+        timedOut: false,
+        durationMs,
+        startedAt,
       });
       toast.error(message);
     } finally {
@@ -1232,7 +1634,7 @@ function CommandActionRow({
             ) : (
               <TerminalSquare className="size-3.5" />
             )}
-            {isSafeCopy ? "Run" : label}
+            {result && isSafeCopy ? "Rerun" : isSafeCopy ? "Run" : label}
           </Button>
           <Button
             type="button"
@@ -1247,8 +1649,25 @@ function CommandActionRow({
         {result && (
           <div className="mt-2 overflow-hidden rounded-control border border-border-subtle bg-shell">
             <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-2 py-1.5 font-mono text-[10px] text-text-muted">
-              <span>exit {result.exit_code ?? "n/a"}</span>
-              {result.timed_out && <span className="text-warning">timed out</span>}
+              <div className="flex flex-wrap items-center gap-2">
+                <span>exit {result.exit_code ?? "n/a"}</span>
+                {result.durationMs !== undefined && (
+                  <span>{formatDuration(result.durationMs)}</span>
+                )}
+                {result.startedAt && (
+                  <span>{new Date(result.startedAt).toLocaleTimeString()}</span>
+                )}
+                {result.timed_out && <span className="text-warning">timed out</span>}
+              </div>
+              {(result.stdout || result.stderr) && (
+                <button
+                  type="button"
+                  className="text-text-muted hover:text-text-primary"
+                  onClick={() => void navigator.clipboard.writeText([result.stdout, result.stderr].filter(Boolean).join("\n"))}
+                >
+                  copy output
+                </button>
+              )}
             </div>
             {result.stdout && (
               <pre className="max-h-56 overflow-auto p-2 font-mono text-[11px] leading-5 text-text-primary whitespace-pre-wrap">
@@ -1283,90 +1702,13 @@ function CommandActionRow({
   );
 }
 
-function normalizeSectionLines(content: string): string[] {
-  return content
-    .replace(/```(?:bash|sh|shell)?/gi, "")
-    .replace(/```/g, "")
-    .split("\n")
-    .map((line) => line.trim().replace(/^\*\*(.+)\*\*$/, "$1"))
-    .filter(Boolean);
-}
-
-function isCommandLine(line: string): boolean {
-  return /^(?:[-*]\s*)?(?:`{0,3})?kubectl\b/i.test(line);
-}
-
 function cleanListMarker(line: string): string {
   return line.replace(/^[-*]\s*/, "").replace(/^\d+\.\s*/, "").trim();
 }
 
-function cleanCommand(line: string): string {
-  return cleanListMarker(line).replace(/^`+|`+$/g, "").trim();
-}
-
-function parseAnswerSections(stdout: string): AnswerSection[] {
-  const text = stdout.trim();
-  if (!text) return [];
-  const headings = [
-    { label: "Summary", tone: "summary" },
-    { label: "Evidence", tone: "evidence" },
-    { label: "Most likely cause", tone: "cause" },
-    { label: "Next checks", tone: "checks" },
-    { label: "Safe kubectl commands", tone: "commands" },
-    { label: "Remediation suggestions", tone: "remediation" },
-    { label: "Requires confirmation", tone: "confirmation" },
-  ] as const;
-  const pattern = new RegExp(
-    `(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:\\d+\\.\\s*)?\\*{0,2}(${headings
-      .map((h) => h.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("|")})\\*{0,2}\\s*:?\\s*(?:\\n|$)`,
-    "gi",
-  );
-  const matches = Array.from(text.matchAll(pattern));
-  if (!matches.length) {
-    return [{ title: "Summary", content: text, tone: "summary" }];
-  }
-
-  return matches
-    .map((match, index) => {
-      const title = match[1];
-      const start = match.index! + match[0].length;
-      const end = matches[index + 1]?.index ?? text.length;
-      const meta = headings.find((h) => h.label.toLowerCase() === title.toLowerCase());
-      return {
-        title: meta?.label ?? title,
-        content: text.slice(start, end).trim(),
-        tone: meta?.tone ?? "summary",
-      };
-    })
-    .filter((section) => section.content.length > 0);
-}
-
-function extractAssistantAnswer(stdout: string): string {
-  const text = stripAnsi(stdout).trim();
-  if (!text) return "";
-  const assistantMarkers = [
-    /\nassistant\s*\n+/gi,
-    /\nassistant response\s*:?\s*\n+/gi,
-    /\nfinal answer\s*:?\s*\n+/gi,
-  ];
-  for (const marker of assistantMarkers) {
-    const matches = Array.from(text.matchAll(marker));
-    const last = matches[matches.length - 1];
-    if (last?.index !== undefined) {
-      const answer = text.slice(last.index + last[0].length).trim();
-      if (answer && !looksLikePromptEcho(answer)) return answer;
-    }
-  }
-  return looksLikePromptEcho(text) ? "" : text;
-}
-
-function looksLikePromptEcho(text: string): boolean {
-  return (
-    text.includes("You are Lumen's local Kubernetes assistant.") &&
-    text.includes("Redacted context:") &&
-    text.includes("Return this structure:")
-  );
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function stripAnsi(text: string): string {
@@ -1483,6 +1825,11 @@ function buildContextPack(
   ctx: string,
   workloads: WorkloadSummary[],
   notes: string,
+  options: {
+    includeHealth: boolean;
+    includeMetrics: boolean;
+    includeNotes: boolean;
+  },
 ): string {
   const unhealthy = workloads
     .filter((w) => w.health !== "healthy" || (w.restart_count ?? 0) > 0)
@@ -1492,22 +1839,35 @@ function buildContextPack(
     .sort((a, b) => (b.mem_bytes ?? 0) - (a.mem_bytes ?? 0))
     .slice(0, 12);
 
-  return [
+  const parts = [
     `cluster: ${ctx || "unknown"}`,
-    "",
-    "unhealthy_or_restarted_resources:",
-    unhealthy.length
-      ? unhealthy.map(formatWorkload).join("\n")
-      : "none observed in sampled resources",
-    "",
-    "top_memory_consumers:",
-    topConsumers.length
-      ? topConsumers.map(formatWorkload).join("\n")
-      : "no metrics available",
-    "",
-    "operator_notes:",
-    notes.trim() || "none",
-  ].join("\n");
+  ];
+
+  if (options.includeHealth) {
+    parts.push(
+      "",
+      "unhealthy_or_restarted_resources:",
+      unhealthy.length
+        ? unhealthy.map(formatWorkload).join("\n")
+        : "none observed in sampled resources",
+    );
+  }
+
+  if (options.includeMetrics) {
+    parts.push(
+      "",
+      "top_memory_consumers:",
+      topConsumers.length
+        ? topConsumers.map(formatWorkload).join("\n")
+        : "no metrics available",
+    );
+  }
+
+  if (options.includeNotes) {
+    parts.push("", "operator_notes:", notes.trim() || "none");
+  }
+
+  return parts.join("\n");
 }
 
 function formatWorkload(w: WorkloadSummary): string {
@@ -1539,23 +1899,23 @@ Task: ${taskLabel}
 Operator question:
 ${question.trim() || "Analyze the provided Kubernetes context."}
 
-Return this structure:
-Use these exact section headings, each on its own line, without markdown fences:
-Summary
-Evidence
-Most likely cause
-Next checks
-Safe kubectl commands
-Remediation suggestions
-Requires confirmation
+Return one JSON object without markdown fences. Use these exact keys:
+{
+  "summary": "1-3 short sentences",
+  "evidence": ["concrete signal"],
+  "most_likely_cause": ["cause and why"],
+  "next_checks": ["actionable check"],
+  "safe_kubectl_commands": ["kubectl get ..."],
+  "remediation_suggestions": ["safe remediation step"],
+  "requires_confirmation": ["mutating command or action, only when needed"]
+}
 
 Formatting rules:
-- Keep Summary to 1-3 short sentences.
-- Make Evidence a bullet list of concrete signals.
-- Make Next checks and Remediation suggestions actionable bullet lists.
-- Put one kubectl command per line in Safe kubectl commands.
-- Put mutating commands only in Requires confirmation, one command per line.
-- If a section has nothing useful, write "None."
+- Keep summary to 1-3 short sentences.
+- Use arrays for every field except summary.
+- Put one kubectl command per array item in safe_kubectl_commands.
+- Put mutating commands only in requires_confirmation.
+- If a field has nothing useful, use an empty array or an empty string.
 
 Redacted context:
 ${context}`;
