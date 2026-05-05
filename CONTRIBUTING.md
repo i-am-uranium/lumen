@@ -10,6 +10,19 @@ Requirements:
 - Rust stable.
 - A Kubernetes cluster for manual testing, such as kind, k3d, minikube, or a non-production remote cluster.
 
+### Platform-specific build prerequisites
+
+On **Linux** (Debian/Ubuntu), install the Tauri 2 system deps before `npm run tauri dev`:
+
+```bash
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+  librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+  patchelf rpm file
+```
+
+On **macOS** Xcode Command Line Tools are sufficient. On **Windows**, install the Microsoft C++ Build Tools and the WebView2 runtime.
+
 Install dependencies:
 
 ```bash
