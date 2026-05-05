@@ -209,6 +209,13 @@ export type FleetCard = {
   cpu_percent: number | null;
   mem_percent: number | null;
   fetched_at_ms: number;
+  /**
+   * Best-effort cluster distribution detected from node labels and OS image.
+   * Stable lowercase id (eks / gke / aks / openshift / k3s / kind / minikube
+   * / docker-desktop / rancher), or undefined when nothing matched. Optional
+   * via serde skip_serializing_if on the Rust side.
+   */
+  distribution?: string;
 };
 
 export type NodeSummary = {
@@ -350,6 +357,23 @@ export type CrInstance = {
   namespace: string | null;
   age_seconds: number;
   status_hint: string | null;
+};
+
+// ─── Activity / events stream ─────────────────────────────────────────────
+
+/**
+ * Mirrors src-tauri/src/k8s/events.rs `EventLine` — a single Kubernetes
+ * Event flattened to what the activity drawer actually renders. The Rust
+ * side renames `type_` (a Rust keyword conflict) so we mirror the wire
+ * format here rather than the field name.
+ */
+export type EventLine = {
+  ts: string | null;
+  kind: string;
+  reason: string;
+  message: string;
+  involved: string;
+  type_: string;
 };
 
 // ─── Team Access ──────────────────────────────────────────────────────────

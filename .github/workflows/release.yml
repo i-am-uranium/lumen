@@ -313,12 +313,69 @@ jobs:
           prerelease: false
           args: --target ${{ matrix.target }}
 
+  build-windows:
+    name: build · windows (${{ matrix.target }})
+    needs: [detect, create-release]
+    if: needs.detect.outputs.should_release == 'true'
+    # windows-latest currently means Windows Server 2022. Tauri 2 ships an
+    # MSI + NSIS bundler out of the box on this image; WebView2 runtime is
+    # already present so end users without it get the bootstrapper from
+    # the .exe installer.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: ${{ matrix.target }}
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ needs.detect.outputs.tag }}
+          releaseName: "Lumen ${{ needs.detect.outputs.tag }}"
+          releaseBody: |
+            Lumen ${{ needs.detect.outputs.tag }}
+
+            Windows builds (unsigned — SmartScreen will warn on first run; verify the SHA from the release page before redistributing):
+            - `Lumen_${{ needs.detect.outputs.version }}_x64-setup.exe` — NSIS installer
+            - `Lumen_${{ needs.detect.outputs.version }}_x64_en-US.msi` — MSI for managed deployments
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
   publish-release:
     name: publish release
-    # build-linux failure should not block macOS release — Linux is a new
-    # surface; if its first runs are flaky we still want macOS published.
-    # Once Linux is proven, tighten this to require both.
-    needs: [detect, build-macos, build-linux]
+    # build-linux/windows failure should not block macOS release — those
+    # are newer surfaces. Once both are proven, tighten this to require all.
+    needs: [detect, build-macos, build-linux, build-windows]
     if: needs.detect.outputs.should_release == 'true' && always() && needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
     steps:

@@ -1,13 +1,15 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { ActivityDrawer } from "@/components/ActivityDrawer";
+import { useActivityStream } from "@/state/activityStream";
 import { ShellDock } from "@/components/shell/ShellDock";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
-import { Network, Sparkles } from "lucide-react";
+import { Bell, Network, Sparkles } from "lucide-react";
 import { useClusterStore } from "@/state/cluster";
 
 const named =
@@ -99,31 +101,75 @@ function NavBar() {
   const { contextName } = useClusterStore();
   const aiActive = pathname.endsWith("/ai");
 
+  const startActivity = useActivityStream((s) => s.start);
+  const stopActivity = useActivityStream((s) => s.stop);
+  const unreadWarnings = useActivityStream((s) => s.unreadWarnings);
+  const activeStreamCtx = useActivityStream((s) => s.context);
+  const [activityOpen, setActivityOpen] = useState(false);
+
+  // Keep the cluster activity stream in sync with the active context.
+  // Idempotent: store.start() short-circuits when already streaming the same
+  // context. Tearing down on unmount keeps the channel from leaking when the
+  // app navigates away from a cluster.
+  useEffect(() => {
+    if (contextName) {
+      void startActivity(contextName);
+    } else if (activeStreamCtx) {
+      void stopActivity();
+    }
+  }, [contextName, activeStreamCtx, startActivity, stopActivity]);
+
   return (
-    <nav className="flex items-center gap-2 px-4 py-2 border-b border-term-border-soft bg-term-panel">
-      <span className="mds-heading text-[19px] text-term-fg">lumen</span>
-      <span className="rounded-[4px] border border-term-green/40 bg-term-green/10 px-2 py-1 text-[11px] uppercase tracking-wide text-term-green">
-        cluster
-      </span>
-      <div className="flex-1" />
-      <ThemeSwitcher />
-      <button
-        type="button"
-        disabled={!contextName}
-        title={contextName ? "Open AI assistant (Cmd K, type ai)" : "Select a cluster context first"}
-        onClick={() => contextName && navigate(`/cluster/${encodeURIComponent(contextName)}/ai`)}
-        className={cn(
-          "inline-flex h-8 items-center gap-2 rounded-[6px] border px-3 text-[12px] font-medium transition-colors",
-          aiActive
-            ? "border-accent-primary/50 bg-accent-primary-soft text-accent-primary"
-            : "border-term-border-soft bg-term-bg/70 text-term-muted hover:border-accent-primary/35 hover:text-term-fg",
-          !contextName && "cursor-not-allowed opacity-45 hover:border-term-border-soft hover:text-term-muted",
-        )}
-      >
-        <Sparkles className="size-3.5" aria-hidden="true" />
-        <span>AI</span>
-      </button>
-    </nav>
+    <>
+      <nav className="flex items-center gap-2 px-4 py-2 border-b border-term-border-soft bg-term-panel">
+        <span className="mds-heading text-[19px] text-term-fg">lumen</span>
+        <span className="rounded-[4px] border border-term-green/40 bg-term-green/10 px-2 py-1 text-[11px] uppercase tracking-wide text-term-green">
+          cluster
+        </span>
+        <div className="flex-1" />
+        <ThemeSwitcher />
+        <button
+          type="button"
+          onClick={() => setActivityOpen((o) => !o)}
+          title={
+            unreadWarnings > 0
+              ? `Activity · ${unreadWarnings} unread warning${unreadWarnings === 1 ? "" : "s"}`
+              : "Cluster activity"
+          }
+          className={cn(
+            "relative inline-flex h-8 items-center justify-center rounded-[6px] border border-term-border-soft bg-term-bg/70 px-2 text-term-muted transition-colors",
+            "hover:border-accent-primary/35 hover:text-term-fg",
+          )}
+        >
+          <Bell className="size-3.5" aria-hidden="true" />
+          {unreadWarnings > 0 && (
+            <span
+              className="absolute -right-1 -top-1 inline-flex size-4 items-center justify-center rounded-full bg-warning text-[9px] font-mono text-[var(--term-btn-primary-fg)]"
+              aria-label={`${unreadWarnings} unread warnings`}
+            >
+              {unreadWarnings > 9 ? "9+" : unreadWarnings}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          disabled={!contextName}
+          title={contextName ? "Open AI assistant (Cmd K, type ai)" : "Select a cluster context first"}
+          onClick={() => contextName && navigate(`/cluster/${encodeURIComponent(contextName)}/ai`)}
+          className={cn(
+            "inline-flex h-8 items-center gap-2 rounded-[6px] border px-3 text-[12px] font-medium transition-colors",
+            aiActive
+              ? "border-accent-primary/50 bg-accent-primary-soft text-accent-primary"
+              : "border-term-border-soft bg-term-bg/70 text-term-muted hover:border-accent-primary/35 hover:text-term-fg",
+            !contextName && "cursor-not-allowed opacity-45 hover:border-term-border-soft hover:text-term-muted",
+          )}
+        >
+          <Sparkles className="size-3.5" aria-hidden="true" />
+          <span>AI</span>
+        </button>
+      </nav>
+      <ActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} />
+    </>
   );
 }
 

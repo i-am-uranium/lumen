@@ -51,6 +51,36 @@ function heatBand(n: number | null): string {
   return "bg-term-red";
 }
 
+/**
+ * Friendly label + tone for a detected K8s distribution. Backend emits
+ * stable lowercase ids; map them here to short display labels and a
+ * coarse color hint. Unknown / unset distributions render no badge.
+ */
+const DISTRIBUTION_LABELS: Record<string, string> = {
+  eks: "EKS",
+  gke: "GKE",
+  aks: "AKS",
+  openshift: "OpenShift",
+  k3s: "k3s",
+  kind: "kind",
+  minikube: "minikube",
+  "docker-desktop": "Docker Desktop",
+  rancher: "Rancher",
+};
+
+function DistributionBadge({ value }: { value: string | undefined }) {
+  if (!value) return null;
+  const label = DISTRIBUTION_LABELS[value] ?? value;
+  return (
+    <span
+      className="inline-flex items-center rounded border border-border-subtle bg-elevated px-1.5 py-0.5 text-[10px] font-mono text-text-secondary"
+      title={`detected distribution: ${label}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function fleetRiskScore(card: FleetCard): number {
   if (!card.reachable) return 0;
   if (card.context.is_prod && card.health.pods_failed > 0) return 1;
@@ -309,7 +339,10 @@ function ClusterHealthTable({ cards }: { cards: FleetCard[] }) {
                     <span className="block max-w-[220px] truncate">{card.context.cluster}</span>
                   </DataTableCell>
                   <DataTableCell className="tabular-nums">
-                    {card.server_version ?? "—"}
+                    <span className="inline-flex items-center gap-1.5">
+                      {card.server_version ?? "—"}
+                      <DistributionBadge value={card.distribution} />
+                    </span>
                   </DataTableCell>
                   <DataTableCell className="tabular-nums">
                     {card.node_ready}/{card.node_count}
