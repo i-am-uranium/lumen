@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ComponentType } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
+import { useShortcut } from "@/lib/shortcuts";
 
 export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
   listResourceDefinitions().map((definition) => definition.kind);
@@ -144,16 +145,8 @@ export function CommandPalette() {
     };
   }, [normalizedQuery, contexts, namespaces, deployments, allResources]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen(!paletteOpen);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [paletteOpen, setPaletteOpen]);
+  // Cmd+K (or whatever the user remapped openPalette to via Settings).
+  useShortcut("openPalette", () => setPaletteOpen(!paletteOpen));
 
   function close() {
     setPaletteOpen(false);
@@ -273,6 +266,32 @@ export function CommandPalette() {
                   <NavItem value="go: access" icon={UserPlus} onSelect={() => pickTab("access")} />
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
+                  <NavItem
+                    value="new: NetworkPolicy"
+                    icon={Network}
+                    onSelect={() => {
+                      const ctxName =
+                        useClusterStore.getState().contextName;
+                      if (!ctxName) return;
+                      navigate(
+                        `/cluster/${encodeURIComponent(ctxName)}/wizards/network-policy`,
+                      );
+                      close();
+                    }}
+                  />
+                  <NavItem
+                    value="new: RBAC binding"
+                    icon={UserPlus}
+                    onSelect={() => {
+                      const ctxName =
+                        useClusterStore.getState().contextName;
+                      if (!ctxName) return;
+                      navigate(
+                        `/cluster/${encodeURIComponent(ctxName)}/wizards/rbac-binding`,
+                      );
+                      close();
+                    }}
+                  />
                 </>
               )}
               <NavItem value="theme: light" icon={Sun} onSelect={() => pickTheme("light")} />

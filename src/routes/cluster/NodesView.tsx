@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useUiSettings } from "@/state/uiSettings";
+import { ColumnPicker } from "@/components/ColumnPicker";
 
 function formatBytes(n: number): string {
   const u = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -47,36 +48,37 @@ type NodeAction =
   | { kind: "uncordon"; nodeName: string }
   | { kind: "drain"; nodeName: string };
 
-function Row({
-  n,
-  busy,
-  readOnly,
-  onAction,
-}: {
-  n: NodeSummary;
-  busy: boolean;
-  readOnly: boolean;
-  onAction: (a: NodeAction) => void;
-}) {
-  // `busy` reflects an in-flight server action on this row; `readOnly` is the
-  // global app-level switch. Combine them so the buttons disable for either,
-  // and reach for `readOnly` first when picking the tooltip.
-  const lockedTitle = readOnly ? " (read-only mode)" : "";
-  const disabled = busy || readOnly;
-  const cpuPct = n.cpu_usage_milli !== null && n.cpu_allocatable_milli > 0
-    ? (n.cpu_usage_milli / n.cpu_allocatable_milli) * 100
-    : null;
-  const memPct = n.mem_usage_bytes !== null && n.mem_allocatable_bytes > 0
-    ? (n.mem_usage_bytes / n.mem_allocatable_bytes) * 100
-    : null;
-  return (
-    <tr className="border-b border-border-subtle hover:bg-elevated">
+// ─── Column descriptors (D10) ────────────────────────────────────────────
+//
+// Same pattern as WorkloadsView — a hide-able subset of columns plus a
+// fixed `actions` column rendered after the descriptor list (the action
+// buttons depend on row-level state that doesn't fit cleanly into a
+// stateless cell renderer).
+
+type NodeColumn = {
+  key: string;
+  label: string;
+  alwaysOn?: boolean;
+  cell: (n: NodeSummary) => React.ReactNode;
+};
+
+const NODE_COLUMNS: NodeColumn[] = [
+  {
+    key: "node",
+    label: "node",
+    alwaysOn: true,
+    cell: (n) => (
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-2">
           <span
-            className={cn("size-2 rounded-full", n.ready ? "bg-success" : "bg-danger")}
+            className={cn(
+              "size-2 rounded-full",
+              n.ready ? "bg-success" : "bg-danger",
+            )}
           />
-          <span className="text-[13px] text-text-primary font-medium">{n.name}</span>
+          <span className="text-[13px] text-text-primary font-medium">
+            {n.name}
+          </span>
           {n.unschedulable && (
             <span
               className="px-1.5 py-0.5 rounded bg-warning-soft border border-warning/30 text-[10px] text-warning font-mono"
@@ -97,29 +99,83 @@ function Row({
           ))}
         </div>
       </td>
-      <td className="px-3 py-2.5 text-[11px] text-text-secondary font-mono">{n.version}</td>
-      <td className="px-3 py-2.5 text-[11px] text-text-secondary font-mono">{n.arch}</td>
-      <td className="px-3 py-2.5">
-        <UsageCell
-          value={cpuPct}
-          label={
-            n.cpu_usage_milli !== null
-              ? `${formatCpu(n.cpu_usage_milli)} / ${formatCpu(n.cpu_allocatable_milli)}`
-              : formatCpu(n.cpu_allocatable_milli)
-          }
-        />
+    ),
+  },
+  {
+    key: "version",
+    label: "version",
+    cell: (n) => (
+      <td className="px-3 py-2.5 text-[11px] text-text-secondary font-mono">
+        {n.version}
       </td>
-      <td className="px-3 py-2.5">
-        <UsageCell
-          value={memPct}
-          label={
-            n.mem_usage_bytes !== null
-              ? `${formatBytes(n.mem_usage_bytes)} / ${formatBytes(n.mem_allocatable_bytes)}`
-              : formatBytes(n.mem_allocatable_bytes)
-          }
-        />
+    ),
+  },
+  {
+    key: "arch",
+    label: "arch",
+    cell: (n) => (
+      <td className="px-3 py-2.5 text-[11px] text-text-secondary font-mono">
+        {n.arch}
       </td>
-      <td className="px-3 py-2.5 text-[11px] text-text-secondary tabular-nums">{n.pods_capacity}</td>
+    ),
+  },
+  {
+    key: "cpu",
+    label: "cpu",
+    cell: (n) => {
+      const pct =
+        n.cpu_usage_milli !== null && n.cpu_allocatable_milli > 0
+          ? (n.cpu_usage_milli / n.cpu_allocatable_milli) * 100
+          : null;
+      return (
+        <td className="px-3 py-2.5">
+          <UsageCell
+            value={pct}
+            label={
+              n.cpu_usage_milli !== null
+                ? `${formatCpu(n.cpu_usage_milli)} / ${formatCpu(n.cpu_allocatable_milli)}`
+                : formatCpu(n.cpu_allocatable_milli)
+            }
+          />
+        </td>
+      );
+    },
+  },
+  {
+    key: "memory",
+    label: "memory",
+    cell: (n) => {
+      const pct =
+        n.mem_usage_bytes !== null && n.mem_allocatable_bytes > 0
+          ? (n.mem_usage_bytes / n.mem_allocatable_bytes) * 100
+          : null;
+      return (
+        <td className="px-3 py-2.5">
+          <UsageCell
+            value={pct}
+            label={
+              n.mem_usage_bytes !== null
+                ? `${formatBytes(n.mem_usage_bytes)} / ${formatBytes(n.mem_allocatable_bytes)}`
+                : formatBytes(n.mem_allocatable_bytes)
+            }
+          />
+        </td>
+      );
+    },
+  },
+  {
+    key: "pods",
+    label: "pods",
+    cell: (n) => (
+      <td className="px-3 py-2.5 text-[11px] text-text-secondary tabular-nums">
+        {n.pods_capacity}
+      </td>
+    ),
+  },
+  {
+    key: "taints",
+    label: "taints",
+    cell: (n) => (
       <td className="px-3 py-2.5">
         {n.taints.length === 0 ? (
           <span className="text-[11px] text-text-muted">—</span>
@@ -136,6 +192,38 @@ function Row({
           </div>
         )}
       </td>
+    ),
+  },
+];
+
+function visibleNodeColumns(hidden: string[]): NodeColumn[] {
+  if (hidden.length === 0) return NODE_COLUMNS;
+  return NODE_COLUMNS.filter((c) => c.alwaysOn || !hidden.includes(c.key));
+}
+
+function Row({
+  n,
+  columns,
+  busy,
+  readOnly,
+  onAction,
+}: {
+  n: NodeSummary;
+  columns: NodeColumn[];
+  busy: boolean;
+  readOnly: boolean;
+  onAction: (a: NodeAction) => void;
+}) {
+  // `busy` reflects an in-flight server action on this row; `readOnly` is the
+  // global app-level switch. Combine them so the buttons disable for either,
+  // and reach for `readOnly` first when picking the tooltip.
+  const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const disabled = busy || readOnly;
+  return (
+    <tr className="border-b border-border-subtle hover:bg-elevated">
+      {columns.map((c) => (
+        <React.Fragment key={c.key}>{c.cell(n)}</React.Fragment>
+      ))}
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-1">
           {n.unschedulable ? (
@@ -217,6 +305,11 @@ export function NodesView() {
   const nodes = data ?? [];
 
   const readOnly = useUiSettings((s) => s.readOnly);
+  const hiddenNodeColumns = useUiSettings((s) => s.hiddenColumns.nodes);
+  const visibleCols = useMemo(
+    () => visibleNodeColumns(hiddenNodeColumns),
+    [hiddenNodeColumns],
+  );
   const [pendingAction, setPendingAction] = useState<NodeAction | null>(null);
   const [actionBusyNode, setActionBusyNode] = useState<string | null>(null);
 
@@ -267,13 +360,23 @@ export function NodesView() {
             {context} · {data?.length ?? 0} node{data?.length === 1 ? "" : "s"}
           </p>
         </div>
-        <button
-          onClick={() => refetch()}
-          className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
-          disabled={isFetching}
-        >
-          <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} /> refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <ColumnPicker
+            view="nodes"
+            columns={NODE_COLUMNS.map((c) => ({
+              key: c.key,
+              label: c.label,
+              alwaysOn: c.alwaysOn,
+            }))}
+          />
+          <button
+            onClick={() => refetch()}
+            className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
+            disabled={isFetching}
+          >
+            <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} /> refresh
+          </button>
+        </div>
       </div>
       <div className="p-6">
         {error ? (
@@ -298,29 +401,20 @@ export function NodesView() {
               <table className="w-full">
                 <thead>
                   <tr className="bg-shell">
-                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
-                      node
-                    </th>
-                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
-                      version
-                    </th>
-                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
-                      arch
-                    </th>
-                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
-                      <Cpu className="size-3 inline mr-1" />
-                      cpu
-                    </th>
-                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
-                      <MemoryStick className="size-3 inline mr-1" />
-                      mem
-                    </th>
-                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
-                      pods
-                    </th>
-                    <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
-                      taints
-                    </th>
+                    {visibleCols.map((c) => (
+                      <th
+                        key={c.key}
+                        className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted"
+                      >
+                        {c.key === "cpu" && (
+                          <Cpu className="size-3 inline mr-1" />
+                        )}
+                        {c.key === "memory" && (
+                          <MemoryStick className="size-3 inline mr-1" />
+                        )}
+                        {c.label}
+                      </th>
+                    ))}
                     <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted">
                       actions
                     </th>
@@ -331,6 +425,7 @@ export function NodesView() {
                     <Row
                       key={n.name}
                       n={n}
+                      columns={visibleCols}
                       busy={actionBusyNode === n.name}
                       readOnly={readOnly}
                       onAction={setPendingAction}

@@ -15,7 +15,7 @@
     "src/routes/cluster/FleetView.tsx:520",
     "src/routes/cluster/LogsTab.tsx:480",
     "src/routes/cluster/LogsTab.tsx:488",
-    "src/routes/cluster/NodesView.tsx:184"
+    "src/routes/cluster/NodesView.tsx:272"
   ],
   "rawHexColors": [
     "src/components/shell/ShellTerminalHost.tsx:17",
@@ -33,8 +33,8 @@
     "src/components/shell/ShellTerminalHost.tsx:106"
   ],
   "rawTailwindColors": [
-    "src/components/ResourceDetailDrawer.tsx:1394",
-    "src/components/ResourceDetailDrawer.tsx:1415",
+    "src/components/drawer/VulnScanSection.tsx:191",
+    "src/components/drawer/VulnScanSection.tsx:212",
     "src/components/logs/LogsTabStrip.tsx:13",
     "src/components/logs/LogsTabStrip.tsx:14",
     "src/components/logs/LogsTabStrip.tsx:15",

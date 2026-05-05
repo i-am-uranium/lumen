@@ -62,6 +62,16 @@ const AiAssistant = lazy(() =>
 const Settings = lazy(() =>
   import("@/routes/Settings").then(named("Settings")),
 );
+const NetworkPolicyWizard = lazy(() =>
+  import("@/routes/cluster/wizards/NetworkPolicyWizard").then(
+    named("NetworkPolicyWizard"),
+  ),
+);
+const RbacBindingWizard = lazy(() =>
+  import("@/routes/cluster/wizards/RbacBindingWizard").then(
+    named("RbacBindingWizard"),
+  ),
+);
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
@@ -232,6 +242,14 @@ function Shell() {
                 <Route path="access" element={<TeamAccess />} />
                 <Route path="logs" element={<LogsTab />} />
                 <Route path="ai" element={<AiAssistant />} />
+                <Route
+                  path="wizards/network-policy"
+                  element={<NetworkPolicyWizard />}
+                />
+                <Route
+                  path="wizards/rbac-binding"
+                  element={<RbacBindingWizard />}
+                />
               </Route>
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/cluster" replace />} />
