@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod argocd;
 pub mod client;
 pub mod cloudmap;
 pub mod crd;
