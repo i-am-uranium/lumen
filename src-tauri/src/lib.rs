@@ -97,6 +97,12 @@ pub fn run() {
             commands::k8s::pod_attach_resize,
             commands::k8s::pod_attach_close,
             commands::k8s::get_pod_details,
+            commands::k8s::detect_argocd,
+            commands::k8s::list_argocd_applications,
+            commands::k8s::get_argocd_application,
+            commands::k8s::sync_argocd_application,
+            commands::k8s::refresh_argocd_application,
+            commands::k8s::terminate_argocd_operation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running lumen");

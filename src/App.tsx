@@ -62,6 +62,9 @@ const AiAssistant = lazy(() =>
 const Settings = lazy(() =>
   import("@/routes/Settings").then(named("Settings")),
 );
+const ArgocdView = lazy(() =>
+  import("@/routes/cluster/ArgocdView").then(named("ArgocdView")),
+);
 const NetworkPolicyWizard = lazy(() =>
   import("@/routes/cluster/wizards/NetworkPolicyWizard").then(
     named("NetworkPolicyWizard"),
@@ -242,6 +245,7 @@ function Shell() {
                 <Route path="access" element={<TeamAccess />} />
                 <Route path="logs" element={<LogsTab />} />
                 <Route path="ai" element={<AiAssistant />} />
+                <Route path="argocd" element={<ArgocdView />} />
                 <Route
                   path="wizards/network-policy"
                   element={<NetworkPolicyWizard />}

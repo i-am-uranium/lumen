@@ -1,6 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::k8s::{
-    actions as act, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
+    actions as act, argocd, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
     rbac_details, registry, resource_insights, resources, security, storage_details, time,
     types::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
@@ -2077,4 +2077,68 @@ pub async fn get_pod_details(
         age_seconds,
         created_at_ms,
     })
+}
+
+// ─── ArgoCD ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn detect_argocd(context: Option<String>, state: State<'_, AppState>) -> AppResult<bool> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::detect(&client).await
+}
+
+#[tauri::command]
+pub async fn list_argocd_applications(
+    context: Option<String>,
+    namespace: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<argocd::ApplicationSummary>> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::list_applications(&client, namespace.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn get_argocd_application(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<argocd::ApplicationDetail> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::get_application(&client, &namespace, &name).await
+}
+
+#[tauri::command]
+pub async fn sync_argocd_application(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    options: argocd::SyncOptions,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::sync_application(&client, &namespace, &name, &options).await
+}
+
+#[tauri::command]
+pub async fn refresh_argocd_application(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    hard: bool,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::refresh_application(&client, &namespace, &name, hard).await
+}
+
+#[tauri::command]
+pub async fn terminate_argocd_operation(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::terminate_operation(&client, &namespace, &name).await
 }

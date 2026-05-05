@@ -540,6 +540,83 @@ export type EventSummary = {
   count: number | null;
 };
 
+// ─── ArgoCD ───────────────────────────────────────────────────────────────
+//
+// Mirrors src-tauri/src/k8s/argocd.rs. Read-only-ish surface plus two
+// mutators (sync/refresh) that go through patches on the CRD — no
+// argocd CLI, no extra HTTP API.
+
+export type ArgoApplicationSummary = {
+  name: string;
+  namespace: string;
+  project: string;
+  sync_status: string;
+  health_status: string;
+  repo_url: string;
+  path: string;
+  target_revision: string;
+  destination_namespace: string;
+  destination_server: string;
+  age_seconds: number;
+  resource_count: number;
+};
+
+export type ArgoApplicationResource = {
+  group: string;
+  kind: string;
+  name: string;
+  namespace: string | null;
+  sync_status: string | null;
+  health_status: string | null;
+  health_message: string | null;
+};
+
+export type ArgoOperationState = {
+  phase: string | null;
+  message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  revision: string | null;
+};
+
+export type ArgoHistoryEntry = {
+  revision: string;
+  deployed_at: string | null;
+  source_path: string | null;
+};
+
+export type ArgoApplicationDetail = {
+  summary: ArgoApplicationSummary;
+  resources: ArgoApplicationResource[];
+  operation_state: ArgoOperationState | null;
+  sync_message: string | null;
+  auto_sync: boolean;
+  self_heal: boolean;
+  history: ArgoHistoryEntry[];
+};
+
+/** Mirrors src-tauri/src/k8s/argocd.rs `SyncOptions`. Field names use
+ *  camelCase because serde-rename converts the Rust snake_case form. */
+export type ArgoResourceRef = {
+  group: string;
+  kind: string;
+  namespace?: string;
+  name: string;
+};
+export type ArgoSyncOptions = {
+  revision?: string;
+  prune?: boolean;
+  dryRun?: boolean;
+  force?: boolean;
+  replace?: boolean;
+  serverSideApply?: boolean;
+  applyOutOfSyncOnly?: boolean;
+  respectIgnoreDifferences?: boolean;
+  pruneLast?: boolean;
+  retryLimit?: number | null;
+  resources?: ArgoResourceRef[];
+};
+
 // ─── API ──────────────────────────────────────────────────────────────────
 
 export const k8s = {
@@ -872,6 +949,65 @@ export const k8s = {
   podAttachResize: (id: string, cols: number, rows: number) =>
     invoke<void>("pod_attach_resize", { id, cols, rows }),
   podAttachClose: (id: string) => invoke<void>("pod_attach_close", { id }),
+  // ── ArgoCD ────────────────────────────────────────────────────────────
+  /** Cheap probe — true when the cluster has the Application CRD registered. */
+  detectArgocd: (context?: string) =>
+    invoke<boolean>("detect_argocd", { context }),
+  listArgocdApplications: (context?: string, namespace?: string) =>
+    invoke<ArgoApplicationSummary[]>("list_argocd_applications", {
+      context,
+      namespace,
+    }),
+  getArgocdApplication: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+  ) =>
+    invoke<ArgoApplicationDetail>("get_argocd_application", {
+      context,
+      namespace,
+      name,
+    }),
+  /** Trigger a sync. Sets `.operation.sync` on the Application CRD —
+   *  the ArgoCD controller picks up the operation and reconciles.
+   *  See {@link ArgoSyncOptions} for the full set of canonical flags. */
+  syncArgocdApplication: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+    options: ArgoSyncOptions,
+  ) =>
+    invoke<void>("sync_argocd_application", {
+      context,
+      namespace,
+      name,
+      options,
+    }),
+  /** Cancel an in-flight sync operation. Patches `.operation` to null —
+   *  same path as the upstream ArgoCD UI's "Terminate" button. */
+  terminateArgocdOperation: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+  ) =>
+    invoke<void>("terminate_argocd_operation", {
+      context,
+      namespace,
+      name,
+    }),
+  /** Annotation-based refresh. `hard=true` re-clones the repo. */
+  refreshArgocdApplication: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+    hard: boolean,
+  ) =>
+    invoke<void>("refresh_argocd_application", {
+      context,
+      namespace,
+      name,
+      hard,
+    }),
 };
 
 // ─── Helm write ops (CLI shell-out) ───────────────────────────────────────

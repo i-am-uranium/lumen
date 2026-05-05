@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { NavLink, Outlet, useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -21,6 +21,7 @@ import {
   Package,
   Repeat,
   Server,
+  ServerCog,
   ShieldAlert,
   Star,
   UserPlus,
@@ -199,6 +200,29 @@ const SECTIONS: Item[] = [
   { kind: "divider" },
   { kind: "leaf", to: "map", label: "cloudmap", icon: MapIcon },
 ];
+
+// Variant rendered when the cluster has ArgoCD installed. The detection
+// query in ClusterWorkspace picks one of these arrays — keeps the leaf
+// out of the menu for clusters without GitOps so users aren't confused
+// by an entry that would just say "ArgoCD not installed".
+const ARGOCD_LEAF: Item = {
+  kind: "leaf",
+  to: "argocd",
+  label: "argocd",
+  icon: ServerCog,
+};
+const SECTIONS_WITH_ARGOCD: Item[] = (() => {
+  // Insert just after the helm leaf — both are GitOps-adjacent and
+  // sit naturally next to each other.
+  const out: Item[] = [];
+  for (const item of SECTIONS) {
+    out.push(item);
+    if (item.kind === "leaf" && item.to === "helm") {
+      out.push(ARGOCD_LEAF);
+    }
+  }
+  return out;
+})();
 
 const navRow = ({ isActive }: { isActive: boolean }, collapsed: boolean) =>
   cn(
@@ -647,6 +671,21 @@ export function ClusterWorkspace() {
   const collapsed = rail.collapsed;
   const railWidth = collapsed ? RAIL_W_COLLAPSED : RAIL_W;
 
+  // Probe ArgoCD presence so we only show the nav entry on clusters
+  // that actually have it installed. Cached per-context for an hour;
+  // CRD installation is rare enough that re-probing on every mount
+  // would be wasteful.
+  const argocdAvailable = useQuery({
+    queryKey: ["argocd", "available", context],
+    queryFn: () => k8s.detectArgocd(context || undefined),
+    staleTime: 60 * 60 * 1000,
+    enabled: !!context,
+  });
+  const sections = useMemo(() => {
+    if (argocdAvailable.data) return SECTIONS_WITH_ARGOCD;
+    return SECTIONS;
+  }, [argocdAvailable.data]);
+
   return (
     <div className="flex h-full">
       <aside
@@ -663,7 +702,7 @@ export function ClusterWorkspace() {
         />
 
         <nav className={cn("flex-1 min-h-0 overflow-y-auto", collapsed ? "py-2" : "py-1.5")}>
-          {SECTIONS.map((item, idx) => {
+          {sections.map((item, idx) => {
             if (item.kind === "divider") {
               return (
                 <div
