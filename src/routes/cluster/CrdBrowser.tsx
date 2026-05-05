@@ -117,8 +117,8 @@ export function CrdBrowser() {
                         className={cn(
                           "ml-auto text-[10px] px-1 py-0.5 rounded font-mono",
                           c.scope === "Namespaced"
-                            ? "bg-blue-500/10 text-blue-300"
-                            : "bg-purple-500/10 text-purple-300",
+                            ? "bg-info-soft text-info"
+                            : "bg-purple-100 text-purple-800 dark:bg-purple-500/10 dark:text-purple-300",
                         )}
                       >
                         {c.scope[0]}

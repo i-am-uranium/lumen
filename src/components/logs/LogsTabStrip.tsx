@@ -4,10 +4,24 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { isAggregateTab, tabLabel, type Tab, type TabId } from "@/state/logPanels";
 
+// Twelve fixed-hue identifiers cycled by hash. Each pairs a deep
+// light-mode swatch (-600) with a lighter dark-mode swatch (-300) so the
+// 8px pod-chip dot reads on either canvas. We stay outside the semantic
+// status palette here on purpose — a "successful" pod color shouldn't
+// reuse the emerald that means "healthy" elsewhere in the app.
 const COLOR_PALETTE = [
-  "bg-emerald-400", "bg-sky-400", "bg-fuchsia-400", "bg-amber-400",
-  "bg-orange-400", "bg-rose-400", "bg-violet-400", "bg-teal-400",
-  "bg-lime-400", "bg-indigo-400", "bg-pink-400", "bg-cyan-400",
+  "bg-emerald-600 dark:bg-emerald-300",
+  "bg-sky-600 dark:bg-sky-300",
+  "bg-fuchsia-600 dark:bg-fuchsia-300",
+  "bg-amber-600 dark:bg-amber-300",
+  "bg-orange-600 dark:bg-orange-300",
+  "bg-rose-600 dark:bg-rose-300",
+  "bg-violet-600 dark:bg-violet-300",
+  "bg-teal-600 dark:bg-teal-300",
+  "bg-lime-600 dark:bg-lime-300",
+  "bg-indigo-600 dark:bg-indigo-300",
+  "bg-pink-600 dark:bg-pink-300",
+  "bg-cyan-600 dark:bg-cyan-300",
 ];
 
 export const TAB_DRAG_MIME = "application/x-lumen-tab";

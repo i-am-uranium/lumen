@@ -26,13 +26,17 @@ type Store = {
   toggleMute: (id: string, pod: string) => void;
 };
 
+// First three entries already use semantic term-* tokens (themed via CSS
+// vars). The last three are fixed-hue identifiers — pair the saturated
+// light-mode -700 with the lighter dark-mode -300 so each entry stays
+// readable on either canvas.
 const PALETTE = [
   "text-term-green",
   "text-term-amber",
   "text-term-red",
-  "text-sky-300",
-  "text-fuchsia-300",
-  "text-orange-300",
+  "text-sky-700 dark:text-sky-300",
+  "text-fuchsia-700 dark:text-fuchsia-300",
+  "text-orange-700 dark:text-orange-300",
 ];
 
 function hash(s: string): number {

@@ -56,7 +56,7 @@ export function EventsModal({ context, namespace, kind, name, onClose }: Props) 
             <span className="text-[11px] text-term-muted tabular-nums">
               {counts.normal} normal
               {counts.warning > 0 && (
-                <span className="text-amber-400"> · {counts.warning} warning</span>
+                <span className="text-warning"> · {counts.warning} warning</span>
               )}
             </span>
           </div>
@@ -103,7 +103,7 @@ function EventRow({ e }: { e: EventSummary }) {
       <span
         className={cn(
           "shrink-0 mt-0.5",
-          isWarn ? "text-amber-400" : "text-term-subtle",
+          isWarn ? "text-warning" : "text-term-subtle",
         )}
       >
         {isWarn ? <AlertTriangle className="size-3.5" /> : <Info className="size-3.5" />}
@@ -114,8 +114,8 @@ function EventRow({ e }: { e: EventSummary }) {
             className={cn(
               "px-1.5 py-0.5 text-[10px] rounded font-semibold uppercase tracking-wide border",
               isWarn
-                ? "bg-amber-500/10 text-amber-300 border-amber-500/40"
-                : "bg-slate-500/10 text-slate-300 border-slate-500/40",
+                ? "bg-warning-soft text-warning border-warning/40"
+                : "bg-elevated text-text-secondary border-border-default",
             )}
           >
             {e.reason}

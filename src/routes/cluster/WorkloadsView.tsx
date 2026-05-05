@@ -127,9 +127,9 @@ function severityBg(w: WorkloadSummary): string {
     w.pod_phase === "Pending" ||
     (w.restart_count ?? 0) > 0
   ) {
-    return "bg-amber-400";
+    return "bg-warning";
   }
-  if (w.health === "healthy" || w.pod_phase === "Running") return "bg-emerald-400";
+  if (w.health === "healthy" || w.pod_phase === "Running") return "bg-success";
   return "bg-term-border-soft";
 }
 
@@ -248,7 +248,7 @@ function matchToken(w: WorkloadSummary, t: Token): boolean {
 function qosClass(qos: string | undefined): string {
   switch (qos) {
     case "Guaranteed":
-      return "text-emerald-400 border-emerald-400/40 bg-emerald-400/10";
+      return "text-success border-success/40 bg-success-soft";
     case "Burstable":
       return "text-term-muted border-term-border-soft bg-term-panel-2";
     case "BestEffort":
@@ -450,7 +450,7 @@ function ContainerChiclets({ ready, total }: { ready: number; total: number }) {
           key={i}
           className={cn(
             "size-2 rounded-sm",
-            i < ready ? "bg-emerald-400" : "bg-term-red/70",
+            i < ready ? "bg-success" : "bg-term-red/70",
           )}
         />
       ))}

@@ -1,11 +1,37 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" class="dark" data-theme="dark">
 
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lumen</title>
+  <!--
+    Pre-paint theme application. Runs before any module/CSS is fetched, so
+    the first frame uses the right palette and the user never sees a
+    flash of the wrong theme. Mirrors readPersistedThemeMode() +
+    resolveAppliedTheme() in src/state/theme.ts.
+
+    Standalone — no imports, no module graph — because module scripts
+    defer past first paint.
+  -->
+  <script>
+    (function () {
+      try {
+        var raw = window.localStorage.getItem("lumen:theme");
+        var mode = raw === "light" || raw === "dark" || raw === "system" ? raw : "system";
+        var applied = mode === "light" || mode === "dark"
+          ? mode
+          : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        var root = document.documentElement;
+        root.setAttribute("data-theme", applied);
+        if (applied === "dark") root.classList.add("dark");
+        else root.classList.remove("dark");
+      } catch (e) {
+        // Defaults already on <html> handle the failure case.
+      }
+    })();
+  </script>
 </head>
 
 <body>

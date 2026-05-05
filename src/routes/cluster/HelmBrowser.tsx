@@ -35,13 +35,13 @@ function StatusPill({ status }: { status: string }) {
   const s = status.toLowerCase();
   const tone =
     s === "deployed"
-      ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/40"
+      ? "text-success bg-success-soft border-success/40"
       : s === "failed"
-        ? "text-red-300 bg-red-500/10 border-red-500/40"
+        ? "text-danger bg-danger-soft border-danger/40"
         : s.includes("pending") || s === "uninstalling"
-          ? "text-amber-300 bg-amber-500/10 border-amber-500/40"
+          ? "text-warning bg-warning-soft border-warning/40"
           : s === "superseded"
-            ? "text-slate-300 bg-slate-500/10 border-slate-500/40"
+            ? "text-text-secondary bg-elevated border-border-default"
             : "text-term-subtle bg-term-panel-2 border-term-border-soft";
   const Icon =
     s === "deployed"

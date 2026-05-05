@@ -73,21 +73,24 @@ type Sim = {
   fixed: boolean;
 };
 
+// Visualization palettes resolve to CSS variables (--cloudmap-*) defined
+// in index.css for both themes. SVG attributes accept var() values
+// transparently, so consumers don't need to compute current theme.
 const KIND_PALETTE: Record<MapNode["kind"], string> = {
-  namespace: "rgba(178, 182, 189, 0.18)",
-  deployment: "#60a5fa",
-  statefulset: "#a78bfa",
-  daemonset: "#f472b6",
-  cronjob: "#fbbf24",
-  job: "#fb923c",
-  pod: "#10b981",
-  service: "#ffcf25",
-  ingress: "#ef4444",
-  configmap: "#94a3b8",
-  secret: "#d946ef",
-  persistent_volume_claim: "#22d3ee",
-  node: "#818cf8",
-  hpa: "#facc15",
+  namespace: "var(--cloudmap-kind-namespace)",
+  deployment: "var(--cloudmap-kind-deployment)",
+  statefulset: "var(--cloudmap-kind-statefulset)",
+  daemonset: "var(--cloudmap-kind-daemonset)",
+  cronjob: "var(--cloudmap-kind-cronjob)",
+  job: "var(--cloudmap-kind-job)",
+  pod: "var(--cloudmap-kind-pod)",
+  service: "var(--cloudmap-kind-service)",
+  ingress: "var(--cloudmap-kind-ingress)",
+  configmap: "var(--cloudmap-kind-configmap)",
+  secret: "var(--cloudmap-kind-secret)",
+  persistent_volume_claim: "var(--cloudmap-kind-pvc)",
+  node: "var(--cloudmap-kind-node)",
+  hpa: "var(--cloudmap-kind-hpa)",
 };
 
 const KIND_RADIUS: Record<MapNode["kind"], number> = {
@@ -108,27 +111,28 @@ const KIND_RADIUS: Record<MapNode["kind"], number> = {
 };
 
 const EDGE_COLOR: Record<MapEdge["kind"], string> = {
-  selects: "#ffcf25",
-  routes: "#ef4444",
-  owned_by: "rgba(178, 182, 189, 0.22)",
-  mounts: "#22d3ee",
-  scales: "#facc15",
-  scheduled_on: "#818cf8",
+  selects: "var(--cloudmap-edge-selects)",
+  routes: "var(--cloudmap-edge-routes)",
+  owned_by: "var(--cloudmap-edge-owned-by)",
+  mounts: "var(--cloudmap-edge-mounts)",
+  scales: "var(--cloudmap-edge-scales)",
+  scheduled_on: "var(--cloudmap-edge-scheduled-on)",
 };
 
 const HEALTH_RING: Record<Health, string> = {
-  healthy: "#10b981",
-  degraded: "#f59e0b",
-  failed: "#ef4444",
-  unknown: "rgba(178, 182, 189, 0.4)",
+  healthy: "var(--cloudmap-health-healthy)",
+  degraded: "var(--cloudmap-health-degraded)",
+  failed: "var(--cloudmap-health-failed)",
+  unknown: "var(--cloudmap-health-unknown)",
 };
 
 function heatColor(heat: number): string {
-  // 0 green → 50 amber → 100 red
+  // 0 cool → 50 warm → 100 hot. Threshold values resolve via CSS vars
+  // so the gradient retains contrast in both themes.
   if (heat <= 0) return "transparent";
-  if (heat < 33) return "rgba(16,185,129,0.45)";
-  if (heat < 66) return "rgba(245,158,11,0.55)";
-  return "rgba(239,68,68,0.7)";
+  if (heat < 33) return "var(--cloudmap-heat-cool)";
+  if (heat < 66) return "var(--cloudmap-heat-warm)";
+  return "var(--cloudmap-heat-hot)";
 }
 
 function kindIcon(k: MapNode["kind"]) {
@@ -665,7 +669,7 @@ export function CloudMap() {
                           cy={p.y}
                           r={130}
                           fill="none"
-                          stroke="rgba(255,207,37,0.18)"
+                          stroke="var(--cloudmap-stroke-soft)"
                           strokeDasharray="4 4"
                         />
                         <text
@@ -740,7 +744,7 @@ export function CloudMap() {
                           <circle
                             r={r + 4}
                             fill="none"
-                            stroke="#ffcf25"
+                            stroke="var(--cloudmap-edge-selects)"
                             strokeWidth="2"
                             strokeDasharray="2 3"
                           />

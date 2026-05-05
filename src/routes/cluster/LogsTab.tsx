@@ -326,9 +326,9 @@ export function LogsTab() {
                   className={cn(
                     "size-2 rounded-full shrink-0",
                     w.health === "healthy"
-                      ? "bg-emerald-400"
+                      ? "bg-success"
                       : w.health === "degraded"
-                        ? "bg-amber-400"
+                        ? "bg-warning"
                         : w.health === "failed"
                           ? "bg-danger"
                           : "bg-text-muted",
