@@ -7,7 +7,7 @@ import type { ShellSessionKey } from "@/state/shellSession";
 import { podColorFor } from "@/components/logs/LogsTabStrip";
 
 const STATE_DOT: Record<string, string> = {
-  starting: "bg-amber-400 animate-pulse",
+  starting: "bg-warning animate-pulse",
   live: "bg-term-green",
   exited: "bg-term-subtle",
   failed: "bg-term-red",

@@ -261,7 +261,7 @@ export function EventsView() {
                     "px-3 text-[11px] border-r last:border-r-0 border-border-subtle transition-colors",
                     severity === s
                       ? s === "Warning"
-                        ? "bg-amber-500/15 text-warning"
+                        ? "bg-warning/15 text-warning"
                         : "bg-accent-primary/10 text-accent-primary"
                       : "text-text-secondary hover:bg-elevated",
                   )}
@@ -372,7 +372,7 @@ function EventRow({ e, now }: { e: EventLine; now: number }) {
           className={cn(
             "inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded font-semibold uppercase tracking-wide border",
             isWarn
-              ? "bg-amber-500/10 text-warning border-amber-500/40"
+              ? "bg-warning-soft text-warning border-warning/40"
               : "bg-elevated text-text-secondary border-border-subtle",
           )}
         >

@@ -32,7 +32,7 @@ export function PortForwardsChip() {
         className={cn(
           "inline-flex items-center gap-1.5 px-2 h-7 rounded-md border text-[11px] transition-colors",
           data.length > 0
-            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+            ? "border-success/40 bg-success-soft text-success"
             : "border-term-border-soft text-term-muted hover:text-term-fg",
         )}
       >

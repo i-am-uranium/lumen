@@ -45,9 +45,9 @@ function pct(n: number | null): string {
 }
 function heatBand(n: number | null): string {
   if (n === null) return "bg-term-panel-2";
-  if (n < 50) return "bg-emerald-500/70";
+  if (n < 50) return "bg-success/70";
   if (n < 75) return "bg-term-green/80";
-  if (n < 90) return "bg-amber-400";
+  if (n < 90) return "bg-warning";
   return "bg-term-red";
 }
 
@@ -289,9 +289,9 @@ function ClusterHealthTable({ cards }: { cards: FleetCard[] }) {
                       <span
                         className={cn(
                           "size-2 rounded-full",
-                          tone === "good" && "bg-emerald-400",
-                          tone === "warn" && "bg-amber-400",
-                          tone === "bad" && "bg-rose-400",
+                          tone === "good" && "bg-success",
+                          tone === "warn" && "bg-warning",
+                          tone === "bad" && "bg-danger",
                         )}
                         aria-hidden="true"
                       />
@@ -435,7 +435,7 @@ function AlertPanel({ cards }: { cards: FleetCard[] }) {
               <AlertTriangle
                 className={cn(
                   "mt-0.5 size-3.5 shrink-0",
-                  alert.tone === "bad" ? "text-rose-300" : "text-amber-300",
+                  alert.tone === "bad" ? "text-danger" : "text-warning",
                 )}
                 aria-hidden="true"
               />
@@ -520,7 +520,7 @@ function PodRatioRing({ card }: { card: FleetCard }) {
           cx="30"
           cy="30"
           r={r}
-          stroke="#fbbf24"
+          stroke="var(--status-warning)"
           strokeWidth="6"
           fill="none"
           strokeDasharray={`${seg(pendingPct)} ${circ}`}
@@ -531,7 +531,7 @@ function PodRatioRing({ card }: { card: FleetCard }) {
           cx="30"
           cy="30"
           r={r}
-          stroke="#10b981"
+          stroke="var(--status-success)"
           strokeWidth="6"
           fill="none"
           strokeDasharray={`${seg(readyPct)} ${circ}`}
@@ -663,7 +663,7 @@ function Card({
         <div
           className={cn(
             "size-2 rounded-full mt-1.5 shrink-0",
-            unreachable ? "bg-term-red" : "bg-emerald-400 animate-pulse",
+            unreachable ? "bg-term-red" : "bg-success animate-pulse",
           )}
         />
         <div className="flex-1 min-w-0">
@@ -709,7 +709,7 @@ function Card({
             <div className="flex flex-col">
               <span className="text-term-subtle text-[10px] uppercase tracking-wider">nodes</span>
               <span className="text-term-fg tabular-nums">
-                <span className={card.node_ready < card.node_count ? "text-amber-400" : ""}>
+                <span className={card.node_ready < card.node_count ? "text-warning" : ""}>
                   {card.node_ready}
                 </span>
                 <span className="text-term-subtle">/{card.node_count}</span>
@@ -761,9 +761,13 @@ function Card({
                 aria-label={`triage ${context.name}`}
                 className={cn(
                   "term-btn !min-h-[30px] !py-1 !px-4 !text-[12px]",
-                  "border-violet-400/40 bg-violet-500/15 text-violet-100",
-                  "hover:border-violet-300/70 hover:bg-violet-500/25 hover:text-white",
-                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/60",
+                  // Triage CTA — violet is the only accent in this slot,
+                  // so paired light/dark variants instead of a new semantic.
+                  "border-violet-700/50 bg-violet-100 text-violet-900",
+                  "dark:border-violet-400/40 dark:bg-violet-500/15 dark:text-violet-100",
+                  "hover:border-violet-700/80 hover:bg-violet-200",
+                  "dark:hover:border-violet-300/70 dark:hover:bg-violet-500/25 dark:hover:text-white",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-700/60 dark:focus-visible:ring-violet-300/60",
                 )}
               >
                 triage
@@ -1332,7 +1336,7 @@ function TrashSection({
               <div className="text-[11px] text-term-subtle">
                 expires in {context.days_remaining}d
                 {context.has_conflict && (
-                  <span className="ml-2 text-amber-400">conflict</span>
+                  <span className="ml-2 text-warning">conflict</span>
                 )}
               </div>
               <button
@@ -1476,7 +1480,7 @@ function RestoreContextDialog({
               type="button"
               onClick={onRestore}
               disabled={busy}
-              className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px] text-amber-300 hover:border-amber-300/60"
+              className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px] text-warning hover:border-warning/60"
             >
               {busy ? "restoring..." : "override and restore"}
             </button>

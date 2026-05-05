@@ -44,7 +44,7 @@ const TEMPLATES: {
     value: "viewer",
     label: "viewer",
     icon: <Eye className="size-4" />,
-    tone: "text-blue-400 border-blue-500/40 bg-blue-500/10",
+    tone: "text-info border-info/40 bg-info-soft",
     summary: "read-only access",
     rules:
       "get / list / watch on pods, services, endpoints, configmaps, events, deployments, statefulsets, daemonsets, jobs, cronjobs, ingresses, HPAs",
@@ -53,7 +53,7 @@ const TEMPLATES: {
     value: "editor",
     label: "editor",
     icon: <Pencil className="size-4" />,
-    tone: "text-amber-400 border-amber-500/40 bg-amber-500/10",
+    tone: "text-warning border-warning/40 bg-warning-soft",
     summary: "create / update / delete on workloads",
     rules:
       "viewer rules + create / update / patch / delete. Cannot touch RBAC, secrets (except configmaps), CRDs, or cluster-scoped resources.",
@@ -62,7 +62,7 @@ const TEMPLATES: {
     value: "admin",
     label: "admin",
     icon: <Sparkles className="size-4" />,
-    tone: "text-red-400 border-red-500/40 bg-red-500/10",
+    tone: "text-danger border-danger/40 bg-danger-soft",
     summary: "full access inside the selected scope",
     rules: "* on *. Scope this to dedicated namespaces — never cluster-wide unless you really mean it.",
   },
@@ -411,7 +411,7 @@ export function TeamAccess() {
               className={cn(
                 "text-left p-3 rounded-lg border flex items-start gap-3 transition-colors",
                 longLived
-                  ? "border-amber-500/60 bg-amber-500/10 text-amber-300"
+                  ? "border-warning/60 bg-warning-soft text-warning"
                   : "border-term-border-soft hover:bg-term-panel-2 text-term-fg",
               )}
             >
@@ -447,7 +447,7 @@ export function TeamAccess() {
               </span>
             </div>
           ) : (
-            <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-[12px] text-amber-300">
+            <div className="flex items-start gap-2 p-3 rounded-md bg-warning-soft border border-warning/30 text-[12px] text-warning">
               <AlertTriangle className="size-4 shrink-0 mt-0.5" />
               Creates a Secret of type <span className="font-mono">kubernetes.io/service-account-token</span>{" "}
               bound to the SA. The token never rotates; revoke the grant to invalidate it.
@@ -551,7 +551,7 @@ function ExistingGrants({
                   {g.template && <TemplateBadge template={g.template} />}
                   {g.token_mode && <TokenModeBadge mode={g.token_mode} />}
                   {g.cluster_wide ? (
-                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-red-500/10 border border-red-500/40 text-red-300 font-semibold uppercase tracking-wide">
+                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-danger-soft border border-danger/40 text-danger font-semibold uppercase tracking-wide">
                       cluster-wide
                     </span>
                   ) : (
@@ -654,11 +654,11 @@ function RenewDialog({
           {isLong ? (
             <>
               <p className="text-term-muted">
-                This grant uses a <span className="text-amber-300">long-lived</span> Secret
+                This grant uses a <span className="text-warning">long-lived</span> Secret
                 token — it doesn't rotate. Re-download re-emits the same token inside a
                 fresh kubeconfig so you can hand it over again.
               </p>
-              <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300">
+              <div className="flex items-start gap-2 p-3 rounded-md bg-warning-soft border border-warning/30 text-warning">
                 <AlertTriangle className="size-4 shrink-0 mt-0.5" />
                 To invalidate the current token, revoke the grant and re-provision.
               </div>
@@ -717,13 +717,13 @@ function RenewDialog({
 function TokenModeBadge({ mode }: { mode: TokenMode }) {
   if (mode === "short") {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border font-semibold uppercase tracking-wide bg-emerald-500/10 text-emerald-300 border-emerald-500/40">
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border font-semibold uppercase tracking-wide bg-success-soft text-success border-success/40">
         <Timer className="size-2.5" /> short-lived
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border font-semibold uppercase tracking-wide bg-amber-500/10 text-amber-300 border-amber-500/40">
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border font-semibold uppercase tracking-wide bg-warning-soft text-warning border-warning/40">
       <InfinityIcon className="size-2.5" /> long-lived
     </span>
   );
@@ -732,10 +732,10 @@ function TokenModeBadge({ mode }: { mode: TokenMode }) {
 function TemplateBadge({ template }: { template: AccessTemplate }) {
   const cls =
     template === "viewer"
-      ? "bg-blue-500/10 text-blue-300 border-blue-500/40"
+      ? "bg-info-soft text-info border-info/40"
       : template === "editor"
-        ? "bg-amber-500/10 text-amber-300 border-amber-500/40"
-        : "bg-red-500/10 text-red-300 border-red-500/40";
+        ? "bg-warning-soft text-warning border-warning/40"
+        : "bg-danger-soft text-danger border-danger/40";
   return (
     <span
       className={cn(
@@ -804,7 +804,7 @@ function SummaryLine({
       <span
         className={cn(
           "font-mono tabular-nums",
-          longLived && "text-amber-300",
+          longLived && "text-warning",
         )}
       >
         {longLived ? "long-lived" : `${ttl}h`}
@@ -887,7 +887,7 @@ function ConfirmDialog({
           <div className="pt-2 border-t border-term-border-soft text-term-muted">
             {longLived ? (
               <>
-                A <span className="text-amber-300 font-semibold">long-lived</span>{" "}
+                A <span className="text-warning font-semibold">long-lived</span>{" "}
                 token will be issued via a Secret. It will not expire until you
                 revoke the grant.
               </>
@@ -984,7 +984,7 @@ function ResultView({
       </div>
 
       <div className="max-w-4xl mx-auto p-6 space-y-4">
-        <div className="flex items-start gap-3 p-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-[12px] text-amber-300">
+        <div className="flex items-start gap-3 p-3 rounded-md bg-warning-soft border border-warning/30 text-[12px] text-warning">
           <AlertTriangle className="size-4 shrink-0 mt-0.5" />
           <div>
             <strong>Treat this kubeconfig as a secret.</strong> Hand it to the

@@ -18,36 +18,41 @@ import { cn } from "@/lib/utils";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
 
+// Severity tones map to semantic tokens where one fits exactly (critical →
+// danger, medium → warning, low → info). "high" sits between danger and
+// warning and we don't carry an orange semantic token — use Tailwind orange
+// with a dark: pair so it reads on both themes. "info" is the muted
+// neutral chip and uses our text/border tokens.
 const SEV_COLOR: Record<Severity, { bg: string; border: string; text: string; fill: string }> = {
   critical: {
-    bg: "bg-red-500/10",
-    border: "border-red-500/40",
-    text: "text-red-400",
-    fill: "bg-red-500",
+    bg: "bg-danger-soft",
+    border: "border-danger/40",
+    text: "text-danger",
+    fill: "bg-danger",
   },
   high: {
-    bg: "bg-orange-500/10",
-    border: "border-orange-500/40",
-    text: "text-orange-400",
-    fill: "bg-orange-500",
+    bg: "bg-orange-500/15",
+    border: "border-orange-600 dark:border-orange-500/40",
+    text: "text-orange-700 dark:text-orange-400",
+    fill: "bg-orange-600 dark:bg-orange-500",
   },
   medium: {
-    bg: "bg-amber-500/10",
-    border: "border-amber-500/40",
+    bg: "bg-warning-soft",
+    border: "border-warning/40",
     text: "text-warning",
-    fill: "bg-amber-500",
+    fill: "bg-warning",
   },
   low: {
-    bg: "bg-blue-500/10",
-    border: "border-blue-500/40",
-    text: "text-blue-400",
-    fill: "bg-blue-500",
+    bg: "bg-info-soft",
+    border: "border-info/40",
+    text: "text-info",
+    fill: "bg-info",
   },
   info: {
-    bg: "bg-slate-500/10",
-    border: "border-slate-500/40",
-    text: "text-slate-400",
-    fill: "bg-slate-500",
+    bg: "bg-elevated",
+    border: "border-border-default",
+    text: "text-text-secondary",
+    fill: "bg-border-strong",
   },
 };
 
@@ -292,12 +297,12 @@ function ScoreBadge({ score }: { score: number }) {
   const tone = score >= 90 ? "good" : score >= 70 ? "ok" : score >= 50 ? "warn" : "bad";
   const cls =
     tone === "good"
-      ? "text-success border-emerald-500/40 bg-success/10"
+      ? "text-success border-success/40 bg-success/10"
       : tone === "ok"
         ? "text-accent-primary border-accent-primary/40 bg-accent-primary/10"
         : tone === "warn"
-          ? "text-warning border-amber-500/40 bg-amber-500/10"
-          : "text-red-400 border-red-500/40 bg-red-500/10";
+          ? "text-warning border-warning/40 bg-warning-soft"
+          : "text-danger border-danger/40 bg-danger-soft";
   return (
     <div
       className={cn(

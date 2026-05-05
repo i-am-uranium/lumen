@@ -50,6 +50,12 @@ export default {
         warning: "var(--status-warning)",
         danger: "var(--status-error)",
         info: "var(--status-info)",
+        // Soft tonal backgrounds for status badges/banners — alpha-tinted in
+        // both themes so they don't look painted-on against either canvas.
+        "success-soft": "var(--status-success-soft)",
+        "warning-soft": "var(--status-warning-soft)",
+        "danger-soft": "var(--status-error-soft)",
+        "info-soft": "var(--status-info-soft)",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         card: {

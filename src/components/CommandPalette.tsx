@@ -22,15 +22,19 @@ import {
 import {
   Boxes,
   FileText,
+  Laptop,
   Layers,
+  Moon,
   Network,
   Search,
   Server,
   ShieldAlert,
   Sparkles,
+  Sun,
   Terminal,
   UserPlus,
 } from "lucide-react";
+import { useThemeStore, type ThemeMode } from "@/state/theme";
 
 export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
   listResourceDefinitions().map((definition) => definition.kind);
@@ -166,6 +170,11 @@ export function CommandPalette() {
     close();
   }
 
+  function pickTheme(mode: ThemeMode) {
+    useThemeStore.getState().setMode(mode);
+    close();
+  }
+
   function pickNamespace(ns: string) {
     setNamespace(ns);
     close();
@@ -244,6 +253,9 @@ export function CommandPalette() {
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                 </>
               )}
+              <NavItem value="theme: light" icon={Sun} onSelect={() => pickTheme("light")} />
+              <NavItem value="theme: dark" icon={Moon} onSelect={() => pickTheme("dark")} />
+              <NavItem value="theme: system" icon={Laptop} onSelect={() => pickTheme("system")} />
             </CommandGroup>
             {ranked.contexts.length > 0 && (
               <CommandGroup heading={`contexts · ${ranked.contexts.length}`} className={groupClass}>

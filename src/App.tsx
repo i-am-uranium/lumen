@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ShellDock } from "@/components/shell/ShellDock";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
@@ -105,6 +106,7 @@ function NavBar() {
         cluster
       </span>
       <div className="flex-1" />
+      <ThemeSwitcher />
       <button
         type="button"
         disabled={!contextName}

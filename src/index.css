@@ -9,8 +9,36 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+/*
+ * Token system overview
+ * ─────────────────────
+ *
+ * Lumen uses four parallel token families. Theme switching = swapping the
+ * values they resolve to; semantic names stay constant so component code
+ * never branches on theme.
+ *
+ *   1. Named functional tokens  (--background-*, --text-*, --border-*, …)
+ *      — primary surface for new code.
+ *   2. shadcn HSL tokens        (--background, --foreground, --card, …)
+ *      — consumed by shadcn/Radix-based components.
+ *   3. --mds-* brand tokens     (--mds-color-*, --mds-shadow-*)
+ *      — Lumen brand layer; values were originally written from the
+ *      light side (surface-primary = #ffffff) and the dark theme
+ *      overrides them. Light mode reverts most to their original intent.
+ *   4. --term-* terminal aliases (--term-bg, --term-fg, …)
+ *      — pure aliases of group 1, no per-theme override needed.
+ *
+ * Default theme is dark (matches Lumen's identity). `[data-theme="light"]`
+ * overrides selectively. An inline script in index.html applies the right
+ * data-theme attribute pre-paint to avoid a flash of wrong theme.
+ */
+
 @layer base {
-  :root {
+  /* ─── Default (dark) ─────────────────────────────────────────────── */
+  :root,
+  [data-theme="dark"] {
+    color-scheme: dark;
+
     --background-app: #090a0d;
     --background-shell: #0b0c10;
     --background-surface: #0d0f14;
@@ -44,6 +72,7 @@
     --shadow-panel: 0 12px 40px rgba(0, 0, 0, 0.38);
     --shadow-popover: 0 18px 60px rgba(0, 0, 0, 0.48);
 
+    /* shadcn HSL */
     --background: 240 13% 4%;
     --foreground: 240 5% 90%;
     --card: 225 20% 8%;
@@ -65,6 +94,7 @@
     --ring: 239 84% 67%;
     --radius: 0.625rem;
 
+    /* mds brand */
     --mds-color-hcp-brand: #000000;
     --mds-color-surface-primary: #ffffff;
     --mds-color-surface-faint: #f1f2f3;
@@ -84,10 +114,58 @@
     --mds-color-warning: #bb5a00;
     --mds-color-warning-surface: #fbeabf;
     --mds-color-focus-action-external: #2b89ff;
-    --mds-shadow-whisper: rgba(97, 104, 117, 0.05) 0px 1px 1px, rgba(97, 104, 117, 0.05) 0px 2px 2px;
+    --mds-shadow-whisper:
+      rgba(97, 104, 117, 0.05) 0px 1px 1px,
+      rgba(97, 104, 117, 0.05) 0px 2px 2px;
 
-    --font-brand: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-brand: "Inter", system-ui, -apple-system, BlinkMacSystemFont,
+      "Segoe UI", sans-serif;
 
+    /* Surface-specific tokens consumed by .lumen-page and chrome. Light
+       theme overrides these so the gradient and scrollbar don't have
+       hardcoded rgba values that look wrong in either theme. */
+    --scrollbar-thumb: rgba(178, 182, 189, 0.32);
+    --term-btn-primary-fg: #15181e;
+    --badge-purple-bg: #42225b;
+    --badge-purple-border: rgb(180, 87, 255);
+    --page-glow-indigo: rgba(99, 102, 241, 0.16);
+    --page-glow-emerald: rgba(16, 185, 129, 0.08);
+    --page-fade-from: rgba(17, 19, 26, 0.92);
+
+    /* CloudMap visualization palette. These are categorical identifiers
+       (one hue per kube kind), distinct from the semantic status colors
+       even when they collide visually. Light theme uses deeper -600
+       variants so the dots register on white. */
+    --cloudmap-kind-namespace: rgba(178, 182, 189, 0.18);
+    --cloudmap-kind-deployment: #60a5fa;
+    --cloudmap-kind-statefulset: #a78bfa;
+    --cloudmap-kind-daemonset: #f472b6;
+    --cloudmap-kind-cronjob: #fbbf24;
+    --cloudmap-kind-job: #fb923c;
+    --cloudmap-kind-pod: #10b981;
+    --cloudmap-kind-service: #ffcf25;
+    --cloudmap-kind-ingress: #ef4444;
+    --cloudmap-kind-configmap: #94a3b8;
+    --cloudmap-kind-secret: #d946ef;
+    --cloudmap-kind-pvc: #22d3ee;
+    --cloudmap-kind-node: #818cf8;
+    --cloudmap-kind-hpa: #facc15;
+    --cloudmap-edge-selects: #ffcf25;
+    --cloudmap-edge-routes: #ef4444;
+    --cloudmap-edge-owned-by: rgba(178, 182, 189, 0.22);
+    --cloudmap-edge-mounts: #22d3ee;
+    --cloudmap-edge-scales: #facc15;
+    --cloudmap-edge-scheduled-on: #818cf8;
+    --cloudmap-health-healthy: #10b981;
+    --cloudmap-health-degraded: #f59e0b;
+    --cloudmap-health-failed: #ef4444;
+    --cloudmap-health-unknown: rgba(178, 182, 189, 0.4);
+    --cloudmap-heat-cool: rgba(16, 185, 129, 0.45);
+    --cloudmap-heat-warm: rgba(245, 158, 11, 0.55);
+    --cloudmap-heat-hot: rgba(239, 68, 68, 0.7);
+    --cloudmap-stroke-soft: rgba(255, 207, 37, 0.18);
+
+    /* term-* aliases (resolve via the named tokens above) */
     --term-bg: var(--background-app);
     --term-panel: var(--background-surface);
     --term-panel-2: var(--background-elevated);
@@ -103,8 +181,145 @@
     --term-red: var(--status-error);
   }
 
-  .dark {
-    color-scheme: dark;
+  /* ─── Light ─────────────────────────────────────────────────────────
+   *
+   * Anchored on the existing `--mds-color-surface-faint: #f1f2f3` brand
+   * grey. Surfaces escalate from pure white (main canvas) → faint grey
+   * (chrome) → slightly darker (hover). Text uses near-black (#1a1d23)
+   * rather than pure black to soften contrast.
+   *
+   * Status colors keep their core hex — emerald/amber/red/sky read on
+   * both backgrounds. Soft variants are tuned darker (alpha → 0.12)
+   * so they don't wash out against white.
+   *
+   * Accent indigo is unchanged: #6366f1 has 4.6:1 contrast against #fff
+   * which clears WCAG AA at large sizes.
+   */
+  [data-theme="light"] {
+    color-scheme: light;
+
+    --background-app: #fafbfc;
+    --background-shell: #f4f5f7;
+    --background-surface: #ffffff;
+    --background-elevated: #ffffff;
+    --background-hover: #f1f2f3;
+    --background-code: #f4f5f7;
+
+    --border-subtle: #ececef;
+    --border-default: #d4d6db;
+    --border-strong: #a1a1aa;
+
+    --text-primary: #1a1d23;
+    --text-secondary: #4d525c;
+    --text-muted: #6b7280;
+    --text-disabled: #a1a1aa;
+
+    --accent-primary: #4f46e5;
+    --accent-primary-hover: #4338ca;
+    --accent-primary-soft: rgba(99, 102, 241, 0.12);
+
+    --status-success: #059669;
+    --status-warning: #d97706;
+    --status-error: #dc2626;
+    --status-info: #0284c7;
+
+    --status-success-soft: rgba(16, 185, 129, 0.12);
+    --status-warning-soft: rgba(245, 158, 11, 0.16);
+    --status-error-soft: rgba(239, 68, 68, 0.10);
+    --status-info-soft: rgba(56, 189, 248, 0.14);
+
+    --shadow-panel: 0 12px 40px rgba(15, 23, 42, 0.06);
+    --shadow-popover: 0 18px 60px rgba(15, 23, 42, 0.10);
+
+    /* shadcn HSL */
+    --background: 220 14% 98%;
+    --foreground: 222 16% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 16% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 16% 12%;
+    --primary: 239 80% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 16% 12%;
+    --muted: 220 14% 95%;
+    --muted-foreground: 220 10% 38%;
+    --accent: 220 14% 95%;
+    --accent-foreground: 222 16% 12%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 239 80% 58%;
+
+    /* mds brand — invert the surface stack so primary/faint are *foreground*
+       instead of dark deep/dark. Foreground tones flip to dark. Functional
+       brand colors (action-blue, error, warning, lumen-accent) keep their
+       hex — they were designed to read on either theme. */
+    --mds-color-hcp-brand: #ffffff;
+    --mds-color-surface-primary: #1a1d23;
+    --mds-color-surface-faint: #4d525c;
+    --mds-color-surface-dark: #ffffff;
+    --mds-color-surface-deep: #f4f5f7;
+    --mds-color-border-primary: #b2b6bd;
+    --mds-color-border-faint: rgba(97, 104, 117, 0.18);
+    --mds-color-foreground-strong: #0f1115;
+    --mds-color-foreground-primary: #1a1d23;
+    --mds-color-foreground-muted: #4d525c;
+    --mds-color-foreground-faint: #6b7280;
+    --mds-color-lumen-accent: #ca8a04;
+    --mds-color-action-blue: #1060ff;
+    --mds-color-action-blue-active: #1d4ed8;
+    --mds-color-error: #b91c1c;
+    --mds-color-error-bright: #dc2626;
+    --mds-color-warning: #b45309;
+    --mds-color-warning-surface: #fef3c7;
+    --mds-color-focus-action-external: #1d4ed8;
+    --mds-shadow-whisper:
+      rgba(15, 23, 42, 0.04) 0px 1px 1px,
+      rgba(15, 23, 42, 0.04) 0px 2px 2px;
+
+    /* Surface-specific overrides for chrome that's hard to express via the
+       core token system. */
+    --scrollbar-thumb: rgba(75, 85, 99, 0.30);
+    --term-btn-primary-fg: #ffffff;
+    --badge-purple-bg: #ede9fe;
+    --badge-purple-border: rgb(139, 92, 246);
+    --page-glow-indigo: rgba(99, 102, 241, 0.10);
+    --page-glow-emerald: rgba(16, 185, 129, 0.06);
+    --page-fade-from: rgba(244, 245, 247, 0.92);
+
+    /* CloudMap viz — light variants. -700/-600 deeper tones for readability
+       on white. The "soft" rgba tokens (namespace, owned-by, unknown) keep
+       the same neutral grey since it works on either canvas. */
+    --cloudmap-kind-namespace: rgba(75, 85, 99, 0.22);
+    --cloudmap-kind-deployment: #1d4ed8;
+    --cloudmap-kind-statefulset: #6d28d9;
+    --cloudmap-kind-daemonset: #be185d;
+    --cloudmap-kind-cronjob: #b45309;
+    --cloudmap-kind-job: #c2410c;
+    --cloudmap-kind-pod: #047857;
+    --cloudmap-kind-service: #a16207;
+    --cloudmap-kind-ingress: #b91c1c;
+    --cloudmap-kind-configmap: #475569;
+    --cloudmap-kind-secret: #a21caf;
+    --cloudmap-kind-pvc: #0891b2;
+    --cloudmap-kind-node: #4338ca;
+    --cloudmap-kind-hpa: #ca8a04;
+    --cloudmap-edge-selects: #a16207;
+    --cloudmap-edge-routes: #b91c1c;
+    --cloudmap-edge-owned-by: rgba(75, 85, 99, 0.30);
+    --cloudmap-edge-mounts: #0891b2;
+    --cloudmap-edge-scales: #ca8a04;
+    --cloudmap-edge-scheduled-on: #4338ca;
+    --cloudmap-health-healthy: #047857;
+    --cloudmap-health-degraded: #b45309;
+    --cloudmap-health-failed: #b91c1c;
+    --cloudmap-health-unknown: rgba(75, 85, 99, 0.45);
+    --cloudmap-heat-cool: rgba(5, 150, 105, 0.40);
+    --cloudmap-heat-warm: rgba(217, 119, 6, 0.50);
+    --cloudmap-heat-hot: rgba(220, 38, 38, 0.65);
+    --cloudmap-stroke-soft: rgba(161, 98, 7, 0.22);
   }
 }
 
@@ -123,7 +338,7 @@
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
-    background: rgba(178, 182, 189, 0.32);
+    background: var(--scrollbar-thumb);
     border-radius: 8px;
   }
   ::-webkit-scrollbar-thumb:hover { background: var(--term-subtle); }
@@ -202,7 +417,7 @@
   }
   .term-btn-primary {
     background: var(--term-green);
-    color: #15181e;
+    color: var(--term-btn-primary-fg);
     border-color: var(--term-green);
     font-weight: 700;
   }
@@ -210,8 +425,8 @@
   .term-badge {
     @apply inline-flex items-center h-6 px-2 text-[12px];
     color: var(--mds-color-foreground-strong);
-    background: #42225b;
-    border: 1px solid rgb(180, 87, 255);
+    background: var(--badge-purple-bg);
+    border: 1px solid var(--badge-purple-border);
     border-radius: 5px;
   }
   .term-dots { letter-spacing: 1px; color: var(--term-subtle); }
@@ -246,9 +461,9 @@
   .lumen-page {
     min-height: 100%;
     background:
-      radial-gradient(circle at 18% 0%, rgba(99, 102, 241, 0.16), transparent 28%),
-      radial-gradient(circle at 84% 18%, rgba(16, 185, 129, 0.08), transparent 24%),
-      linear-gradient(180deg, rgba(17, 19, 26, 0.92), var(--background-app));
+      radial-gradient(circle at 18% 0%, var(--page-glow-indigo), transparent 28%),
+      radial-gradient(circle at 84% 18%, var(--page-glow-emerald), transparent 24%),
+      linear-gradient(180deg, var(--page-fade-from), var(--background-app));
   }
   .lumen-focus {
     @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-0;

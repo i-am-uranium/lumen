@@ -86,7 +86,7 @@ function Row({ n }: { n: NodeSummary }) {
             {n.taints.map((t) => (
               <span
                 key={t}
-                className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-[10px] text-warning font-mono"
+                className="px-1.5 py-0.5 rounded bg-warning-soft border border-warning/30 text-[10px] text-warning font-mono"
               >
                 {t}
               </span>
@@ -173,7 +173,7 @@ export function NodesView() {
         ) : (
           <>
             {metricsUnavailable ? (
-              <div className="mb-3 flex items-start gap-2 rounded-panel border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px] text-warning">
+              <div className="mb-3 flex items-start gap-2 rounded-panel border border-warning/30 bg-warning-soft px-3 py-2 text-[12px] text-warning">
                 <SignalZero className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   metrics-server is unavailable; showing allocatable capacity only.

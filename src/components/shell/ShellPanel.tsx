@@ -53,8 +53,8 @@ export function ShellPanel({
 
   const stateDot = (() => {
     switch (snapshot.state) {
-      case "live": return "bg-emerald-400 animate-pulse";
-      case "starting": return "bg-amber-400";
+      case "live": return "bg-success animate-pulse";
+      case "starting": return "bg-warning";
       case "exited": return snapshot.exitCode === 0 ? "bg-term-subtle" : "bg-term-red";
       case "failed": return "bg-term-red";
       default: return "bg-term-subtle";

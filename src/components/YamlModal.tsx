@@ -157,7 +157,7 @@ export function YamlModal({
                 className={cn(
                   "ml-2 px-1.5 py-0.5 text-[10px] rounded border font-semibold uppercase tracking-wide",
                   dirty
-                    ? "bg-amber-500/10 text-amber-300 border-amber-500/40"
+                    ? "bg-warning-soft text-warning border-warning/40"
                     : "bg-term-panel-2 text-term-subtle border-term-border-soft",
                 )}
               >
@@ -232,7 +232,7 @@ export function YamlModal({
             </pre>
           )}
           {sensitive && mode === "read" && !loading && !error && (
-            <div className="px-4 py-2 text-[12px] text-amber-300 border-t border-amber-500/30 bg-amber-500/10 flex items-center gap-2">
+            <div className="px-4 py-2 text-[12px] text-warning border-t border-warning/30 bg-warning-soft flex items-center gap-2">
               <ShieldOff className="size-3.5 shrink-0" />
               <span>sensitive values are redacted and this YAML is read-only.</span>
             </div>

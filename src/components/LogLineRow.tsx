@@ -12,18 +12,21 @@ const MSG_KEYS = ["msg", "message", "log", "event"];
 const LEVEL_KEYS = ["level", "lvl", "severity"];
 const TIME_KEYS = ["ts", "time", "timestamp", "@timestamp", "eventTime"];
 
+// Level tones use semantic tokens so they auto-theme. Fatal-tier severities
+// (fatal/crit/panic) use the same danger token but with stronger opacity
+// to keep the visual escalation that the original red-600/20 palette had.
 const LEVEL_TONE: Record<string, string> = {
-  trace: "text-slate-400 bg-slate-500/10 border-slate-500/30",
-  debug: "text-slate-300 bg-slate-500/10 border-slate-500/30",
-  info: "text-emerald-300 bg-emerald-500/10 border-emerald-500/30",
-  notice: "text-sky-300 bg-sky-500/10 border-sky-500/30",
-  warn: "text-amber-300 bg-amber-500/10 border-amber-500/30",
-  warning: "text-amber-300 bg-amber-500/10 border-amber-500/30",
-  error: "text-red-300 bg-red-500/10 border-red-500/30",
-  err: "text-red-300 bg-red-500/10 border-red-500/30",
-  fatal: "text-red-200 bg-red-600/20 border-red-500/40",
-  crit: "text-red-200 bg-red-600/20 border-red-500/40",
-  panic: "text-red-200 bg-red-600/20 border-red-500/40",
+  trace: "text-text-muted bg-elevated border-border-default",
+  debug: "text-text-secondary bg-elevated border-border-default",
+  info: "text-success bg-success-soft border-success/30",
+  notice: "text-info bg-info-soft border-info/30",
+  warn: "text-warning bg-warning-soft border-warning/30",
+  warning: "text-warning bg-warning-soft border-warning/30",
+  error: "text-danger bg-danger-soft border-danger/30",
+  err: "text-danger bg-danger-soft border-danger/30",
+  fatal: "text-danger bg-danger/15 border-danger/50 font-semibold",
+  crit: "text-danger bg-danger/15 border-danger/50 font-semibold",
+  panic: "text-danger bg-danger/15 border-danger/50 font-semibold",
 };
 
 type Parsed = {
