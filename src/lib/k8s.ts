@@ -376,6 +376,38 @@ export type EventLine = {
   type_: string;
 };
 
+// ─── Image vulnerability scan (C5) ────────────────────────────────────────
+
+export type VulnSeverityCounts = {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+};
+
+export type VulnFinding = {
+  id: string;
+  package: string;
+  installed_version: string;
+  fixed_version: string | null;
+  severity: string;
+  title: string;
+};
+
+/**
+ * Mirrors src-tauri/src/k8s/vulnscan.rs `VulnReport`. When trivy isn't on
+ * PATH or the scan fails, `scanner_available` is false and `note` carries
+ * a human-readable hint — counts/findings are empty in that case.
+ */
+export type VulnReport = {
+  image: string;
+  scanner_available: boolean;
+  note: string | null;
+  counts: VulnSeverityCounts;
+  findings: VulnFinding[];
+};
+
 // ─── CronJob manual runs (C3) ─────────────────────────────────────────────
 
 /**
@@ -670,6 +702,13 @@ export const k8s = {
       replicas,
       context,
     }),
+  /** Returns true when `trivy --version` succeeds; surfaced by the UI to gate
+   *  the scan button without round-tripping through scan_image. */
+  detectTrivy: () => invoke<boolean>("detect_trivy"),
+  /** Run trivy against a single image. Always resolves with a structured
+   *  report — failure paths set scanner_available=false and put the reason
+   *  in `note` rather than throwing. */
+  scanImage: (image: string) => invoke<VulnReport>("scan_image", { image }),
   /**
    * List Jobs that were created by manual triggers of a CronJob — used by
    * the drawer's "Manual runs" section. Filtered server-side by the

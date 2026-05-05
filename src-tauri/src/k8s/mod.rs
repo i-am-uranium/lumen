@@ -21,4 +21,5 @@ pub mod security;
 pub mod storage_details;
 pub mod time;
 pub mod types;
+pub mod vulnscan;
 pub mod watch;

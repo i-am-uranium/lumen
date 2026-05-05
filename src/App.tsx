@@ -59,6 +59,9 @@ const EventsView = lazy(() =>
 const AiAssistant = lazy(() =>
   import("@/routes/cluster/AiAssistant").then(named("AiAssistant")),
 );
+const Settings = lazy(() =>
+  import("@/routes/Settings").then(named("Settings")),
+);
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
@@ -230,6 +233,7 @@ function Shell() {
                 <Route path="logs" element={<LogsTab />} />
                 <Route path="ai" element={<AiAssistant />} />
               </Route>
+              <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/cluster" replace />} />
             </Routes>
           </Suspense>

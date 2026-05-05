@@ -25,6 +25,7 @@ import {
   Laptop,
   Lock,
   LockOpen,
+  Settings as SettingsIcon,
   Layers,
   Moon,
   Network,
@@ -279,6 +280,14 @@ export function CommandPalette() {
               <NavItem value="theme: system" icon={Laptop} onSelect={() => pickTheme("system")} />
               <NavItem value="read-only: on" icon={Lock} onSelect={() => pickReadOnly(true)} />
               <NavItem value="read-only: off" icon={LockOpen} onSelect={() => pickReadOnly(false)} />
+              <NavItem
+                value="go: settings"
+                icon={SettingsIcon}
+                onSelect={() => {
+                  navigate("/settings");
+                  close();
+                }}
+              />
             </CommandGroup>
             {ranked.contexts.length > 0 && (
               <CommandGroup heading={`contexts · ${ranked.contexts.length}`} className={groupClass}>

@@ -72,6 +72,8 @@ pub fn run() {
             commands::k8s::scale_workload,
             commands::k8s::set_workload_image,
             commands::k8s::list_manual_cronjob_runs,
+            commands::k8s::detect_trivy,
+            commands::k8s::scan_image,
             commands::k8s::delete_pod,
             commands::k8s::cordon_node,
             commands::k8s::uncordon_node,

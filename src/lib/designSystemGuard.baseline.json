@@ -33,6 +33,8 @@
     "src/components/shell/ShellTerminalHost.tsx:106"
   ],
   "rawTailwindColors": [
+    "src/components/ResourceDetailDrawer.tsx:1394",
+    "src/components/ResourceDetailDrawer.tsx:1415",
     "src/components/logs/LogsTabStrip.tsx:13",
     "src/components/logs/LogsTabStrip.tsx:14",
     "src/components/logs/LogsTabStrip.tsx:15",

@@ -1510,6 +1510,16 @@ pub async fn scale_workload(
 }
 
 #[tauri::command]
+pub async fn detect_trivy() -> bool {
+    crate::k8s::vulnscan::is_trivy_available().await
+}
+
+#[tauri::command]
+pub async fn scan_image(image: String) -> AppResult<crate::k8s::vulnscan::VulnReport> {
+    crate::k8s::vulnscan::scan_image(&image).await
+}
+
+#[tauri::command]
 pub async fn list_manual_cronjob_runs(
     namespace: String,
     name: String,
