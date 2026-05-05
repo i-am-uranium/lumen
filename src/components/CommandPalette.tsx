@@ -23,6 +23,9 @@ import {
   Boxes,
   FileText,
   Laptop,
+  Lock,
+  LockOpen,
+  Settings as SettingsIcon,
   Layers,
   Moon,
   Network,
@@ -35,6 +38,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
+import { useUiSettings } from "@/state/uiSettings";
 
 export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
   listResourceDefinitions().map((definition) => definition.kind);
@@ -184,6 +188,11 @@ export function CommandPalette() {
     close();
   }
 
+  function pickReadOnly(next: boolean) {
+    useUiSettings.getState().setReadOnly(next);
+    close();
+  }
+
   function pickNamespace(ns: string) {
     setNamespace(ns);
     close();
@@ -269,6 +278,16 @@ export function CommandPalette() {
               <NavItem value="theme: light" icon={Sun} onSelect={() => pickTheme("light")} />
               <NavItem value="theme: dark" icon={Moon} onSelect={() => pickTheme("dark")} />
               <NavItem value="theme: system" icon={Laptop} onSelect={() => pickTheme("system")} />
+              <NavItem value="read-only: on" icon={Lock} onSelect={() => pickReadOnly(true)} />
+              <NavItem value="read-only: off" icon={LockOpen} onSelect={() => pickReadOnly(false)} />
+              <NavItem
+                value="go: settings"
+                icon={SettingsIcon}
+                onSelect={() => {
+                  navigate("/settings");
+                  close();
+                }}
+              />
             </CommandGroup>
             {ranked.contexts.length > 0 && (
               <CommandGroup heading={`contexts · ${ranked.contexts.length}`} className={groupClass}>

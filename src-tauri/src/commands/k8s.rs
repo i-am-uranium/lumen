@@ -1510,6 +1510,41 @@ pub async fn scale_workload(
 }
 
 #[tauri::command]
+pub async fn detect_trivy() -> bool {
+    crate::k8s::vulnscan::is_trivy_available().await
+}
+
+#[tauri::command]
+pub async fn scan_image(image: String) -> AppResult<crate::k8s::vulnscan::VulnReport> {
+    crate::k8s::vulnscan::scan_image(&image).await
+}
+
+#[tauri::command]
+pub async fn list_manual_cronjob_runs(
+    namespace: String,
+    name: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<act::ManualRunSummary>> {
+    let client = client_for(&state, context.as_deref()).await?;
+    act::list_manual_cronjob_runs(&client, &namespace, &name).await
+}
+
+#[tauri::command]
+pub async fn set_workload_image(
+    namespace: String,
+    kind: WorkloadKind,
+    name: String,
+    container: String,
+    image: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let client = client_for(&state, context.as_deref()).await?;
+    act::set_workload_image(&client, &namespace, kind, &name, &container, &image).await
+}
+
+#[tauri::command]
 pub async fn delete_pod(
     namespace: String,
     name: String,

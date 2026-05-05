@@ -252,6 +252,11 @@ pub struct FleetCard {
     /// 0–100 aggregate memory usage across nodes.
     pub mem_percent: Option<f32>,
     pub fetched_at_ms: i64,
+    /// Best-effort cluster distribution (eks / gke / aks / openshift / k3s /
+    /// minikube / kind / generic). Inferred from node labels and well-known
+    /// system namespaces; `None` when nothing matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<String>,
 }
 
 // ─── CloudMap ────────────────────────────────────────────────────────────

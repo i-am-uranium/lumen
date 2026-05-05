@@ -128,6 +128,61 @@ pub async fn rollout_restart(
     .map_err(|e| AppError::K8s(e.to_string()))
 }
 
+/// Set the image on a single container of a Deployment / StatefulSet /
+/// DaemonSet — equivalent to `kubectl set image
+/// deployment/<name> <container>=<image>`. Strategic merge patch matches
+/// the existing container by name (the `name` field is the merge key for
+/// `containers`), so the rest of the spec — env, volumes, probes, etc. —
+/// is preserved untouched. The patch triggers a rolling update through
+/// the controller's normal reconciliation loop.
+pub async fn set_workload_image(
+    client: &Client,
+    namespace: &str,
+    kind: WorkloadKind,
+    name: &str,
+    container: &str,
+    image: &str,
+) -> AppResult<()> {
+    if container.is_empty() {
+        return Err(AppError::K8s("container name must not be empty".into()));
+    }
+    if image.is_empty() {
+        return Err(AppError::K8s("image must not be empty".into()));
+    }
+    let patch = serde_json::json!({
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        { "name": container, "image": image }
+                    ]
+                }
+            }
+        }
+    });
+    let pp = PatchParams::default();
+    match kind {
+        WorkloadKind::Deployment => Api::<Deployment>::namespaced(client.clone(), namespace)
+            .patch(name, &pp, &Patch::Strategic(&patch))
+            .await
+            .map(|_| ()),
+        WorkloadKind::StatefulSet => Api::<StatefulSet>::namespaced(client.clone(), namespace)
+            .patch(name, &pp, &Patch::Strategic(&patch))
+            .await
+            .map(|_| ()),
+        WorkloadKind::DaemonSet => Api::<DaemonSet>::namespaced(client.clone(), namespace)
+            .patch(name, &pp, &Patch::Strategic(&patch))
+            .await
+            .map(|_| ()),
+        other => {
+            return Err(AppError::K8s(format!(
+                "set image not supported for {other:?}"
+            )))
+        }
+    }
+    .map_err(|e| AppError::K8s(e.to_string()))
+}
+
 /// Set replicas via the Scale subresource. Supported for Deployment and
 /// StatefulSet; DaemonSet replicas are driven by node count and cannot be
 /// scaled.
@@ -405,6 +460,93 @@ pub async fn delete_pod(client: &Client, namespace: &str, name: &str) -> AppResu
         .await
         .map(|_| ())
         .map_err(|e| AppError::K8s(e.to_string()))
+}
+
+// ─── CronJob manual-run history (C3) ────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManualRunSummary {
+    pub name: String,
+    /// Active / Succeeded / Failed / Pending — collapsed from JobStatus.
+    pub status: String,
+    /// ISO-8601 in UTC; None for jobs that haven't started or completed yet.
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    /// Pod-level rollup so the UI can render "1/1" or "0/3 succeeded".
+    pub succeeded: i32,
+    pub failed: i32,
+    pub active: i32,
+}
+
+const MANUAL_INSTANTIATE_LABEL: &str = "cronjob.kubernetes.io/instantiate";
+
+/// List Jobs that were created by a manual trigger of a given CronJob.
+///
+/// We filter by both the standard `cronjob.kubernetes.io/instantiate=manual`
+/// label (which `trigger_cronjob` stamps on every manual Job) AND by an
+/// ownerReference back to the CronJob — owner check is the source of truth
+/// since the label can be removed by hand. Results are newest-first.
+pub async fn list_manual_cronjob_runs(
+    client: &Client,
+    namespace: &str,
+    cronjob_name: &str,
+) -> AppResult<Vec<ManualRunSummary>> {
+    let jobs: Api<Job> = Api::namespaced(client.clone(), namespace);
+    let lp = ListParams::default().labels(&format!("{MANUAL_INSTANTIATE_LABEL}=manual"));
+    let list = jobs
+        .list(&lp)
+        .await
+        .map_err(|e| AppError::K8s(format!("list manual runs for {cronjob_name}: {e}")))?;
+
+    let mut out: Vec<ManualRunSummary> = list
+        .items
+        .into_iter()
+        .filter(|job| {
+            // OwnerRef must point at this exact cronjob — guards against
+            // tag-collision when multiple cronjobs use the same label.
+            job.metadata
+                .owner_references
+                .as_ref()
+                .map(|refs| {
+                    refs.iter()
+                        .any(|r| r.kind == "CronJob" && r.name == cronjob_name)
+                })
+                .unwrap_or(false)
+        })
+        .map(|job| {
+            let status = job.status.as_ref();
+            let succeeded = status.and_then(|s| s.succeeded).unwrap_or(0);
+            let failed = status.and_then(|s| s.failed).unwrap_or(0);
+            let active = status.and_then(|s| s.active).unwrap_or(0);
+            // Rolled-up status string for the UI. Match `kubectl get job`'s
+            // mental model: Failed > Succeeded > Active > Pending.
+            let phase = if failed > 0 {
+                "Failed"
+            } else if succeeded > 0 && active == 0 {
+                "Succeeded"
+            } else if active > 0 {
+                "Active"
+            } else {
+                "Pending"
+            };
+            ManualRunSummary {
+                name: job.metadata.name.clone().unwrap_or_default(),
+                status: phase.to_string(),
+                started_at: status
+                    .and_then(|s| s.start_time.as_ref())
+                    .map(time::rfc3339),
+                completed_at: status
+                    .and_then(|s| s.completion_time.as_ref())
+                    .map(time::rfc3339),
+                succeeded,
+                failed,
+                active,
+            }
+        })
+        .collect();
+    // Newest-first by start time; jobs without a start time sink to the bottom.
+    out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    Ok(out)
 }
 
 pub async fn delete_resource(

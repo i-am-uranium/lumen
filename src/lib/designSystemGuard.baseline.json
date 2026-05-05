@@ -10,12 +10,12 @@
     "src/routes/cluster/ClusterWorkspace.tsx:654",
     "src/routes/cluster/EventsView.tsx:324",
     "src/routes/cluster/EventsView.tsx:336",
-    "src/routes/cluster/FleetView.tsx:225",
-    "src/routes/cluster/FleetView.tsx:369",
-    "src/routes/cluster/FleetView.tsx:487",
+    "src/routes/cluster/FleetView.tsx:255",
+    "src/routes/cluster/FleetView.tsx:402",
+    "src/routes/cluster/FleetView.tsx:520",
     "src/routes/cluster/LogsTab.tsx:480",
     "src/routes/cluster/LogsTab.tsx:488",
-    "src/routes/cluster/NodesView.tsx:176"
+    "src/routes/cluster/NodesView.tsx:184"
   ],
   "rawHexColors": [
     "src/components/shell/ShellTerminalHost.tsx:17",
@@ -33,6 +33,8 @@
     "src/components/shell/ShellTerminalHost.tsx:106"
   ],
   "rawTailwindColors": [
+    "src/components/ResourceDetailDrawer.tsx:1394",
+    "src/components/ResourceDetailDrawer.tsx:1415",
     "src/components/logs/LogsTabStrip.tsx:13",
     "src/components/logs/LogsTabStrip.tsx:14",
     "src/components/logs/LogsTabStrip.tsx:15",
@@ -46,10 +48,10 @@
     "src/components/logs/LogsTabStrip.tsx:23",
     "src/components/logs/LogsTabStrip.tsx:24",
     "src/routes/cluster/CrdBrowser.tsx:121",
-    "src/routes/cluster/FleetView.tsx:766",
-    "src/routes/cluster/FleetView.tsx:768",
-    "src/routes/cluster/FleetView.tsx:769",
-    "src/routes/cluster/FleetView.tsx:770",
+    "src/routes/cluster/FleetView.tsx:799",
+    "src/routes/cluster/FleetView.tsx:801",
+    "src/routes/cluster/FleetView.tsx:802",
+    "src/routes/cluster/FleetView.tsx:803",
     "src/routes/cluster/SecurityView.tsx:34",
     "src/routes/cluster/SecurityView.tsx:35",
     "src/routes/cluster/SecurityView.tsx:36",

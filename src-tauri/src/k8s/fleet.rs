@@ -162,7 +162,111 @@ fn unreachable_card(ctx: ContextInfo, err: String, fetched_at_ms: i64) -> FleetC
         cpu_percent: None,
         mem_percent: None,
         fetched_at_ms,
+        distribution: None,
     }
+}
+
+/// Best-effort cluster-distribution detection.
+///
+/// Walks node labels and looks for vendor-specific markers — these are stable
+/// across cloud-provider node-pool versions and don't require any extra API
+/// calls beyond the node list we already fetch for fleet stats. Falls back to
+/// kubelet OS image matching for the local-development distros (kind, k3s,
+/// minikube) which don't tag nodes with provider labels.
+///
+/// Returns the lowercase identifier matching what the FleetView UI expects:
+/// "eks" / "gke" / "aks" / "openshift" / "k3s" / "kind" / "minikube" /
+/// "docker-desktop" / "rancher", or `None` for an unrecognized cluster.
+pub fn detect_distribution(nodes: &[Node]) -> Option<String> {
+    // Single pass; first match wins. Order is deliberate — vendor-specific
+    // labels are checked before generic ones (e.g. an EKS node also reports
+    // a "kubernetes.io/hostname" label, which would over-match a generic
+    // detector if put earlier).
+    for node in nodes {
+        let labels = node.metadata.labels.as_ref();
+        let provider_id = node.spec.as_ref().and_then(|s| s.provider_id.as_deref());
+
+        if let Some(labels) = labels {
+            if labels.keys().any(|k| k.starts_with("eks.amazonaws.com/")) {
+                return Some("eks".into());
+            }
+            if labels
+                .keys()
+                .any(|k| k.starts_with("cloud.google.com/gke-"))
+            {
+                return Some("gke".into());
+            }
+            if labels
+                .keys()
+                .any(|k| k.starts_with("kubernetes.azure.com/"))
+            {
+                return Some("aks".into());
+            }
+            if labels.contains_key("node.openshift.io/os_id") {
+                return Some("openshift".into());
+            }
+            if labels
+                .get("node-role.kubernetes.io/master")
+                .map(|v| v.as_str())
+                == Some("")
+                && labels.contains_key("node.kubernetes.io/instance-type")
+                && labels
+                    .get("node.kubernetes.io/instance-type")
+                    .map(|v| v.as_str())
+                    == Some("k3s")
+            {
+                return Some("k3s".into());
+            }
+        }
+
+        // providerID prefixes are reliable for cloud providers when the
+        // label-based detection above missed (older clusters, custom CNI
+        // etc.). Cheaper than re-walking labels for variants.
+        if let Some(pid) = provider_id {
+            if pid.starts_with("aws://") {
+                return Some("eks".into());
+            }
+            if pid.starts_with("gce://") {
+                return Some("gke".into());
+            }
+            if pid.starts_with("azure://") {
+                return Some("aks".into());
+            }
+            if pid.starts_with("kind://") {
+                return Some("kind".into());
+            }
+            if pid.starts_with("k3s://") {
+                return Some("k3s".into());
+            }
+        }
+
+        // OS-image fallback for local distros that don't tag with provider
+        // labels. The strings are documented kubelet output across versions.
+        if let Some(os) = node
+            .status
+            .as_ref()
+            .and_then(|s| s.node_info.as_ref())
+            .map(|n| n.os_image.as_str())
+        {
+            let os_lower = os.to_lowercase();
+            if os_lower.contains("k3s") {
+                return Some("k3s".into());
+            }
+            if os_lower.contains("kind") {
+                return Some("kind".into());
+            }
+            if os_lower.contains("docker desktop") || os_lower.contains("dockerdesktop") {
+                return Some("docker-desktop".into());
+            }
+            if os_lower.contains("minikube") {
+                return Some("minikube".into());
+            }
+            if os_lower.contains("rancheros") || os_lower.contains("rke") {
+                return Some("rancher".into());
+            }
+        }
+    }
+    None
 }
 
 async fn probe_one_inner(state: &K8sState, ctx: ContextInfo) -> FleetCard {
@@ -309,6 +413,12 @@ async fn probe_one_inner(state: &K8sState, ctx: ContextInfo) -> FleetCard {
         _ => (None, None),
     };
 
+    let distribution = nodes
+        .as_ref()
+        .ok()
+        .map(|list| detect_distribution(&list.items))
+        .unwrap_or(None);
+
     FleetCard {
         context: ctx,
         reachable: true,
@@ -327,6 +437,7 @@ async fn probe_one_inner(state: &K8sState, ctx: ContextInfo) -> FleetCard {
         cpu_percent,
         mem_percent,
         fetched_at_ms,
+        distribution,
     }
 }
 
@@ -367,4 +478,115 @@ pub async fn probe_context(state: &K8sState, context: &str) -> AppResult<FleetCa
             crate::error::AppError::Kubeconfig(format!("context '{}' not in kubeconfig", context))
         })?;
     Ok(probe_one(state, ctx).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_distribution;
+    use k8s_openapi::api::core::v1::{Node, NodeSpec, NodeStatus, NodeSystemInfo};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::collections::BTreeMap;
+
+    fn node_with_label(key: &str, value: &str) -> Node {
+        let mut labels = BTreeMap::new();
+        labels.insert(key.to_string(), value.to_string());
+        Node {
+            metadata: ObjectMeta {
+                labels: Some(labels),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn node_with_provider_id(id: &str) -> Node {
+        Node {
+            spec: Some(NodeSpec {
+                provider_id: Some(id.to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn node_with_os_image(os: &str) -> Node {
+        Node {
+            status: Some(NodeStatus {
+                node_info: Some(NodeSystemInfo {
+                    architecture: "amd64".into(),
+                    boot_id: "".into(),
+                    container_runtime_version: "".into(),
+                    kernel_version: "".into(),
+                    kubelet_version: "".into(),
+                    kube_proxy_version: "".into(),
+                    machine_id: "".into(),
+                    operating_system: "linux".into(),
+                    os_image: os.to_string(),
+                    system_uuid: "".into(),
+                    swap: None,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn detects_eks_via_node_label() {
+        let nodes = vec![node_with_label("eks.amazonaws.com/nodegroup", "default")];
+        assert_eq!(detect_distribution(&nodes), Some("eks".into()));
+    }
+
+    #[test]
+    fn detects_gke_via_node_label() {
+        let nodes = vec![node_with_label(
+            "cloud.google.com/gke-os-distribution",
+            "cos",
+        )];
+        assert_eq!(detect_distribution(&nodes), Some("gke".into()));
+    }
+
+    #[test]
+    fn detects_aks_via_node_label() {
+        let nodes = vec![node_with_label("kubernetes.azure.com/cluster", "rg-foo")];
+        assert_eq!(detect_distribution(&nodes), Some("aks".into()));
+    }
+
+    #[test]
+    fn detects_openshift_via_node_label() {
+        let nodes = vec![node_with_label("node.openshift.io/os_id", "rhcos")];
+        assert_eq!(detect_distribution(&nodes), Some("openshift".into()));
+    }
+
+    #[test]
+    fn detects_kind_via_provider_id() {
+        let nodes = vec![node_with_provider_id(
+            "kind://docker/lumen-test/lumen-test-control-plane",
+        )];
+        assert_eq!(detect_distribution(&nodes), Some("kind".into()));
+    }
+
+    #[test]
+    fn detects_minikube_via_os_image() {
+        let nodes = vec![node_with_os_image("Buildroot 2023.02 (minikube)")];
+        assert_eq!(detect_distribution(&nodes), Some("minikube".into()));
+    }
+
+    #[test]
+    fn detects_docker_desktop_via_os_image() {
+        let nodes = vec![node_with_os_image("Docker Desktop")];
+        assert_eq!(detect_distribution(&nodes), Some("docker-desktop".into()));
+    }
+
+    #[test]
+    fn returns_none_for_unrecognised_cluster() {
+        let nodes = vec![node_with_label("kubernetes.io/hostname", "worker-1")];
+        assert_eq!(detect_distribution(&nodes), None);
+    }
+
+    #[test]
+    fn returns_none_for_empty_node_list() {
+        let nodes: Vec<Node> = Vec::new();
+        assert_eq!(detect_distribution(&nodes), None);
+    }
 }

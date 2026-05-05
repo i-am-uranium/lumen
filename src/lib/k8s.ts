@@ -209,6 +209,13 @@ export type FleetCard = {
   cpu_percent: number | null;
   mem_percent: number | null;
   fetched_at_ms: number;
+  /**
+   * Best-effort cluster distribution detected from node labels and OS image.
+   * Stable lowercase id (eks / gke / aks / openshift / k3s / kind / minikube
+   * / docker-desktop / rancher), or undefined when nothing matched. Optional
+   * via serde skip_serializing_if on the Rust side.
+   */
+  distribution?: string;
 };
 
 export type NodeSummary = {
@@ -350,6 +357,72 @@ export type CrInstance = {
   namespace: string | null;
   age_seconds: number;
   status_hint: string | null;
+};
+
+// ─── Activity / events stream ─────────────────────────────────────────────
+
+/**
+ * Mirrors src-tauri/src/k8s/events.rs `EventLine` — a single Kubernetes
+ * Event flattened to what the activity drawer actually renders. The Rust
+ * side renames `type_` (a Rust keyword conflict) so we mirror the wire
+ * format here rather than the field name.
+ */
+export type EventLine = {
+  ts: string | null;
+  kind: string;
+  reason: string;
+  message: string;
+  involved: string;
+  type_: string;
+};
+
+// ─── Image vulnerability scan (C5) ────────────────────────────────────────
+
+export type VulnSeverityCounts = {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+};
+
+export type VulnFinding = {
+  id: string;
+  package: string;
+  installed_version: string;
+  fixed_version: string | null;
+  severity: string;
+  title: string;
+};
+
+/**
+ * Mirrors src-tauri/src/k8s/vulnscan.rs `VulnReport`. When trivy isn't on
+ * PATH or the scan fails, `scanner_available` is false and `note` carries
+ * a human-readable hint — counts/findings are empty in that case.
+ */
+export type VulnReport = {
+  image: string;
+  scanner_available: boolean;
+  note: string | null;
+  counts: VulnSeverityCounts;
+  findings: VulnFinding[];
+};
+
+// ─── CronJob manual runs (C3) ─────────────────────────────────────────────
+
+/**
+ * Mirrors src-tauri/src/k8s/actions.rs `ManualRunSummary` — a single Job
+ * created by a manual CronJob trigger, flattened to what the drawer
+ * inline panel renders.
+ */
+export type ManualRunSummary = {
+  name: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  succeeded: number;
+  failed: number;
+  active: number;
 };
 
 // ─── Team Access ──────────────────────────────────────────────────────────
@@ -627,6 +700,45 @@ export const k8s = {
       kind,
       name,
       replicas,
+      context,
+    }),
+  /** Returns true when `trivy --version` succeeds; surfaced by the UI to gate
+   *  the scan button without round-tripping through scan_image. */
+  detectTrivy: () => invoke<boolean>("detect_trivy"),
+  /** Run trivy against a single image. Always resolves with a structured
+   *  report — failure paths set scanner_available=false and put the reason
+   *  in `note` rather than throwing. */
+  scanImage: (image: string) => invoke<VulnReport>("scan_image", { image }),
+  /**
+   * List Jobs that were created by manual triggers of a CronJob — used by
+   * the drawer's "Manual runs" section. Filtered server-side by the
+   * cronjob.kubernetes.io/instantiate=manual label and by ownerReference.
+   */
+  listManualCronjobRuns: (namespace: string, name: string, context?: string) =>
+    invoke<ManualRunSummary[]>("list_manual_cronjob_runs", {
+      namespace,
+      name,
+      context,
+    }),
+  /**
+   * Hot-swap a container's image on a Deployment / StatefulSet / DaemonSet —
+   * equivalent to `kubectl set image <kind>/<name> <container>=<image>`.
+   * Triggers a normal rolling update through the controller.
+   */
+  setWorkloadImage: (
+    namespace: string,
+    kind: WorkloadKind,
+    name: string,
+    container: string,
+    image: string,
+    context?: string,
+  ) =>
+    invoke<void>("set_workload_image", {
+      namespace,
+      kind,
+      name,
+      container,
+      image,
       context,
     }),
   deletePod: (namespace: string, name: string, context?: string) =>
