@@ -13,6 +13,7 @@ beforeEach(() => {
       nodes: [],
     },
     shortcuts: {},
+    argocdResourceView: "tree",
   });
 });
 
@@ -72,5 +73,15 @@ describe("useUiSettings", () => {
     expect(useUiSettings.getState().shortcuts.openPalette).toBe("Ctrl+/");
     useUiSettings.getState().setShortcut("openPalette", null);
     expect(useUiSettings.getState().shortcuts.openPalette).toBeUndefined();
+  });
+
+  it("argocdResourceView defaults to 'tree' and persists changes", () => {
+    expect(useUiSettings.getState().argocdResourceView).toBe("tree");
+    useUiSettings.getState().setArgocdResourceView("list");
+    expect(useUiSettings.getState().argocdResourceView).toBe("list");
+    const persisted = JSON.parse(
+      window.localStorage.getItem(UI_SETTINGS_STORAGE_KEY) ?? "{}",
+    );
+    expect(persisted.argocdResourceView).toBe("list");
   });
 });

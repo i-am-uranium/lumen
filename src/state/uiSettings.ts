@@ -26,9 +26,18 @@ export const UI_SETTINGS_STORAGE_KEY = "lumen:ui-settings";
  *   • `shortcuts`     — user-overridable keybindings for the global
  *                      shortcut registry. Map of action-id → key chord.
  *                      Empty by default; defaults live in the registry.
+ *
+ *   • `argocdResourceView` — how the ArgoCD Application detail panel
+ *                      renders managed resources: a flat alphabetical
+ *                      list ("list") or kind-grouped collapsible
+ *                      sections ("tree"). Defaults to "tree" — closer
+ *                      to ArgoCD's native topology view, which is the
+ *                      thing users still leave Lumen for.
  */
 
 export type ColumnView = "workloads-pod" | "workloads-other" | "nodes";
+
+export type ArgocdResourceView = "list" | "tree";
 
 export type UiSettings = {
   readOnly: boolean;
@@ -36,6 +45,8 @@ export type UiSettings = {
   hiddenColumns: Record<ColumnView, string[]>;
   /** Per-action override of the default key chord (e.g. "Cmd+K" → "Ctrl+/"). */
   shortcuts: Record<string, string>;
+  /** ArgoCD Application detail: managed-resources rendering mode. */
+  argocdResourceView: ArgocdResourceView;
 };
 
 const STORAGE_KEY = UI_SETTINGS_STORAGE_KEY;
@@ -47,7 +58,12 @@ const EMPTY_HIDDEN: UiSettings["hiddenColumns"] = {
 };
 
 function defaults(): UiSettings {
-  return { readOnly: false, hiddenColumns: { ...EMPTY_HIDDEN }, shortcuts: {} };
+  return {
+    readOnly: false,
+    hiddenColumns: { ...EMPTY_HIDDEN },
+    shortcuts: {},
+    argocdResourceView: "tree",
+  };
 }
 
 function readPersisted(): UiSettings {
@@ -78,6 +94,11 @@ function readPersisted(): UiSettings {
               ),
             )
           : {},
+      argocdResourceView:
+        parsed.argocdResourceView === "list" ||
+        parsed.argocdResourceView === "tree"
+          ? parsed.argocdResourceView
+          : "tree",
     };
   } catch {
     return defaults();
@@ -100,6 +121,7 @@ type Store = UiSettings & {
   resetColumns: (view: ColumnView) => void;
   setShortcut: (actionId: string, chord: string | null) => void;
   resetShortcuts: () => void;
+  setArgocdResourceView: (next: ArgocdResourceView) => void;
 };
 
 export const useUiSettings = create<Store>((set, get) => {
@@ -149,6 +171,11 @@ export const useUiSettings = create<Store>((set, get) => {
       const snapshot = { ...get(), shortcuts: {} };
       writePersisted(snapshot);
       set({ shortcuts: {} });
+    },
+    setArgocdResourceView: (next) => {
+      const snapshot = { ...get(), argocdResourceView: next };
+      writePersisted(snapshot);
+      set({ argocdResourceView: next });
     },
   };
 });

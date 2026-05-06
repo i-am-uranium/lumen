@@ -43,7 +43,11 @@ import {
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
-import { useUiSettings } from "@/state/uiSettings";
+import {
+  type ArgocdResourceView,
+  useUiSettings,
+} from "@/state/uiSettings";
+import { groupResourcesByKind } from "./argocdResourceTree";
 
 /**
  * ArgoCD Applications view.
@@ -669,7 +673,7 @@ function ApplicationDetailPanel({
         </div>
       )}
 
-      <ResourceList
+      <ManagedResourcesSection
         loading={detail.isLoading}
         resources={detail.data?.resources}
         inCluster={inCluster}
@@ -1224,7 +1228,18 @@ function toDrawerResource(r: ArgoApplicationResource): {
   };
 }
 
-function ResourceList({
+/**
+ * Wrapper around the managed-resources panel: header (with view-mode
+ * toggle), then either the flat alphabetical list or the kind-grouped
+ * tree, depending on the user's persisted preference.
+ *
+ * The tree mode groups by Kind today; an owner-ref-based deeper tree
+ * is on the roadmap once we either pull it from ArgoCD's status tree
+ * endpoint or do per-resource K8s round-trips. Kind grouping is the
+ * meaningful upgrade we can ship from data the backend already
+ * returns (`ApplicationDetail.resources`).
+ */
+function ManagedResourcesSection({
   loading,
   resources,
   inCluster,
@@ -1241,6 +1256,9 @@ function ResourceList({
   onOpen: (r: ArgoApplicationResource) => void;
   onSync: (r: ArgoApplicationResource) => void;
 }) {
+  const view = useUiSettings((s) => s.argocdResourceView);
+  const setView = useUiSettings((s) => s.setArgocdResourceView);
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-[11px] text-text-muted">
@@ -1265,24 +1283,202 @@ function ResourceList({
             external dest
           </span>
         )}
+        <span className="ml-auto">
+          <ViewModeToggle value={view} onChange={setView} />
+        </span>
       </div>
-      <ul className="max-h-72 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
-        {resources.map((r) => {
-          const key = resourceKey(r);
-          const syncBusy = syncBusyKey === key;
-          return (
-            <ResourceRow
-              key={key}
-              resource={r}
-              inCluster={inCluster}
-              readOnly={readOnly}
-              syncBusy={syncBusy}
-              onOpen={() => onOpen(r)}
-              onSync={() => onSync(r)}
-            />
-          );
-        })}
-      </ul>
+      {view === "tree" ? (
+        <ResourceTree
+          resources={resources}
+          inCluster={inCluster}
+          readOnly={readOnly}
+          syncBusyKey={syncBusyKey}
+          onOpen={onOpen}
+          onSync={onSync}
+        />
+      ) : (
+        <ResourceFlatList
+          resources={resources}
+          inCluster={inCluster}
+          readOnly={readOnly}
+          syncBusyKey={syncBusyKey}
+          onOpen={onOpen}
+          onSync={onSync}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * View-mode toggle. Two-state segmented control rendered inline in the
+ * managed-resources header. Persists via uiSettings.
+ */
+function ViewModeToggle({
+  value,
+  onChange,
+}: {
+  value: ArgocdResourceView;
+  onChange: (next: ArgocdResourceView) => void;
+}) {
+  return (
+    <div
+      className="inline-flex overflow-hidden rounded border border-border-default bg-surface text-text-secondary"
+      role="tablist"
+      aria-label="managed resources view"
+    >
+      {(["list", "tree"] as const).map((mode) => {
+        const active = value === mode;
+        return (
+          <button
+            key={mode}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(mode)}
+            title={mode === "tree" ? "group by Kind" : "flat list"}
+            className={cn(
+              "px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-normal transition-colors",
+              active
+                ? "bg-accent-primary-soft text-accent-primary"
+                : "hover:bg-hover",
+            )}
+          >
+            {mode}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Flat alphabetical list — the original ResourceList, factored into
+ * a component without its own header (the section header lives in
+ * ManagedResourcesSection now).
+ */
+function ResourceFlatList({
+  resources,
+  inCluster,
+  readOnly,
+  syncBusyKey,
+  onOpen,
+  onSync,
+}: {
+  resources: ArgoApplicationResource[];
+  inCluster: boolean;
+  readOnly: boolean;
+  syncBusyKey: string | null;
+  onOpen: (r: ArgoApplicationResource) => void;
+  onSync: (r: ArgoApplicationResource) => void;
+}) {
+  return (
+    <ul className="max-h-72 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
+      {resources.map((r) => {
+        const key = resourceKey(r);
+        const syncBusy = syncBusyKey === key;
+        return (
+          <ResourceRow
+            key={key}
+            resource={r}
+            inCluster={inCluster}
+            readOnly={readOnly}
+            syncBusy={syncBusy}
+            onOpen={() => onOpen(r)}
+            onSync={() => onSync(r)}
+          />
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
+ * Kind-grouped tree. Each group is a collapsible section; resources
+ * are rendered with the same ResourceRow as the flat list, just
+ * indented one level so they read as children of the group header.
+ *
+ * Collapse state is per-render local to the panel — switching apps
+ * resets it, which is fine since the tree is small (typical app: 5–30
+ * resources across 4–10 Kinds). Persisting collapse per Kind is a
+ * future improvement if users ask for it.
+ */
+function ResourceTree({
+  resources,
+  inCluster,
+  readOnly,
+  syncBusyKey,
+  onOpen,
+  onSync,
+}: {
+  resources: ArgoApplicationResource[];
+  inCluster: boolean;
+  readOnly: boolean;
+  syncBusyKey: string | null;
+  onOpen: (r: ArgoApplicationResource) => void;
+  onSync: (r: ArgoApplicationResource) => void;
+}) {
+  const groups = useMemo(() => groupResourcesByKind(resources), [resources]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+
+  function toggle(kind: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }
+
+  return (
+    <div className="max-h-72 space-y-1 overflow-auto pr-1 font-mono text-[11px]">
+      {groups.map((group) => {
+        const isCollapsed = collapsed.has(group.kind);
+        return (
+          <div key={group.kind}>
+            <button
+              type="button"
+              onClick={() => toggle(group.kind)}
+              className="group/group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-elevated"
+              aria-expanded={!isCollapsed}
+            >
+              {isCollapsed ? (
+                <ChevronRight
+                  className="size-3 text-text-muted"
+                  aria-hidden="true"
+                />
+              ) : (
+                <ChevronDown
+                  className="size-3 text-text-muted"
+                  aria-hidden="true"
+                />
+              )}
+              <span className="text-text-primary">{group.kind}</span>
+              <span className="text-text-muted">· {group.resources.length}</span>
+            </button>
+            {!isCollapsed && (
+              <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-border-subtle pl-2">
+                {group.resources.map((r) => {
+                  const key = resourceKey(r);
+                  const syncBusy = syncBusyKey === key;
+                  return (
+                    <ResourceRow
+                      key={key}
+                      resource={r}
+                      inCluster={inCluster}
+                      readOnly={readOnly}
+                      syncBusy={syncBusy}
+                      onOpen={() => onOpen(r)}
+                      onSync={() => onSync(r)}
+                      hideKind
+                    />
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1298,6 +1494,7 @@ function ResourceRow({
   syncBusy,
   onOpen,
   onSync,
+  hideKind = false,
 }: {
   resource: ArgoApplicationResource;
   inCluster: boolean;
@@ -1305,6 +1502,12 @@ function ResourceRow({
   syncBusy: boolean;
   onOpen: () => void;
   onSync: () => void;
+  /**
+   * In tree-view, the Kind label is redundant — it's already in the
+   * group header. Suppress it on the row so we don't say "Deployment"
+   * twice.
+   */
+  hideKind?: boolean;
 }) {
   const lockedTitle = readOnly ? " (read-only mode)" : "";
   const openLabel = inCluster
@@ -1320,7 +1523,7 @@ function ResourceRow({
       title={openLabel}
     >
       <ResourceDot sync={resource.sync_status} health={resource.health_status} />
-      <span className="text-text-muted">{resource.kind}</span>
+      {!hideKind && <span className="text-text-muted">{resource.kind}</span>}
       <span className="text-text-primary">{resource.name}</span>
       {resource.namespace && (
         <span className="text-text-muted">· {resource.namespace}</span>
