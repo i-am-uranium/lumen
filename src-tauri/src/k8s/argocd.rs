@@ -32,6 +32,10 @@ const ARGO_GROUP: &str = "argoproj.io";
 const ARGO_VERSION: &str = "v1alpha1";
 const APPLICATION_KIND: &str = "Application";
 const APPLICATION_PLURAL: &str = "applications";
+const APPLICATION_SET_KIND: &str = "ApplicationSet";
+const APPLICATION_SET_PLURAL: &str = "applicationsets";
+const APP_PROJECT_KIND: &str = "AppProject";
+const APP_PROJECT_PLURAL: &str = "appprojects";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ApplicationSummary {
@@ -467,6 +471,431 @@ fn bool_at(v: &Value, path: &[&str]) -> Option<bool> {
     cur.as_bool()
 }
 
+// ─── ApplicationSet ───────────────────────────────────────────────────────
+//
+// ApplicationSet is the templated-Application generator that ships with
+// ArgoCD itself (`argoproj.io/v1alpha1` kind `ApplicationSet`). The CRD
+// is part of the standard ArgoCD install, so the existing `detect()` for
+// Application is sufficient as a capability gate for the whole bundle —
+// we still expose `detect_application_sets` for callers who want a
+// targeted probe (e.g. to hide a tab when a custom install stripped the
+// CRD out).
+//
+// Read-only in v1: list, get, and a small "generated apps" rollup. Sync
+// at the AppSet level, parameter editing, and full template diff are
+// clean follow-ups.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApplicationSetSummary {
+    pub name: String,
+    pub namespace: String,
+    /// First key under `.spec.generators[0]` — `list`, `git`, `cluster`,
+    /// `matrix`, `merge`, `pullRequest`, `scmProvider`, `clusterDecisionResource`.
+    /// `None` if the spec is malformed / has no generators.
+    pub generator_kind: Option<String>,
+    /// `.spec.template.metadata.name` — almost always a templated string
+    /// like `{{cluster}}-foo`; exposed as-is so the UI can show it raw.
+    pub template_app_name_pattern: Option<String>,
+    /// Number of Applications this ApplicationSet currently materializes,
+    /// pulled from `.status.applicationStatus[]`. Lower bound when status
+    /// hasn't been written yet.
+    pub generated_count: u32,
+    pub age_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneratedApplicationRef {
+    pub name: String,
+    pub namespace: String,
+    /// Sync / health derived from the matching Application CR if we
+    /// could find one in the cluster; `Unknown` if not.
+    pub sync_status: String,
+    pub health_status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApplicationSetDetail {
+    pub summary: ApplicationSetSummary,
+    /// Pretty-printed YAML of `.spec.generators` (so the UI can render it
+    /// in a code block without re-stringifying). Empty when no generators.
+    pub generators_yaml: String,
+    /// Pretty-printed YAML of `.spec.template`.
+    pub template_yaml: String,
+    pub generated_apps: Vec<GeneratedApplicationRef>,
+}
+
+fn application_set_api_resource() -> ApiResource {
+    let gvk = GroupVersionKind::gvk(ARGO_GROUP, ARGO_VERSION, APPLICATION_SET_KIND);
+    ApiResource::from_gvk_with_plural(&gvk, APPLICATION_SET_PLURAL)
+}
+
+/// Probe for ApplicationSet CRD. Same shape as `detect()` for Application.
+pub async fn detect_application_sets(client: &Client) -> AppResult<bool> {
+    let ar = application_set_api_resource();
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
+    let lp = ListParams::default().limit(1);
+    match api.list(&lp).await {
+        Ok(_) => Ok(true),
+        Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
+        Err(kube::Error::Api(e)) if e.reason == "NotFound" => Ok(false),
+        Err(e) => Err(AppError::K8s(e.to_string())),
+    }
+}
+
+pub async fn list_application_sets(
+    client: &Client,
+    namespace: Option<&str>,
+) -> AppResult<Vec<ApplicationSetSummary>> {
+    let ar = application_set_api_resource();
+    let api: Api<DynamicObject> = match namespace {
+        Some(ns) => Api::namespaced_with(client.clone(), ns, &ar),
+        None => Api::all_with(client.clone(), &ar),
+    };
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let mut out = Vec::with_capacity(list.items.len());
+    for item in list.items {
+        out.push(summarize_application_set(&item));
+    }
+    out.sort_by(|a, b| {
+        a.namespace
+            .cmp(&b.namespace)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(out)
+}
+
+pub async fn get_application_set(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+) -> AppResult<ApplicationSetDetail> {
+    let ar = application_set_api_resource();
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    let obj = api
+        .get(name)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let summary = summarize_application_set(&obj);
+
+    let spec = obj.data.get("spec").cloned().unwrap_or(Value::Null);
+    let generators_yaml = pretty_yaml(spec.get("generators").cloned().unwrap_or(Value::Null));
+    let template_yaml = pretty_yaml(spec.get("template").cloned().unwrap_or(Value::Null));
+
+    // Roll up generated apps by reading `.status.applicationStatus[]`. Each
+    // entry has `.application` (the materialized Application name); we then
+    // try to fetch each one to attach sync/health. Failures are silent — if
+    // the matching Application is missing or RBAC blocks the read, we still
+    // surface the name with Unknown statuses so the user can see the AppSet's
+    // intended footprint.
+    let status = obj.data.get("status").cloned().unwrap_or(Value::Null);
+    let mut generated_apps = Vec::new();
+    if let Some(arr) = status.get("applicationStatus").and_then(|v| v.as_array()) {
+        let app_ar = application_api_resource();
+        for entry in arr {
+            let Some(app_name) = string_at(entry, &["application"]) else {
+                continue;
+            };
+            // ApplicationSet generates Applications in the same namespace
+            // by default. We don't try to chase cross-namespace setups in
+            // v1 — they're rare and require the appsets-in-any-namespace
+            // feature flag.
+            let app_ns = namespace.to_string();
+            let mut sync = "Unknown".to_string();
+            let mut health = "Unknown".to_string();
+            let api_ns: Api<DynamicObject> = Api::namespaced_with(client.clone(), &app_ns, &app_ar);
+            if let Ok(app_obj) = api_ns.get(&app_name).await {
+                let s = summarize(&app_obj);
+                sync = s.sync_status;
+                health = s.health_status;
+            }
+            generated_apps.push(GeneratedApplicationRef {
+                name: app_name,
+                namespace: app_ns,
+                sync_status: sync,
+                health_status: health,
+            });
+        }
+    }
+    generated_apps.sort_by(|a, b| {
+        a.namespace
+            .cmp(&b.namespace)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(ApplicationSetDetail {
+        summary,
+        generators_yaml,
+        template_yaml,
+        generated_apps,
+    })
+}
+
+fn summarize_application_set(obj: &DynamicObject) -> ApplicationSetSummary {
+    let name = obj.metadata.name.clone().unwrap_or_default();
+    let namespace = obj.metadata.namespace.clone().unwrap_or_default();
+    let age_seconds = time::age_seconds(obj.metadata.creation_timestamp.as_ref());
+    let spec = obj.data.get("spec").cloned().unwrap_or(Value::Null);
+    let status = obj.data.get("status").cloned().unwrap_or(Value::Null);
+
+    let generator_kind = spec
+        .get("generators")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_object())
+        .and_then(|obj| obj.keys().next().cloned());
+
+    let template_app_name_pattern = string_at(&spec, &["template", "metadata", "name"]);
+    let generated_count = status
+        .get("applicationStatus")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+
+    ApplicationSetSummary {
+        name,
+        namespace,
+        generator_kind,
+        template_app_name_pattern,
+        generated_count,
+        age_seconds,
+    }
+}
+
+// ─── AppProject ───────────────────────────────────────────────────────────
+//
+// AppProject is the project boundary CRD (`argoproj.io/v1alpha1` kind
+// `AppProject`) — it owns whitelists for source repos, destinations, and
+// per-cluster resource kinds, plus the role / policy block that ArgoCD
+// SSO RBAC keys off. The CRD is namespaced *to the argocd install
+// namespace* (typically `argocd`), but logically cluster-scoped from
+// the user's point of view: each AppProject carves out one slice of
+// the GitOps universe regardless of which namespace its CR lives in.
+//
+// We return them as a flat list — the UI doesn't need to surface their
+// own metadata.namespace because there's almost always one ArgoCD
+// install per cluster. The summary/detail shapes are read-only in v1;
+// CRUD on policies is a clean follow-up.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AppProjectSummary {
+    pub name: String,
+    /// The CR's metadata.namespace (usually `argocd`). Surfaced so the
+    /// UI can show it as a small annotation rather than treating these
+    /// as truly cluster-scoped.
+    pub namespace: String,
+    pub description: String,
+    pub source_repos_count: u32,
+    pub destinations_count: u32,
+    pub cluster_resource_whitelist_count: u32,
+    pub namespace_resource_whitelist_count: u32,
+    pub age_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AppProjectDestination {
+    pub server: String,
+    pub namespace: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AppProjectResourceRule {
+    pub group: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AppProjectRole {
+    pub name: String,
+    pub description: String,
+    /// Raw policy strings exactly as serialized in the CR. Each line
+    /// is one Casbin policy (`p, role:..., applications, ...`); we
+    /// keep them un-parsed so the UI can render the CRD truthfully.
+    pub policies: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AppProjectDetail {
+    pub summary: AppProjectSummary,
+    pub source_repos: Vec<String>,
+    pub destinations: Vec<AppProjectDestination>,
+    pub cluster_resource_whitelist: Vec<AppProjectResourceRule>,
+    pub namespace_resource_whitelist: Vec<AppProjectResourceRule>,
+    pub roles: Vec<AppProjectRole>,
+}
+
+fn app_project_api_resource() -> ApiResource {
+    let gvk = GroupVersionKind::gvk(ARGO_GROUP, ARGO_VERSION, APP_PROJECT_KIND);
+    ApiResource::from_gvk_with_plural(&gvk, APP_PROJECT_PLURAL)
+}
+
+/// List all AppProjects across the cluster. We always go cluster-wide
+/// because users typically have a single argocd namespace and seeing
+/// the slice across it is what matters; if multi-tenant argocd installs
+/// become a thing we'll add namespace scoping then.
+pub async fn list_app_projects(client: &Client) -> AppResult<Vec<AppProjectSummary>> {
+    let ar = app_project_api_resource();
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let mut out = Vec::with_capacity(list.items.len());
+    for item in list.items {
+        out.push(summarize_app_project(&item));
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+pub async fn get_app_project(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+) -> AppResult<AppProjectDetail> {
+    let ar = app_project_api_resource();
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    let obj = api
+        .get(name)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    Ok(detail_app_project(&obj))
+}
+
+fn summarize_app_project(obj: &DynamicObject) -> AppProjectSummary {
+    let name = obj.metadata.name.clone().unwrap_or_default();
+    let namespace = obj.metadata.namespace.clone().unwrap_or_default();
+    let age_seconds = time::age_seconds(obj.metadata.creation_timestamp.as_ref());
+    let spec = obj.data.get("spec").cloned().unwrap_or(Value::Null);
+
+    let description = string_at(&spec, &["description"]).unwrap_or_default();
+    let source_repos_count = spec
+        .get("sourceRepos")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+    let destinations_count = spec
+        .get("destinations")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+    let cluster_resource_whitelist_count = spec
+        .get("clusterResourceWhitelist")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+    let namespace_resource_whitelist_count = spec
+        .get("namespaceResourceWhitelist")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+
+    AppProjectSummary {
+        name,
+        namespace,
+        description,
+        source_repos_count,
+        destinations_count,
+        cluster_resource_whitelist_count,
+        namespace_resource_whitelist_count,
+        age_seconds,
+    }
+}
+
+fn detail_app_project(obj: &DynamicObject) -> AppProjectDetail {
+    let summary = summarize_app_project(obj);
+    let spec = obj.data.get("spec").cloned().unwrap_or(Value::Null);
+
+    let source_repos = spec
+        .get("sourceRepos")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+
+    let destinations = spec
+        .get("destinations")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|d| AppProjectDestination {
+            server: string_at(d, &["server"]).unwrap_or_default(),
+            namespace: string_at(d, &["namespace"]).unwrap_or_default(),
+        })
+        .collect();
+
+    let cluster_resource_whitelist = spec
+        .get("clusterResourceWhitelist")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|d| AppProjectResourceRule {
+            group: string_at(d, &["group"]).unwrap_or_default(),
+            kind: string_at(d, &["kind"]).unwrap_or_default(),
+        })
+        .collect();
+
+    let namespace_resource_whitelist = spec
+        .get("namespaceResourceWhitelist")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|d| AppProjectResourceRule {
+            group: string_at(d, &["group"]).unwrap_or_default(),
+            kind: string_at(d, &["kind"]).unwrap_or_default(),
+        })
+        .collect();
+
+    let roles = spec
+        .get("roles")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| AppProjectRole {
+            name: string_at(r, &["name"]).unwrap_or_default(),
+            description: string_at(r, &["description"]).unwrap_or_default(),
+            policies: r
+                .get("policies")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect(),
+        })
+        .collect();
+
+    AppProjectDetail {
+        summary,
+        source_repos,
+        destinations,
+        cluster_resource_whitelist,
+        namespace_resource_whitelist,
+        roles,
+    }
+}
+
+/// Best-effort YAML pretty-print used for the ApplicationSet detail
+/// payload. We don't pull in a YAML crate just for this — `serde_json`
+/// already gives us pretty JSON, and the consuming UI renders it in a
+/// monospaced code block where the difference between JSON-as-text and
+/// real YAML is mostly cosmetic. If a follow-up needs richer output,
+/// swap to `serde_yaml`.
+fn pretty_yaml(v: Value) -> String {
+    if v.is_null() {
+        return String::new();
+    }
+    serde_json::to_string_pretty(&v).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,5 +1109,163 @@ mod tests {
         };
         let body = build_sync_operation(&opts);
         assert!(body["operation"]["sync"].get("revision").is_none());
+    }
+
+    fn dyn_appset(json: Value) -> DynamicObject {
+        let mut o = DynamicObject::new(
+            "x",
+            &ApiResource::from_gvk_with_plural(
+                &GroupVersionKind::gvk(ARGO_GROUP, ARGO_VERSION, APPLICATION_SET_KIND),
+                APPLICATION_SET_PLURAL,
+            ),
+        );
+        if let Some(meta) = json.get("metadata") {
+            if let Some(name) = meta.get("name").and_then(|v| v.as_str()) {
+                o.metadata.name = Some(name.into());
+            }
+            if let Some(ns) = meta.get("namespace").and_then(|v| v.as_str()) {
+                o.metadata.namespace = Some(ns.into());
+            }
+        }
+        let data: serde_json::Map<String, Value> = json
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(k, _)| k != "metadata")
+            .collect();
+        o.data = Value::Object(data);
+        o.types = Some(TypeMeta {
+            api_version: format!("{ARGO_GROUP}/{ARGO_VERSION}"),
+            kind: APPLICATION_SET_KIND.into(),
+        });
+        o
+    }
+
+    fn dyn_proj(json: Value) -> DynamicObject {
+        let mut o = DynamicObject::new(
+            "x",
+            &ApiResource::from_gvk_with_plural(
+                &GroupVersionKind::gvk(ARGO_GROUP, ARGO_VERSION, APP_PROJECT_KIND),
+                APP_PROJECT_PLURAL,
+            ),
+        );
+        if let Some(meta) = json.get("metadata") {
+            if let Some(name) = meta.get("name").and_then(|v| v.as_str()) {
+                o.metadata.name = Some(name.into());
+            }
+            if let Some(ns) = meta.get("namespace").and_then(|v| v.as_str()) {
+                o.metadata.namespace = Some(ns.into());
+            }
+        }
+        let data: serde_json::Map<String, Value> = json
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(k, _)| k != "metadata")
+            .collect();
+        o.data = Value::Object(data);
+        o.types = Some(TypeMeta {
+            api_version: format!("{ARGO_GROUP}/{ARGO_VERSION}"),
+            kind: APP_PROJECT_KIND.into(),
+        });
+        o
+    }
+
+    #[test]
+    fn summarize_application_set_pulls_generator_kind_and_template_pattern() {
+        let obj = dyn_appset(json!({
+            "metadata": { "name": "fleet", "namespace": "argocd" },
+            "spec": {
+                "generators": [
+                    { "git": { "repoURL": "https://example.com/g" } }
+                ],
+                "template": { "metadata": { "name": "{{cluster}}-fleet" } }
+            },
+            "status": {
+                "applicationStatus": [
+                    { "application": "a" },
+                    { "application": "b" }
+                ]
+            }
+        }));
+        let s = summarize_application_set(&obj);
+        assert_eq!(s.name, "fleet");
+        assert_eq!(s.generator_kind.as_deref(), Some("git"));
+        assert_eq!(
+            s.template_app_name_pattern.as_deref(),
+            Some("{{cluster}}-fleet")
+        );
+        assert_eq!(s.generated_count, 2);
+    }
+
+    #[test]
+    fn summarize_application_set_handles_missing_generators_block() {
+        let obj = dyn_appset(json!({
+            "metadata": { "name": "no-spec", "namespace": "argocd" }
+        }));
+        let s = summarize_application_set(&obj);
+        assert!(s.generator_kind.is_none());
+        assert!(s.template_app_name_pattern.is_none());
+        assert_eq!(s.generated_count, 0);
+    }
+
+    #[test]
+    fn summarize_app_project_counts_each_section() {
+        let obj = dyn_proj(json!({
+            "metadata": { "name": "team-a", "namespace": "argocd" },
+            "spec": {
+                "description": "Team A",
+                "sourceRepos": ["https://example.com/a", "https://example.com/b"],
+                "destinations": [
+                    { "server": "https://kubernetes.default.svc", "namespace": "team-a-prod" }
+                ],
+                "clusterResourceWhitelist": [
+                    { "group": "*", "kind": "Namespace" }
+                ],
+                "namespaceResourceWhitelist": [
+                    { "group": "apps", "kind": "Deployment" },
+                    { "group": "", "kind": "Service" }
+                ]
+            }
+        }));
+        let s = summarize_app_project(&obj);
+        assert_eq!(s.description, "Team A");
+        assert_eq!(s.source_repos_count, 2);
+        assert_eq!(s.destinations_count, 1);
+        assert_eq!(s.cluster_resource_whitelist_count, 1);
+        assert_eq!(s.namespace_resource_whitelist_count, 2);
+    }
+
+    #[test]
+    fn detail_app_project_unpacks_destinations_and_roles() {
+        let obj = dyn_proj(json!({
+            "metadata": { "name": "team-a", "namespace": "argocd" },
+            "spec": {
+                "description": "Team A",
+                "sourceRepos": ["https://example.com/a"],
+                "destinations": [
+                    { "server": "https://kubernetes.default.svc", "namespace": "team-a-prod" },
+                    { "server": "https://other.cluster", "namespace": "team-a-dev" }
+                ],
+                "roles": [
+                    {
+                        "name": "deployer",
+                        "description": "deploy-only",
+                        "policies": [
+                            "p, proj:team-a:deployer, applications, sync, team-a/*, allow"
+                        ]
+                    }
+                ]
+            }
+        }));
+        let d = detail_app_project(&obj);
+        assert_eq!(d.source_repos, vec!["https://example.com/a".to_string()]);
+        assert_eq!(d.destinations.len(), 2);
+        assert_eq!(d.destinations[0].namespace, "team-a-prod");
+        assert_eq!(d.roles.len(), 1);
+        assert_eq!(d.roles[0].name, "deployer");
+        assert_eq!(d.roles[0].policies.len(), 1);
     }
 }

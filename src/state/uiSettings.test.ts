@@ -26,6 +26,7 @@ beforeEach(() => {
     shortcuts: {},
     argocdResourceView: "tree",
     argocdDetailPanelWidth: ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
+    argocdTreeCollapsed: [],
   });
 });
 
@@ -257,5 +258,41 @@ describe("applyColumnLayout", () => {
     expect(
       applyColumnLayout(cols, ["ghost", "age", "ns"], []).map((c) => c.key),
     ).toEqual(["name", "age", "ns", "kind", "ready"]);
+  });
+});
+
+describe("argocd resource view + tree collapse (PR #48)", () => {
+  it("argocdResourceView accepts the new 'topology' value", () => {
+    useUiSettings.getState().setArgocdResourceView("topology");
+    expect(useUiSettings.getState().argocdResourceView).toBe("topology");
+    const persisted = JSON.parse(
+      window.localStorage.getItem(UI_SETTINGS_STORAGE_KEY) ?? "{}",
+    );
+    expect(persisted.argocdResourceView).toBe("topology");
+  });
+
+  it("argocdTreeCollapsed defaults empty and toggles by kind", () => {
+    expect(useUiSettings.getState().argocdTreeCollapsed).toEqual([]);
+    useUiSettings.getState().toggleArgocdTreeKind("ConfigMap");
+    expect(useUiSettings.getState().argocdTreeCollapsed).toEqual(["ConfigMap"]);
+    useUiSettings.getState().toggleArgocdTreeKind("Secret");
+    expect(useUiSettings.getState().argocdTreeCollapsed).toEqual([
+      "ConfigMap",
+      "Secret",
+    ]);
+    // Toggling again removes that kind only.
+    useUiSettings.getState().toggleArgocdTreeKind("ConfigMap");
+    expect(useUiSettings.getState().argocdTreeCollapsed).toEqual(["Secret"]);
+    const persisted = JSON.parse(
+      window.localStorage.getItem(UI_SETTINGS_STORAGE_KEY) ?? "{}",
+    );
+    expect(persisted.argocdTreeCollapsed).toEqual(["Secret"]);
+  });
+
+  it("resetArgocdTreeCollapsed clears the collapsed set", () => {
+    useUiSettings.getState().toggleArgocdTreeKind("ConfigMap");
+    useUiSettings.getState().toggleArgocdTreeKind("Secret");
+    useUiSettings.getState().resetArgocdTreeCollapsed();
+    expect(useUiSettings.getState().argocdTreeCollapsed).toEqual([]);
   });
 });
