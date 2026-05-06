@@ -3,12 +3,22 @@ import { Channel } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CheckCircle2, AlertCircle, Terminal } from "lucide-react";
 import { toast } from "sonner";
-import { k8s, type HelmEvent } from "@/lib/k8s";
+import {
+  k8s,
+  type HelmEvent,
+  type HelmInstallRequest,
+  type HelmUpgradeRequest,
+} from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 
-type Action =
+export type HelmDialogAction =
   | { kind: "rollback"; release: string; namespace: string; revision: number; wait: boolean }
-  | { kind: "uninstall"; release: string; namespace: string; keepHistory: boolean };
+  | { kind: "uninstall"; release: string; namespace: string; keepHistory: boolean }
+  | { kind: "install"; request: HelmInstallRequest }
+  | { kind: "upgrade"; request: HelmUpgradeRequest };
+
+// Backwards-compatible alias used by HelmBrowser.
+type Action = HelmDialogAction;
 
 // Streams `helm rollback` / `helm uninstall` output to a scrollable log pane,
 // invalidates the release list on completion so the UI reflects the new
@@ -19,10 +29,13 @@ export function HelmActionDialog({
   action,
   context,
   onClose,
+  onSuccess,
 }: {
   action: Action;
   context: string;
   onClose: () => void;
+  /** Optional callback fired after a successful exit (code === 0). */
+  onSuccess?: () => void;
 }) {
   const qc = useQueryClient();
   const [running, setRunning] = useState(true);
@@ -47,9 +60,10 @@ export function HelmActionDialog({
         setExitCode(ev.code);
         if (ev.code === 0) {
           toast.success(`helm ${action.kind} succeeded`);
-          qc.invalidateQueries({ queryKey: ["k8s", "helm-releases"] });
+          qc.invalidateQueries({ queryKey: ["k8s", "helm"] });
           qc.invalidateQueries({ queryKey: ["k8s", "helm-detail"] });
           qc.invalidateQueries({ queryKey: ["k8s", "helm-history"] });
+          onSuccess?.();
         } else {
           toast.error(`helm ${action.kind} failed (exit ${ev.code})`);
         }
@@ -58,29 +72,40 @@ export function HelmActionDialog({
       }
     };
 
-    const promise =
-      action.kind === "rollback"
-        ? k8s.helmRollback(
-            {
-              release: action.release,
-              namespace: action.namespace,
-              revision: action.revision,
-              wait: action.wait,
-            },
-            streamId,
-            ch,
-            context || undefined,
-          )
-        : k8s.helmUninstall(
-            {
-              release: action.release,
-              namespace: action.namespace,
-              keep_history: action.keepHistory,
-            },
-            streamId,
-            ch,
-            context || undefined,
-          );
+    let promise: Promise<unknown>;
+    switch (action.kind) {
+      case "rollback":
+        promise = k8s.helmRollback(
+          {
+            release: action.release,
+            namespace: action.namespace,
+            revision: action.revision,
+            wait: action.wait,
+          },
+          streamId,
+          ch,
+          context || undefined,
+        );
+        break;
+      case "uninstall":
+        promise = k8s.helmUninstall(
+          {
+            release: action.release,
+            namespace: action.namespace,
+            keep_history: action.keepHistory,
+          },
+          streamId,
+          ch,
+          context || undefined,
+        );
+        break;
+      case "install":
+        promise = k8s.helmInstall(action.request, streamId, ch, context || undefined);
+        break;
+      case "upgrade":
+        promise = k8s.helmUpgrade(action.request, streamId, ch, context || undefined);
+        break;
+    }
 
     promise.catch((e: unknown) => {
       setRunning(false);
@@ -90,6 +115,9 @@ export function HelmActionDialog({
         { stream: "err", line: `lumen: ${(e as Error).message ?? e}` },
       ]);
     });
+    // onSuccess is intentionally not in deps — captured at mount time on
+    // purpose; the dialog is keyed by action so a re-render means a new run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [action, context, qc]);
 
   // Auto-scroll the log pane as new lines arrive.
@@ -102,7 +130,11 @@ export function HelmActionDialog({
   const title =
     action.kind === "rollback"
       ? `rollback ${action.release} → revision ${action.revision}`
-      : `uninstall ${action.release}`;
+      : action.kind === "uninstall"
+        ? `uninstall ${action.release}`
+        : action.kind === "install"
+          ? `install ${action.request.release}`
+          : `upgrade ${action.request.release}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">

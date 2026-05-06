@@ -295,6 +295,19 @@ export function CommandPalette() {
                       close();
                     }}
                   />
+                  <NavItem
+                    value="new: helm release"
+                    icon={Boxes}
+                    onSelect={() => {
+                      const ctxName =
+                        useClusterStore.getState().contextName;
+                      if (!ctxName) return;
+                      navigate(
+                        `/cluster/${encodeURIComponent(ctxName)}/helm/install`,
+                      );
+                      close();
+                    }}
+                  />
                 </>
               )}
               <NavItem value="theme: light" icon={Sun} onSelect={() => pickTheme("light")} />

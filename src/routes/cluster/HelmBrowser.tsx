@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -9,12 +9,15 @@ import {
   Clock,
   ExternalLink,
   History,
+  Lock,
   Package,
+  Plus,
   RefreshCw,
   Search,
   Tag,
   Trash2,
   Undo2,
+  Upload,
 } from "lucide-react";
 import {
   k8s,
@@ -24,6 +27,7 @@ import {
 import { cn } from "@/lib/utils";
 import { HelmActionDialog } from "@/components/HelmActionDialog";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { useUiSettings } from "@/state/uiSettings";
 
 type HelmAction =
   | { kind: "rollback"; release: string; namespace: string; revision: number; wait: boolean }
@@ -73,7 +77,9 @@ function formatTs(s: string | null): string {
 
 export function HelmBrowser() {
   const { ctx = "" } = useParams();
+  const navigate = useNavigate();
   const context = decodeURIComponent(ctx);
+  const readOnly = useUiSettings((s) => s.readOnly);
   const releases = useQuery({
     queryKey: ["k8s", "helm", context],
     queryFn: () => k8s.listHelmReleases(context || undefined),
@@ -82,6 +88,11 @@ export function HelmBrowser() {
 
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<HelmReleaseSummary | null>(null);
+
+  const goInstall = () => {
+    if (readOnly) return;
+    navigate(`/cluster/${encodeURIComponent(context)}/helm/install`);
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -105,15 +116,31 @@ export function HelmBrowser() {
               {releases.data?.length ?? 0}
             </span>
           </h2>
-          <button
-            onClick={() => releases.refetch()}
-            disabled={releases.isFetching}
-            className="text-term-muted hover:text-term-fg"
-          >
-            <RefreshCw
-              className={cn("size-3.5", releases.isFetching && "animate-spin")}
-            />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={goInstall}
+              disabled={readOnly}
+              title={
+                readOnly
+                  ? "install disabled — read-only mode is on"
+                  : "install a chart"
+              }
+              className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {readOnly ? <Lock className="size-3" /> : <Plus className="size-3" />}
+              install
+            </button>
+            <button
+              onClick={() => releases.refetch()}
+              disabled={releases.isFetching}
+              className="text-term-muted hover:text-term-fg p-1"
+              title="refresh"
+            >
+              <RefreshCw
+                className={cn("size-3.5", releases.isFetching && "animate-spin")}
+              />
+            </button>
+          </div>
         </div>
         <div className="p-2 border-b border-term-border-soft">
           <div className="flex items-center gap-2 h-8 px-2 rounded-md bg-term-bg border border-term-border-soft">
@@ -193,6 +220,7 @@ export function HelmBrowser() {
             context={context}
             key={`${selected.namespace}/${selected.name}`}
             summary={selected}
+            readOnly={readOnly}
           />
         )}
       </main>
@@ -203,10 +231,13 @@ export function HelmBrowser() {
 function ReleaseDetail({
   context,
   summary,
+  readOnly,
 }: {
   context: string;
   summary: HelmReleaseSummary;
+  readOnly: boolean;
 }) {
+  const navigate = useNavigate();
   const [revision, setRevision] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>("values");
   const [action, setAction] = useState<HelmAction | null>(null);
@@ -272,7 +303,26 @@ function ReleaseDetail({
         </div>
         <div className="mt-2 flex items-center gap-1.5">
           <button
+            onClick={() => {
+              if (readOnly) return;
+              navigate(
+                `/cluster/${encodeURIComponent(context)}/helm/upgrade/${encodeURIComponent(summary.name)}?ns=${encodeURIComponent(summary.namespace)}`,
+              );
+            }}
+            disabled={readOnly}
+            className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+            title={
+              readOnly
+                ? "upgrade disabled — read-only mode is on"
+                : "helm upgrade this release"
+            }
+          >
+            {readOnly ? <Lock className="size-3" /> : <Upload className="size-3" />}
+            upgrade
+          </button>
+          <button
             onClick={() =>
+              !readOnly &&
               setConfirmAction({
                 kind: "uninstall",
                 release: summary.name,
@@ -280,10 +330,16 @@ function ReleaseDetail({
                 keepHistory: false,
               })
             }
-            className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-red !border-term-red/40"
-            title="helm uninstall this release"
+            disabled={readOnly}
+            className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-red !border-term-red/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={
+              readOnly
+                ? "uninstall disabled — read-only mode is on"
+                : "helm uninstall this release"
+            }
           >
-            <Trash2 className="size-3" /> uninstall
+            {readOnly ? <Lock className="size-3" /> : <Trash2 className="size-3" />}
+            uninstall
           </button>
         </div>
         {d?.chart_description && (
@@ -342,6 +398,7 @@ function ReleaseDetail({
             namespace={summary.namespace}
             name={summary.name}
             current={d.summary.revision}
+            readOnly={readOnly}
             onPick={(r) => setRevision(r)}
             onRollback={(r) =>
               setConfirmAction({
@@ -405,6 +462,7 @@ function HistoryPane({
   namespace,
   name,
   current,
+  readOnly,
   onPick,
   onRollback,
 }: {
@@ -412,6 +470,7 @@ function HistoryPane({
   namespace: string;
   name: string;
   current: number;
+  readOnly: boolean;
   onPick: (r: number) => void;
   onRollback: (r: number) => void;
 }) {
@@ -460,11 +519,17 @@ function HistoryPane({
               </button>
               {r.revision !== current && (
                 <button
-                  onClick={() => onRollback(r.revision)}
-                  className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-amber !border-term-amber/40"
-                  title={`helm rollback ${name} ${r.revision}`}
+                  onClick={() => !readOnly && onRollback(r.revision)}
+                  disabled={readOnly}
+                  className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-amber !border-term-amber/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={
+                    readOnly
+                      ? "rollback disabled — read-only mode is on"
+                      : `helm rollback ${name} ${r.revision}`
+                  }
                 >
-                  <Undo2 className="size-3" /> rollback
+                  {readOnly ? <Lock className="size-3" /> : <Undo2 className="size-3" />}
+                  rollback
                 </button>
               )}
             </li>
