@@ -670,6 +670,10 @@ export type TektonPipelineRunDetail = {
   /** [name, value] pairs from `.spec.params`. Array / object values are JSON-encoded. */
   params: [string, string][];
   workspaces: string[];
+  /** True when the v1 per-TaskRun fan-out hit the backend cap and `tasks`
+   *  is the first N (currently 50) of a larger child set. The detail
+   *  panel surfaces this so users know they're not seeing every task. */
+  tasks_truncated: boolean;
 };
 
 // ─── API ──────────────────────────────────────────────────────────────────

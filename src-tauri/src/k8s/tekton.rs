@@ -26,6 +26,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::k8s::time;
+use futures::future::join_all;
 use kube::api::{Api, ListParams, Patch, PatchParams};
 use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
 use kube::Client;
@@ -37,6 +38,12 @@ const TEKTON_VERSION_V1: &str = "v1";
 const TEKTON_VERSION_V1BETA1: &str = "v1beta1";
 const PIPELINE_RUN_KIND: &str = "PipelineRun";
 const PIPELINE_RUN_PLURAL: &str = "pipelineruns";
+const TASK_RUN_KIND: &str = "TaskRun";
+const TASK_RUN_PLURAL: &str = "taskruns";
+/// Cap on per-detail TaskRun fetches. v1 PipelineRuns can in theory
+/// chain hundreds of children; we'd rather show the first 50 with a
+/// truncation flag than block the detail panel on a runaway fan-out.
+const MAX_TASKRUN_FETCHES: usize = 50;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineRunSummary {
@@ -95,11 +102,21 @@ pub struct PipelineRunDetail {
     /// (PVC, configmap, etc.) are not surfaced in v1 to keep the panel
     /// scannable.
     pub workspaces: Vec<String>,
+    /// True when the v1 fan-out exceeded `MAX_TASKRUN_FETCHES` and the
+    /// `tasks` list is the first N of the actual child set. The UI
+    /// surfaces this so users know they're not seeing every task.
+    /// Always false on the v1beta1 path (status is already embedded).
+    pub tasks_truncated: bool,
 }
 
 fn pipeline_run_api_resource(version: &str) -> ApiResource {
     let gvk = GroupVersionKind::gvk(TEKTON_GROUP, version, PIPELINE_RUN_KIND);
     ApiResource::from_gvk_with_plural(&gvk, PIPELINE_RUN_PLURAL)
+}
+
+fn task_run_api_resource(version: &str) -> ApiResource {
+    let gvk = GroupVersionKind::gvk(TEKTON_GROUP, version, TASK_RUN_KIND);
+    ApiResource::from_gvk_with_plural(&gvk, TASK_RUN_PLURAL)
 }
 
 /// Returns true when the cluster registers Tekton's PipelineRun CRD.
@@ -179,7 +196,120 @@ pub async fn get_pipeline_run(
         .get(name)
         .await
         .map_err(|e| AppError::K8s(e.to_string()))?;
-    Ok(detail(&obj))
+
+    // Build the static parts of the detail (summary, conditions,
+    // params, workspaces, plus the v1beta1 task list when present).
+    let mut d = detail(&obj);
+
+    // v1 path: `.status.taskRuns` is absent, but `.status.childReferences`
+    // lists per-task refs without embedded status. The base `detail()`
+    // surfaces those refs as a directory with status "Unknown"; here we
+    // upgrade it by fetching each TaskRun in parallel and re-deriving
+    // status from its own conditions. v1beta1 already has the status
+    // embedded — we leave it alone.
+    let status = obj.data.get("status").cloned().unwrap_or(Value::Null);
+    let has_legacy_taskruns_map = status.get("taskRuns").and_then(|v| v.as_object()).is_some();
+    if !has_legacy_taskruns_map {
+        if let Some(refs) = status.get("childReferences").and_then(|v| v.as_array()) {
+            // Pick the version off the parent's apiVersion when possible
+            // so we fetch v1 children for v1 parents and v1beta1 for
+            // v1beta1 parents. Falls back to the resolved cluster
+            // version (effectively the same in practice — Tekton wraps
+            // a single served version per install).
+            let child_version = obj
+                .types
+                .as_ref()
+                .and_then(|t| t.api_version.split('/').nth(1))
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| version.to_string());
+            let (tasks, truncated) =
+                fetch_v1_task_runs(client, namespace, &child_version, refs).await;
+            d.tasks = tasks;
+            d.tasks_truncated = truncated;
+        }
+    }
+
+    Ok(d)
+}
+
+/// Fan out a TaskRun GET per child reference, in parallel, capped at
+/// `MAX_TASKRUN_FETCHES`. Errors on individual refs are logged and
+/// surfaced as an "Unknown"-status entry with the error in `message`
+/// rather than failing the whole detail call — one missing TaskRun
+/// shouldn't blank the panel.
+async fn fetch_v1_task_runs(
+    client: &Client,
+    namespace: &str,
+    version: &str,
+    refs: &[Value],
+) -> (Vec<TaskRunStatus>, bool) {
+    // Filter to TaskRun kind only — Run / CustomRun children would need
+    // their own GVK-aware decoding which is outside v1 scope.
+    let task_refs: Vec<&Value> = refs
+        .iter()
+        .filter(|c| {
+            let kind = c.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            kind == TASK_RUN_KIND
+        })
+        .collect();
+
+    let truncated = task_refs.len() > MAX_TASKRUN_FETCHES;
+    let take = task_refs.len().min(MAX_TASKRUN_FETCHES);
+    if truncated {
+        tracing::warn!(
+            namespace = namespace,
+            total = task_refs.len(),
+            cap = MAX_TASKRUN_FETCHES,
+            "PipelineRun has more child TaskRuns than the per-detail fetch cap; truncating",
+        );
+    }
+
+    let ar = task_run_api_resource(version);
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+
+    let futs = task_refs.iter().take(take).map(|c| {
+        let api = api.clone();
+        let name = string_at(c, &["name"]).unwrap_or_default();
+        let display_name = string_at(c, &["pipelineTaskName"]);
+        async move {
+            if name.is_empty() {
+                return TaskRunStatus {
+                    name,
+                    display_name,
+                    status: "Unknown".into(),
+                    started_at: None,
+                    completion_time: None,
+                    duration_seconds: None,
+                    message: Some("childReference missing .name".into()),
+                };
+            }
+            match api.get(&name).await {
+                Ok(obj) => derive_task_status(&obj, display_name.clone()),
+                Err(e) => {
+                    tracing::warn!(
+                        namespace = namespace,
+                        taskrun = %name,
+                        error = %e,
+                        "failed to fetch TaskRun for PipelineRun detail",
+                    );
+                    TaskRunStatus {
+                        name,
+                        display_name,
+                        status: "Unknown".into(),
+                        started_at: None,
+                        completion_time: None,
+                        duration_seconds: None,
+                        message: Some(format!("failed to fetch TaskRun: {e}")),
+                    }
+                }
+            }
+        }
+    });
+
+    let mut tasks: Vec<TaskRunStatus> = join_all(futs).await;
+    // Same execution-order sort as the v1beta1 path.
+    tasks.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+    (tasks, truncated)
 }
 
 /// Cancel a PipelineRun. Modern Tekton honors `.spec.status =
@@ -269,6 +399,7 @@ fn detail(obj: &DynamicObject) -> PipelineRunDetail {
         tasks,
         params,
         workspaces,
+        tasks_truncated: false,
     }
 }
 
@@ -372,6 +503,41 @@ fn extract_tasks(status: &Value) -> Vec<TaskRunStatus> {
             .collect();
     }
     Vec::new()
+}
+
+/// Build a `TaskRunStatus` from a fetched TaskRun object (v1 path).
+///
+/// `display_name` is passed in because it lives on the parent
+/// PipelineRun's `.status.childReferences[].pipelineTaskName`, not on
+/// the TaskRun itself. Tekton also writes it to the TaskRun's
+/// `metadata.labels["tekton.dev/pipelineTask"]` — we accept the ref
+/// value but fall back to that label when the caller didn't supply it.
+pub fn derive_task_status(obj: &DynamicObject, display_name: Option<String>) -> TaskRunStatus {
+    let name = obj.metadata.name.clone().unwrap_or_default();
+    let display_name = display_name.or_else(|| {
+        obj.metadata
+            .labels
+            .as_ref()
+            .and_then(|l| l.get("tekton.dev/pipelineTask").cloned())
+    });
+    let status = obj.data.get("status").cloned().unwrap_or(Value::Null);
+    let conditions = conditions_array(&status);
+    let started_at = string_at(&status, &["startTime"]);
+    let completion_time = string_at(&status, &["completionTime"]);
+    let derived = derive_run_status(&conditions, started_at.is_some());
+    let message = conditions
+        .iter()
+        .find(|c| c.get("type").and_then(|v| v.as_str()) == Some("Succeeded"))
+        .and_then(|c| c.get("message").and_then(|v| v.as_str()).map(String::from));
+    TaskRunStatus {
+        name,
+        display_name,
+        status: derived,
+        duration_seconds: duration_between(started_at.as_deref(), completion_time.as_deref()),
+        started_at,
+        completion_time,
+        message,
+    }
 }
 
 fn task_from_taskruns_entry(name: &str, entry: &Value) -> TaskRunStatus {
@@ -643,6 +809,8 @@ mod tests {
         // Top-level conditions surface in detail.conditions.
         assert_eq!(d.conditions.len(), 1);
         assert_eq!(d.conditions[0].type_, "Succeeded");
+        // v1beta1 always has full per-task status embedded — never truncated.
+        assert!(!d.tasks_truncated);
     }
 
     #[test]
@@ -669,6 +837,119 @@ mod tests {
             .tasks
             .iter()
             .any(|t| t.display_name.as_deref() == Some("fetch")));
+    }
+
+    fn taskrun_obj(name: &str, label: Option<&str>, status: Value) -> DynamicObject {
+        let ar = task_run_api_resource(TEKTON_VERSION_V1);
+        let mut o = DynamicObject::new(name, &ar);
+        o.metadata.name = Some(name.into());
+        o.metadata.namespace = Some("ci".into());
+        if let Some(lbl) = label {
+            let mut labels = std::collections::BTreeMap::new();
+            labels.insert("tekton.dev/pipelineTask".to_string(), lbl.to_string());
+            o.metadata.labels = Some(labels);
+        }
+        o.data = json!({ "status": status });
+        o.types = Some(TypeMeta {
+            api_version: format!("{TEKTON_GROUP}/{TEKTON_VERSION_V1}"),
+            kind: TASK_RUN_KIND.into(),
+        });
+        o
+    }
+
+    #[test]
+    fn derive_task_status_succeeded() {
+        let obj = taskrun_obj(
+            "tr-fetch",
+            Some("fetch"),
+            json!({
+                "startTime": "2026-05-04T10:00:00Z",
+                "completionTime": "2026-05-04T10:00:30Z",
+                "conditions": [
+                    { "type": "Succeeded", "status": "True" }
+                ]
+            }),
+        );
+        let t = derive_task_status(&obj, Some("fetch".into()));
+        assert_eq!(t.name, "tr-fetch");
+        assert_eq!(t.display_name.as_deref(), Some("fetch"));
+        assert_eq!(t.status, "Succeeded");
+        assert_eq!(t.duration_seconds, Some(30));
+        assert!(t.message.is_none());
+    }
+
+    #[test]
+    fn derive_task_status_failed_carries_message() {
+        let obj = taskrun_obj(
+            "tr-build",
+            Some("build"),
+            json!({
+                "startTime": "2026-05-04T10:01:00Z",
+                "completionTime": "2026-05-04T10:02:00Z",
+                "conditions": [
+                    { "type": "Succeeded", "status": "False", "reason": "Failed", "message": "step exited 1" }
+                ]
+            }),
+        );
+        let t = derive_task_status(&obj, None);
+        assert_eq!(t.status, "Failed");
+        // display_name falls back to the metadata label when the caller
+        // didn't pass one.
+        assert_eq!(t.display_name.as_deref(), Some("build"));
+        assert_eq!(t.message.as_deref(), Some("step exited 1"));
+        assert_eq!(t.duration_seconds, Some(60));
+    }
+
+    #[test]
+    fn derive_task_status_running_when_started_unknown() {
+        let obj = taskrun_obj(
+            "tr-deploy",
+            Some("deploy"),
+            json!({
+                "startTime": "2026-05-04T10:03:00Z",
+                "conditions": [
+                    { "type": "Succeeded", "status": "Unknown", "reason": "Running" }
+                ]
+            }),
+        );
+        let t = derive_task_status(&obj, None);
+        assert_eq!(t.status, "Running");
+        // No completion time → no duration.
+        assert_eq!(t.duration_seconds, None);
+    }
+
+    #[test]
+    fn derive_task_status_cancelled_when_reason_says_so() {
+        let obj = taskrun_obj(
+            "tr-test",
+            Some("test"),
+            json!({
+                "startTime": "2026-05-04T10:04:00Z",
+                "completionTime": "2026-05-04T10:04:10Z",
+                "conditions": [
+                    { "type": "Succeeded", "status": "False", "reason": "TaskRunCancelled" }
+                ]
+            }),
+        );
+        let t = derive_task_status(&obj, Some("test".into()));
+        assert_eq!(t.status, "Cancelled");
+    }
+
+    #[test]
+    fn derive_task_status_pending_when_no_start() {
+        let obj = taskrun_obj(
+            "tr-wait",
+            None,
+            json!({
+                "conditions": [
+                    { "type": "Succeeded", "status": "Unknown" }
+                ]
+            }),
+        );
+        let t = derive_task_status(&obj, Some("wait".into()));
+        assert_eq!(t.status, "Pending");
+        // Caller-provided display_name wins even when the label is absent.
+        assert_eq!(t.display_name.as_deref(), Some("wait"));
     }
 
     #[test]
