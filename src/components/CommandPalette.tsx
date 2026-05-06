@@ -36,6 +36,7 @@ import {
   Sun,
   Terminal,
   UserPlus,
+  Workflow,
 } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
@@ -267,6 +268,7 @@ export function CommandPalette() {
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />
+                  <NavItem value="go: tekton pipelines" icon={Workflow} onSelect={() => pickTab("tekton")} />
                   <NavItem
                     value="new: NetworkPolicy"
                     icon={Network}

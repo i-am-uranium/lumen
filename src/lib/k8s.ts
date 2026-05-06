@@ -617,6 +617,61 @@ export type ArgoSyncOptions = {
   resources?: ArgoResourceRef[];
 };
 
+// ─── Tekton ───────────────────────────────────────────────────────────────
+//
+// Mirrors src-tauri/src/k8s/tekton.rs. Read-mostly surface plus a
+// single mutator (cancel) that patches `.spec.status` on the
+// PipelineRun CRD.
+
+/** Canonical run statuses derived by the backend's `derive_run_status`.
+ *  Free-form upstream condition reasons get collapsed into this closed
+ *  set so the UI can pill safely. */
+export type TektonRunStatus =
+  | "Running"
+  | "Succeeded"
+  | "Failed"
+  | "Cancelled"
+  | "Pending"
+  | "Unknown";
+
+export type TektonPipelineRunSummary = {
+  name: string;
+  namespace: string;
+  pipeline_ref: string | null;
+  status: string;
+  started_at: string | null;
+  completion_time: string | null;
+  duration_seconds: number | null;
+  task_count: number;
+  age_seconds: number;
+};
+
+export type TektonTaskRunStatus = {
+  name: string;
+  display_name: string | null;
+  status: string;
+  started_at: string | null;
+  completion_time: string | null;
+  duration_seconds: number | null;
+  message: string | null;
+};
+
+export type TektonConditionEntry = {
+  type: string;
+  status: string;
+  reason: string | null;
+  message: string | null;
+};
+
+export type TektonPipelineRunDetail = {
+  summary: TektonPipelineRunSummary;
+  conditions: TektonConditionEntry[];
+  tasks: TektonTaskRunStatus[];
+  /** [name, value] pairs from `.spec.params`. Array / object values are JSON-encoded. */
+  params: [string, string][];
+  workspaces: string[];
+};
+
 // ─── API ──────────────────────────────────────────────────────────────────
 
 export const k8s = {
@@ -1007,6 +1062,39 @@ export const k8s = {
       namespace,
       name,
       hard,
+    }),
+  // ── Tekton ────────────────────────────────────────────────────────────
+  /** Cheap probe — true when the cluster registers the PipelineRun CRD
+   *  in either v1 or v1beta1. */
+  detectTekton: (context?: string) =>
+    invoke<boolean>("detect_tekton", { context }),
+  listPipelineRuns: (context?: string, namespace?: string) =>
+    invoke<TektonPipelineRunSummary[]>("list_pipeline_runs", {
+      context,
+      namespace,
+    }),
+  getPipelineRun: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+  ) =>
+    invoke<TektonPipelineRunDetail>("get_pipeline_run", {
+      context,
+      namespace,
+      name,
+    }),
+  /** Cancel a running PipelineRun. Patches `.spec.status: "Cancelled"`
+   *  and writes the legacy `tekton.dev/status` annotation in the same
+   *  body so older Tekton controllers also pick up the signal. */
+  cancelPipelineRun: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+  ) =>
+    invoke<void>("cancel_pipeline_run", {
+      context,
+      namespace,
+      name,
     }),
 };
 

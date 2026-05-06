@@ -20,6 +20,7 @@ pub mod resource_insights;
 pub mod resources;
 pub mod security;
 pub mod storage_details;
+pub mod tekton;
 pub mod time;
 pub mod types;
 pub mod vulnscan;
