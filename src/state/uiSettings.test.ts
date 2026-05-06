@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyColumnLayout,
+  ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
+  ARGOCD_DETAIL_PANEL_WIDTH_MIN,
   UI_SETTINGS_STORAGE_KEY,
   useUiSettings,
 } from "./uiSettings";
@@ -23,6 +25,7 @@ beforeEach(() => {
     },
     shortcuts: {},
     argocdResourceView: "tree",
+    argocdDetailPanelWidth: ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
   });
 });
 
@@ -92,6 +95,40 @@ describe("useUiSettings", () => {
       window.localStorage.getItem(UI_SETTINGS_STORAGE_KEY) ?? "{}",
     );
     expect(persisted.argocdResourceView).toBe("list");
+  });
+
+  it("argocdDetailPanelWidth defaults to 460 and persists changes", () => {
+    expect(useUiSettings.getState().argocdDetailPanelWidth).toBe(
+      ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
+    );
+    useUiSettings.getState().setArgocdDetailPanelWidth(600);
+    expect(useUiSettings.getState().argocdDetailPanelWidth).toBe(600);
+    const persisted = JSON.parse(
+      window.localStorage.getItem(UI_SETTINGS_STORAGE_KEY) ?? "{}",
+    );
+    expect(persisted.argocdDetailPanelWidth).toBe(600);
+  });
+
+  it("argocdDetailPanelWidth clamps below the minimum and rounds floats", () => {
+    useUiSettings.getState().setArgocdDetailPanelWidth(100);
+    expect(useUiSettings.getState().argocdDetailPanelWidth).toBe(
+      ARGOCD_DETAIL_PANEL_WIDTH_MIN,
+    );
+    useUiSettings.getState().setArgocdDetailPanelWidth(512.7);
+    expect(useUiSettings.getState().argocdDetailPanelWidth).toBe(513);
+  });
+
+  it("argocdDetailPanelWidth falls back to default for non-finite input", () => {
+    useUiSettings.getState().setArgocdDetailPanelWidth(Number.NaN);
+    expect(useUiSettings.getState().argocdDetailPanelWidth).toBe(
+      ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
+    );
+    useUiSettings
+      .getState()
+      .setArgocdDetailPanelWidth(Number.POSITIVE_INFINITY);
+    expect(useUiSettings.getState().argocdDetailPanelWidth).toBe(
+      ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
+    );
   });
 
   describe("column ordering (D10 finish)", () => {
