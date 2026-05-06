@@ -478,7 +478,12 @@ function PipelineRunDetailPanel({
         loading={detail.isLoading}
       />
 
-      <TasksList tasks={detail.data?.tasks} loading={detail.isLoading} />
+      <TasksList
+        tasks={detail.data?.tasks}
+        loading={detail.isLoading}
+        truncated={detail.data?.tasks_truncated ?? false}
+        totalTaskCount={run.task_count}
+      />
 
       {detail.data?.conditions && detail.data.conditions.length > 0 && (
         <ConditionsList conditions={detail.data.conditions} />
@@ -611,9 +616,13 @@ function ParamsAndWorkspaces({
 function TasksList({
   tasks,
   loading,
+  truncated,
+  totalTaskCount,
 }: {
   tasks: TektonTaskRunStatus[] | undefined;
   loading: boolean;
+  truncated: boolean;
+  totalTaskCount: number;
 }) {
   if (loading) {
     return (
@@ -631,6 +640,11 @@ function TasksList({
     <div className="mb-2">
       <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
         tasks · {tasks.length}
+        {truncated && totalTaskCount > tasks.length && (
+          <span className="ml-1 normal-case tracking-normal text-warning">
+            (showing first {tasks.length} of {totalTaskCount})
+          </span>
+        )}
       </div>
       <ul className="max-h-72 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
         {tasks.map((t) => (
