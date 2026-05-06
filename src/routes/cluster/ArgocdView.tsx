@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -14,6 +21,7 @@ import {
   RefreshCw,
   RotateCcw,
   RotateCw,
+  Search,
   ServerCog,
   ShieldQuestion,
   Sliders,
@@ -44,10 +52,28 @@ import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import {
+  ARGOCD_DETAIL_PANEL_WIDTH_MIN,
   type ArgocdResourceView,
   useUiSettings,
 } from "@/state/uiSettings";
 import { groupResourcesByKind } from "./argocdResourceTree";
+
+/** Upper bound on the detail panel width as a fraction of the viewport. */
+const DETAIL_PANEL_MAX_VW_FRACTION = 0.75;
+/** Step size in pixels for keyboard arrow nudges on the resize handle. */
+const DETAIL_PANEL_KEYBOARD_STEP = 32;
+
+function clampDetailWidth(width: number, viewportWidth: number): number {
+  const max = Math.max(
+    ARGOCD_DETAIL_PANEL_WIDTH_MIN,
+    Math.floor(viewportWidth * DETAIL_PANEL_MAX_VW_FRACTION),
+  );
+  if (width < ARGOCD_DETAIL_PANEL_WIDTH_MIN) {
+    return ARGOCD_DETAIL_PANEL_WIDTH_MIN;
+  }
+  if (width > max) return max;
+  return width;
+}
 
 /**
  * ArgoCD Applications view.
@@ -294,7 +320,8 @@ export function ArgocdView() {
           </p>
         </SectionPanel>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
+        <MasterDetailSplit
+          master={
           <SectionPanel className="overflow-hidden p-0">
             <DataTableShell>
               <DataTable>
@@ -360,35 +387,39 @@ export function ArgocdView() {
               </p>
             )}
           </SectionPanel>
-
-          {selected ? (
-            <ApplicationDetailPanel
-              context={context}
-              app={selected}
-              readOnly={readOnly}
-              onClose={() => selectApp(null)}
-              onMutated={() => {
-                qc.invalidateQueries({ queryKey: ["argocd", "apps", context] });
-                qc.invalidateQueries({
-                  queryKey: [
-                    "argocd",
-                    "app",
-                    context,
-                    selected.namespace,
-                    selected.name,
-                  ],
-                });
-              }}
-            />
-          ) : (
-            <SectionPanel>
-              <p className="text-[12px] text-text-muted">
-                Select an application to see its sync state, managed resources,
-                and run actions.
-              </p>
-            </SectionPanel>
-          )}
-        </div>
+          }
+          detail={
+            selected ? (
+              <ApplicationDetailPanel
+                context={context}
+                app={selected}
+                readOnly={readOnly}
+                onClose={() => selectApp(null)}
+                onMutated={() => {
+                  qc.invalidateQueries({
+                    queryKey: ["argocd", "apps", context],
+                  });
+                  qc.invalidateQueries({
+                    queryKey: [
+                      "argocd",
+                      "app",
+                      context,
+                      selected.namespace,
+                      selected.name,
+                    ],
+                  });
+                }}
+              />
+            ) : (
+              <SectionPanel>
+                <p className="text-[12px] text-text-muted">
+                  Select an application to see its sync state, managed
+                  resources, and run actions.
+                </p>
+              </SectionPanel>
+            )
+          }
+        />
       )}
     </LumenPage>
   );
@@ -399,6 +430,195 @@ function toggleSet<T>(prev: Set<T>, value: T): Set<T> {
   if (next.has(value)) next.delete(value);
   else next.add(value);
   return next;
+}
+
+/**
+ * Master/detail split with a draggable divider.
+ *
+ * Layout: flex row on `lg+` viewports, stacked on small. The detail
+ * column is rendered at a fixed pixel width (persisted via
+ * `useUiSettings.argocdDetailPanelWidth`); the master flexes to fill
+ * the remainder. A 4px-wide handle in between updates the width on
+ * pointer drag and on left/right arrow nudges when focused.
+ *
+ * Why plain mouse events (no library): drag interactions are simple
+ * enough that pulling in react-resizable-panels (or similar) buys us
+ * nothing for one component, and the ArgoCD bundle PR would have to
+ * deal with the new dependency. Listeners attach to `document` so the
+ * drag tracks past the handle and across other elements.
+ */
+function MasterDetailSplit({
+  master,
+  detail,
+}: {
+  master: React.ReactNode;
+  detail: React.ReactNode;
+}) {
+  const persistedWidth = useUiSettings((s) => s.argocdDetailPanelWidth);
+  const setPersistedWidth = useUiSettings(
+    (s) => s.setArgocdDetailPanelWidth,
+  );
+
+  // Track viewport width so we can clamp the upper bound (75% vw) on
+  // both initial render and window resize. SSR-safe initial value.
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window === "undefined" ? 1280 : window.innerWidth,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Local mirror of the width — updates at pointermove rate without
+  // hammering localStorage. The persisted store is written on
+  // pointerup (or after a keyboard nudge).
+  const [width, setWidth] = useState<number>(() =>
+    clampDetailWidth(persistedWidth, viewportWidth),
+  );
+  // Re-sync when the persisted value changes from outside (e.g. another
+  // tab) or when the viewport shrinks past the current width.
+  useLayoutEffect(() => {
+    setWidth((prev) => {
+      const target = clampDetailWidth(persistedWidth, viewportWidth);
+      // If the live width is already in-bounds for the current viewport
+      // and matches the persisted snapshot, leave it alone — avoids a
+      // re-render loop during drag.
+      if (prev === target) return prev;
+      // During an active drag, prefer the in-flight value over the
+      // persisted one so the cursor stays glued to the handle.
+      if (draggingRef.current) {
+        return clampDetailWidth(prev, viewportWidth);
+      }
+      return target;
+    });
+  }, [persistedWidth, viewportWidth]);
+
+  const draggingRef = useRef(false);
+  const handleRef = useRef<HTMLDivElement | null>(null);
+
+  const persist = useCallback(
+    (next: number) => {
+      const clamped = clampDetailWidth(next, viewportWidth);
+      setPersistedWidth(clamped);
+    },
+    [setPersistedWidth, viewportWidth],
+  );
+
+  const onPointerDown = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      draggingRef.current = true;
+      // Save current selection styles so we can restore. Disabling
+      // user-select on <body> prevents accidental text selection while
+      // the user drags across other content.
+      const previousUserSelect = document.body.style.userSelect;
+      const previousCursor = document.body.style.cursor;
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+
+      const startX = e.clientX;
+      const startWidth = width;
+
+      const onMove = (ev: MouseEvent) => {
+        // The handle sits to the LEFT of the detail panel, so dragging
+        // right shrinks the detail (negative delta widens master). We
+        // want dragging right → wider master → narrower detail; the
+        // user expectation is that dragging the handle towards the
+        // detail panel makes detail smaller.
+        const delta = startX - ev.clientX;
+        const next = clampDetailWidth(startWidth + delta, viewportWidth);
+        setWidth(next);
+      };
+
+      const onUp = () => {
+        draggingRef.current = false;
+        document.body.style.userSelect = previousUserSelect;
+        document.body.style.cursor = previousCursor;
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        // Persist whatever we ended on — read straight off the closure
+        // by using the latest setter callback to grab final state.
+        setWidth((finalWidth) => {
+          persist(finalWidth);
+          return finalWidth;
+        });
+      };
+
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [width, viewportWidth, persist],
+  );
+
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      // ArrowRight shrinks the detail panel (handle moves right →
+      // detail narrows); ArrowLeft widens it. Mirrors the pointer
+      // semantics above.
+      const delta =
+        e.key === "ArrowRight"
+          ? -DETAIL_PANEL_KEYBOARD_STEP
+          : DETAIL_PANEL_KEYBOARD_STEP;
+      setWidth((prev) => {
+        const next = clampDetailWidth(prev + delta, viewportWidth);
+        persist(next);
+        return next;
+      });
+    },
+    [viewportWidth, persist],
+  );
+
+  // Below the lg breakpoint we stack vertically and hide the handle —
+  // drag-resize on a touch screen is a different UX problem.
+  const stacked = viewportWidth < 1024;
+  const clampedWidth = clampDetailWidth(width, viewportWidth);
+  const maxWidth = Math.max(
+    ARGOCD_DETAIL_PANEL_WIDTH_MIN,
+    Math.floor(viewportWidth * DETAIL_PANEL_MAX_VW_FRACTION),
+  );
+
+  if (stacked) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div>{master}</div>
+        <div>{detail}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-0">
+      <div className="min-w-0 flex-1">{master}</div>
+      <div
+        ref={handleRef}
+        role="separator"
+        aria-label="resize detail panel"
+        aria-orientation="vertical"
+        aria-valuemin={ARGOCD_DETAIL_PANEL_WIDTH_MIN}
+        aria-valuemax={maxWidth}
+        aria-valuenow={clampedWidth}
+        tabIndex={0}
+        onMouseDown={onPointerDown}
+        onKeyDown={onKeyDown}
+        className={cn(
+          "group relative mx-1 w-1 shrink-0 cursor-col-resize rounded-full bg-border-subtle/60 transition-colors",
+          "hover:bg-accent-primary/40 focus-visible:bg-accent-primary/60 focus-visible:outline-none",
+        )}
+        title="drag to resize · ←/→ to nudge"
+      >
+        {/* Wider invisible hit-target for easier grabbing. */}
+        <span className="absolute inset-y-0 -left-1.5 -right-1.5" />
+      </div>
+      <div style={{ width: clampedWidth }} className="shrink-0">
+        {detail}
+      </div>
+    </div>
+  );
 }
 
 function ApplicationDetailPanel({
@@ -441,6 +661,38 @@ function ApplicationDetailPanel({
   const [perResourceSyncBusy, setPerResourceSyncBusy] = useState<string | null>(
     null,
   );
+  // Per-app managed-resource filter. Resets when the user navigates
+  // between Applications — the filter is meaningful for the resource
+  // list of *this* app and stale text would just be confusing.
+  const [resourceFilterText, setResourceFilterText] = useState("");
+  const resourceSearchRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    setResourceFilterText("");
+  }, [app.namespace, app.name]);
+  // Global "/" shortcut: focus the resource search when the detail
+  // panel is mounted. Skip when the user is already typing somewhere
+  // else (input/textarea/contenteditable) so we don't hijack their
+  // keystrokes.
+  useEffect(() => {
+    function isTypingTarget(el: EventTarget | null): boolean {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el.isContentEditable) return true;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTypingTarget(e.target)) return;
+      const node = resourceSearchRef.current;
+      if (!node) return;
+      e.preventDefault();
+      node.focus();
+      node.select();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const lockedTitle = readOnly ? " (read-only mode)" : "";
   const operationRunning = detail.data?.operation_state?.phase === "Running";
@@ -681,6 +933,9 @@ function ApplicationDetailPanel({
         syncBusyKey={perResourceSyncBusy}
         onOpen={(r) => setDrawerResource(toDrawerResource(r))}
         onSync={(r) => void performSyncResource(r)}
+        filterText={resourceFilterText}
+        onFilterChange={setResourceFilterText}
+        searchInputRef={resourceSearchRef}
       />
 
       {detail.data?.history && detail.data.history.length > 0 && (
@@ -1247,6 +1502,9 @@ function ManagedResourcesSection({
   syncBusyKey,
   onOpen,
   onSync,
+  filterText,
+  onFilterChange,
+  searchInputRef,
 }: {
   loading: boolean;
   resources: ArgoApplicationResource[] | undefined;
@@ -1255,6 +1513,9 @@ function ManagedResourcesSection({
   syncBusyKey: string | null;
   onOpen: (r: ArgoApplicationResource) => void;
   onSync: (r: ArgoApplicationResource) => void;
+  filterText: string;
+  onFilterChange: (next: string) => void;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
 }) {
   const view = useUiSettings((s) => s.argocdResourceView);
   const setView = useUiSettings((s) => s.setArgocdResourceView);
@@ -1271,10 +1532,18 @@ function ManagedResourcesSection({
       <p className="text-[11px] text-text-muted">no managed resources yet</p>
     );
   }
+
+  const trimmed = filterText.trim().toLowerCase();
+  const filteredResources = trimmed
+    ? resources.filter((r) => matchesResourceFilter(r, trimmed))
+    : resources;
+
   return (
     <div>
       <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-text-muted">
-        <span>managed resources · {resources.length}</span>
+        <span className="shrink-0">
+          managed resources · {resources.length}
+        </span>
         {!inCluster && (
           <span
             className="rounded border border-border-subtle px-1.5 py-0.5 text-[9px] text-text-muted normal-case tracking-normal"
@@ -1283,13 +1552,21 @@ function ManagedResourcesSection({
             external dest
           </span>
         )}
-        <span className="ml-auto">
+        <ResourceSearchInput
+          value={filterText}
+          onChange={onFilterChange}
+          inputRef={searchInputRef}
+          shownCount={filteredResources.length}
+          totalCount={resources.length}
+        />
+        <span className="shrink-0">
           <ViewModeToggle value={view} onChange={setView} />
         </span>
       </div>
       {view === "tree" ? (
         <ResourceTree
           resources={resources}
+          filterText={trimmed}
           inCluster={inCluster}
           readOnly={readOnly}
           syncBusyKey={syncBusyKey}
@@ -1298,13 +1575,94 @@ function ManagedResourcesSection({
         />
       ) : (
         <ResourceFlatList
-          resources={resources}
+          resources={filteredResources}
+          totalCount={resources.length}
           inCluster={inCluster}
           readOnly={readOnly}
           syncBusyKey={syncBusyKey}
           onOpen={onOpen}
           onSync={onSync}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Case-insensitive substring match against a resource's identifying
+ * fields. `term` must already be lowercased — keeps the per-row check
+ * free of allocations.
+ */
+function matchesResourceFilter(
+  r: ArgoApplicationResource,
+  term: string,
+): boolean {
+  if (!term) return true;
+  if (r.name.toLowerCase().includes(term)) return true;
+  if (r.kind.toLowerCase().includes(term)) return true;
+  if (r.namespace && r.namespace.toLowerCase().includes(term)) return true;
+  return false;
+}
+
+/**
+ * Search input rendered inside the managed-resources header strip.
+ * Owns its own keyboard ergonomics: Esc clears, blur-on-clear is left
+ * to the user.
+ */
+function ResourceSearchInput({
+  value,
+  onChange,
+  inputRef,
+  shownCount,
+  totalCount,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  shownCount: number;
+  totalCount: number;
+}) {
+  const hasFilter = value.length > 0;
+  const allHidden = hasFilter && shownCount === 0;
+  return (
+    <div className="relative flex min-w-0 flex-1 items-center">
+      <Search
+        aria-hidden="true"
+        className="pointer-events-none absolute left-1.5 size-3 text-text-muted"
+      />
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && hasFilter) {
+            e.preventDefault();
+            e.stopPropagation();
+            onChange("");
+          }
+        }}
+        placeholder="Filter resources (press / to focus)"
+        aria-label="filter managed resources"
+        className={cn(
+          "h-6 w-full min-w-0 rounded border border-border-default bg-elevated pl-6 pr-14 font-mono text-[10px] normal-case tracking-normal text-text-primary placeholder:text-text-muted",
+          "focus:border-accent-primary focus:outline-none",
+          allHidden && "border-warning/60",
+        )}
+      />
+      <span className="pointer-events-none absolute right-6 font-mono text-[9px] tabular-nums text-text-muted normal-case tracking-normal">
+        {hasFilter ? `${shownCount} of ${totalCount}` : ""}
+      </span>
+      {hasFilter && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="clear filter"
+          title="clear filter (Esc)"
+          className="absolute right-1 inline-flex items-center justify-center rounded p-0.5 text-text-muted hover:bg-elevated hover:text-text-primary"
+        >
+          <X className="size-3" />
+        </button>
       )}
     </div>
   );
@@ -1356,9 +1714,14 @@ function ViewModeToggle({
  * Flat alphabetical list — the original ResourceList, factored into
  * a component without its own header (the section header lives in
  * ManagedResourcesSection now).
+ *
+ * Receives the already-filtered slice so it doesn't need to know
+ * about the search term itself; an empty list with a non-empty total
+ * means "filter excluded everything" and we render a hint row.
  */
 function ResourceFlatList({
   resources,
+  totalCount,
   inCluster,
   readOnly,
   syncBusyKey,
@@ -1366,12 +1729,20 @@ function ResourceFlatList({
   onSync,
 }: {
   resources: ArgoApplicationResource[];
+  totalCount: number;
   inCluster: boolean;
   readOnly: boolean;
   syncBusyKey: string | null;
   onOpen: (r: ArgoApplicationResource) => void;
   onSync: (r: ArgoApplicationResource) => void;
 }) {
+  if (resources.length === 0 && totalCount > 0) {
+    return (
+      <p className="px-1 py-2 text-[11px] text-text-muted">
+        No resources match the filter.
+      </p>
+    );
+  }
   return (
     <ul className="max-h-72 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
       {resources.map((r) => {
@@ -1402,9 +1773,18 @@ function ResourceFlatList({
  * resets it, which is fine since the tree is small (typical app: 5–30
  * resources across 4–10 Kinds). Persisting collapse per Kind is a
  * future improvement if users ask for it.
+ *
+ * Filter behaviour: when `filterText` is non-empty we hide groups
+ * whose Kind has zero matches and show only matching rows inside
+ * groups that do match. The header still shows the original kind
+ * total ("3 of 47 visible") so users can see how aggressive the
+ * filter is. The user's collapse choices are preserved when the
+ * filter changes — re-opening a group that was collapsed before
+ * filtering would feel surprising.
  */
 function ResourceTree({
   resources,
+  filterText,
   inCluster,
   readOnly,
   syncBusyKey,
@@ -1412,6 +1792,8 @@ function ResourceTree({
   onSync,
 }: {
   resources: ArgoApplicationResource[];
+  /** Lowercased + trimmed filter term. Empty string = no filter. */
+  filterText: string;
   inCluster: boolean;
   readOnly: boolean;
   syncBusyKey: string | null;
@@ -1430,10 +1812,44 @@ function ResourceTree({
     });
   }
 
+  const hasFilter = filterText.length > 0;
+  const filteredGroups = useMemo(() => {
+    if (!hasFilter) {
+      return groups.map((g) => ({
+        kind: g.kind,
+        resources: g.resources,
+        total: g.resources.length,
+      }));
+    }
+    return groups
+      .map((g) => {
+        const matches = g.resources.filter((r) =>
+          matchesResourceFilter(r, filterText),
+        );
+        return { kind: g.kind, resources: matches, total: g.resources.length };
+      })
+      .filter((g) => g.resources.length > 0);
+  }, [groups, hasFilter, filterText]);
+
+  if (hasFilter && filteredGroups.length === 0) {
+    return (
+      <p className="px-1 py-2 text-[11px] text-text-muted">
+        No resources match the filter.
+      </p>
+    );
+  }
+
   return (
     <div className="max-h-72 space-y-1 overflow-auto pr-1 font-mono text-[11px]">
-      {groups.map((group) => {
-        const isCollapsed = collapsed.has(group.kind);
+      {filteredGroups.map((group) => {
+        // While a filter is active we ignore collapse state — the user
+        // is searching and wants to see the matches. Once they clear
+        // the filter their collapse choices come back.
+        const isCollapsed = !hasFilter && collapsed.has(group.kind);
+        const showCount =
+          hasFilter && group.resources.length !== group.total
+            ? `${group.resources.length} of ${group.total}`
+            : `${group.total}`;
         return (
           <div key={group.kind}>
             <button
@@ -1454,7 +1870,7 @@ function ResourceTree({
                 />
               )}
               <span className="text-text-primary">{group.kind}</span>
-              <span className="text-text-muted">· {group.resources.length}</span>
+              <span className="text-text-muted">· {showCount}</span>
             </button>
             {!isCollapsed && (
               <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-border-subtle pl-2">

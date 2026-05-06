@@ -41,6 +41,12 @@ export const UI_SETTINGS_STORAGE_KEY = "lumen:ui-settings";
  *                      sections ("tree"). Defaults to "tree" — closer
  *                      to ArgoCD's native topology view, which is the
  *                      thing users still leave Lumen for.
+ *
+ *   • `argocdDetailPanelWidth` — width in pixels of the ArgoCD detail
+ *                      panel (right side of the master/detail split).
+ *                      Adjustable via the drag handle in the page
+ *                      layout; clamped at runtime to [360, 75% vw].
+ *                      Default 460 keeps the original behavior.
  */
 
 export type ColumnView = "workloads-pod" | "workloads-other" | "nodes";
@@ -57,7 +63,12 @@ export type UiSettings = {
   shortcuts: Record<string, string>;
   /** ArgoCD Application detail: managed-resources rendering mode. */
   argocdResourceView: ArgocdResourceView;
+  /** ArgoCD Application detail: width of the right-side detail panel in pixels. */
+  argocdDetailPanelWidth: number;
 };
+
+export const ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT = 460;
+export const ARGOCD_DETAIL_PANEL_WIDTH_MIN = 360;
 
 const STORAGE_KEY = UI_SETTINGS_STORAGE_KEY;
 
@@ -80,7 +91,24 @@ function defaults(): UiSettings {
     columnOrder: { ...EMPTY_ORDER },
     shortcuts: {},
     argocdResourceView: "tree",
+    argocdDetailPanelWidth: ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
   };
+}
+
+/**
+ * Sanitize an arbitrary persisted value into a usable detail-panel width.
+ * Sub-min values get bumped to the floor; non-finite or non-numeric input
+ * falls back to the default. Upper bound is enforced at draw time
+ * (depends on viewport width which we don't know in this module).
+ */
+function normalizeDetailPanelWidth(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT;
+  }
+  if (raw < ARGOCD_DETAIL_PANEL_WIDTH_MIN) {
+    return ARGOCD_DETAIL_PANEL_WIDTH_MIN;
+  }
+  return Math.round(raw);
 }
 
 function readPersisted(): UiSettings {
@@ -127,6 +155,9 @@ function readPersisted(): UiSettings {
         parsed.argocdResourceView === "tree"
           ? parsed.argocdResourceView
           : "tree",
+      argocdDetailPanelWidth: normalizeDetailPanelWidth(
+        parsed.argocdDetailPanelWidth,
+      ),
     };
   } catch {
     return defaults();
@@ -168,6 +199,7 @@ type Store = UiSettings & {
   setShortcut: (actionId: string, chord: string | null) => void;
   resetShortcuts: () => void;
   setArgocdResourceView: (next: ArgocdResourceView) => void;
+  setArgocdDetailPanelWidth: (next: number) => void;
 };
 
 export const useUiSettings = create<Store>((set, get) => {
@@ -263,6 +295,12 @@ export const useUiSettings = create<Store>((set, get) => {
       const snapshot = { ...get(), argocdResourceView: next };
       writePersisted(snapshot);
       set({ argocdResourceView: next });
+    },
+    setArgocdDetailPanelWidth: (next) => {
+      const normalized = normalizeDetailPanelWidth(next);
+      const snapshot = { ...get(), argocdDetailPanelWidth: normalized };
+      writePersisted(snapshot);
+      set({ argocdDetailPanelWidth: normalized });
     },
   };
 });
