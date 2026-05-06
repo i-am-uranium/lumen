@@ -105,7 +105,7 @@ pub async fn rollout_restart(
             }
         }
     });
-    let pp = PatchParams::apply("lumen").force();
+    let pp = PatchParams::default();
     match kind {
         WorkloadKind::Deployment => Api::<Deployment>::namespaced(client.clone(), namespace)
             .patch(name, &pp, &Patch::Merge(&patch))
@@ -766,8 +766,15 @@ pub async fn apply_resource(
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_manual_job_name, prepare_apply_manifest};
+    use super::{derive_manual_job_name, prepare_apply_manifest, rollout_restart};
     use crate::k8s::types::WorkloadKind;
+    use kube::{Client, Config};
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    async fn mock_client(server: &MockServer) -> Client {
+        let uri = server.uri().parse().unwrap();
+        Client::try_from(Config::new(uri)).unwrap()
+    }
 
     #[test]
     fn derive_manual_job_name_short_cronjob_passes_through() {
@@ -850,5 +857,50 @@ metadata:
             prepare_apply_manifest(&WorkloadKind::ConfigMap, "apps", "settings", yaml).unwrap_err();
 
         assert!(err.to_string().contains("metadata.name 'other' differs"));
+    }
+
+    #[tokio::test]
+    async fn rollout_restart_sends_merge_patch_without_apply_force() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": { "name": "api", "namespace": "apps" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        rollout_restart(
+            &mock_client(&server).await,
+            "apps",
+            WorkloadKind::Deployment,
+            "api",
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let request = requests
+            .first()
+            .expect("expected one rollout patch request");
+
+        assert_eq!(
+            request.url.path(),
+            "/apis/apps/v1/namespaces/apps/deployments/api"
+        );
+        assert!(request.url.query_pairs().all(|(k, _)| k != "force"));
+        assert!(request.url.query_pairs().all(|(k, _)| k != "fieldManager"));
+        assert_eq!(
+            request.headers["content-type"],
+            "application/merge-patch+json"
+        );
+
+        let body: serde_json::Value = request.body_json().unwrap();
+        assert!(body
+            .pointer("/spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt")
+            .and_then(|v| v.as_str())
+            .is_some());
     }
 }
