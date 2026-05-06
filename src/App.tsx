@@ -14,6 +14,7 @@ import { Bell, Lock, Network, Sparkles } from "lucide-react";
 import { useClusterStore } from "@/state/cluster";
 import { useShortcut } from "@/lib/shortcuts";
 import { dispatchFocusSearch } from "@/lib/focusSearch";
+import { checkForAppUpdate } from "@/lib/autoUpdater";
 
 const named =
   <T extends Record<string, unknown>>(key: keyof T) =>
@@ -313,6 +314,10 @@ function Shell() {
 }
 
 export default function App() {
+  useEffect(() => {
+    void checkForAppUpdate();
+  }, []);
+
   return (
     <QueryClientProvider client={qc}>
       <Shell />
