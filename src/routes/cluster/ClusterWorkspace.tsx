@@ -1,7 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { NavLink, Outlet, useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
+  AlertTriangle,
   Boxes,
   Box,
   ChevronDown,
@@ -20,6 +22,7 @@ import {
   Network,
   Package,
   Repeat,
+  RefreshCw,
   Server,
   ServerCog,
   ShieldAlert,
@@ -305,12 +308,14 @@ function Header({
   cluster,
   collapsed,
   onBack,
+  onReprobe,
 }: {
   context: string;
   isProd: boolean;
   cluster?: string | null;
   collapsed: boolean;
   onBack: () => void;
+  onReprobe: () => void;
 }) {
   if (collapsed) {
     return (
@@ -353,6 +358,46 @@ function Header({
             </span>
           )}
         </div>
+      </div>
+      <button
+        type="button"
+        onClick={onReprobe}
+        title="re-probe cluster capabilities (ArgoCD, …)"
+        aria-label="re-probe capabilities"
+        className="shrink-0 inline-flex items-center justify-center size-6 rounded-md text-text-muted hover:bg-hover hover:text-text-primary"
+      >
+        <RefreshCw className="size-3" aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Tiny status pill rendered in the cluster rail when a capability probe
+ * (ArgoCD, future Tekton, …) errors out. We only surface failures —
+ * a successful probe needs no chrome — so the rail stays visually quiet
+ * for the common case. Hidden entirely while the rail is collapsed.
+ */
+function CapabilityStatus({
+  capability,
+  error,
+  collapsed,
+}: {
+  capability: string;
+  error: unknown;
+  collapsed: boolean;
+}) {
+  if (collapsed) return null;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    <div className="mx-2 mb-1.5 mt-0.5">
+      <div
+        className="flex items-center gap-1.5 rounded-md border border-warning/40 bg-warning-soft px-2 py-1 text-[10px] text-warning"
+        title={`${capability} probe failed: ${message}`}
+        role="status"
+      >
+        <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+        <span className="truncate">{capability}: probe failed</span>
       </div>
     </div>
   );
@@ -694,7 +739,11 @@ export function ClusterWorkspace() {
   // Probe ArgoCD presence so we only show the nav entry on clusters
   // that actually have it installed. Cached per-context for an hour;
   // CRD installation is rare enough that re-probing on every mount
-  // would be wasteful.
+  // would be wasteful. The Rust side returns Ok(false) for the "not
+  // installed" case (no Application CRD), so an error here means the
+  // probe genuinely failed (RBAC 403, network, …) — we surface it as
+  // a small status pill rather than silently hiding the leaf.
+  const qc = useQueryClient();
   const argocdAvailable = useQuery({
     queryKey: ["argocd", "available", context],
     queryFn: () => k8s.detectArgocd(context || undefined),
@@ -707,6 +756,19 @@ export function ClusterWorkspace() {
     staleTime: 60 * 60 * 1000,
     enabled: !!context,
   });
+  // Mirror non-404 probe errors to DevTools so the cause is visible
+  // without having to dig through the network tab. The pill in the
+  // sidebar (CapabilityStatus) carries the same message for end users.
+  useEffect(() => {
+    if (argocdAvailable.error) {
+      console.error("ArgoCD capability probe failed:", argocdAvailable.error);
+    }
+  }, [argocdAvailable.error]);
+  useEffect(() => {
+    if (tektonAvailable.error) {
+      console.error("Tekton capability probe failed:", tektonAvailable.error);
+    }
+  }, [tektonAvailable.error]);
   const sections = useMemo(
     () =>
       buildSections({
@@ -715,6 +777,21 @@ export function ClusterWorkspace() {
       }),
     [argocdAvailable.data, tektonAvailable.data],
   );
+
+  // Re-probe every cluster capability we know about. Adding a probe later
+  // is one entry in this list — the 1h cache invalidates, the next render
+  // re-fetches, and the user gets a brief toast as feedback.
+  const reprobeCapabilities = useCallback(() => {
+    if (!context) return;
+    const keys: (readonly unknown[])[] = [
+      ["argocd", "available", context],
+      ["tekton", "available", context],
+    ];
+    for (const key of keys) {
+      void qc.invalidateQueries({ queryKey: key });
+    }
+    toast.message("re-probing capabilities…");
+  }, [context, qc]);
 
   return (
     <div className="flex h-full">
@@ -729,6 +806,7 @@ export function ClusterWorkspace() {
           cluster={info?.cluster ?? null}
           collapsed={collapsed}
           onBack={() => nav("/cluster")}
+          onReprobe={reprobeCapabilities}
         />
 
         <nav className={cn("flex-1 min-h-0 overflow-y-auto", collapsed ? "py-2" : "py-1.5")}>
@@ -814,6 +892,21 @@ export function ClusterWorkspace() {
             onToggle={() => rail.toggleGroup("recent")}
           />
         </nav>
+
+        {argocdAvailable.error && (
+          <CapabilityStatus
+            capability="ArgoCD"
+            error={argocdAvailable.error}
+            collapsed={collapsed}
+          />
+        )}
+        {tektonAvailable.error && (
+          <CapabilityStatus
+            capability="Tekton"
+            error={tektonAvailable.error}
+            collapsed={collapsed}
+          />
+        )}
 
         {/* Footer: port-forwards chip + collapse toggle */}
         <div className="border-t border-border-default shrink-0">

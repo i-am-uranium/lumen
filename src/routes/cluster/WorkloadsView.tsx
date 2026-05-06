@@ -1,4 +1,5 @@
-import React, { memo, useMemo, useState } from "react";
+import React, { memo, useCallback, useMemo, useRef, useState } from "react";
+import { useFocusSearch } from "@/lib/focusSearch";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
@@ -703,6 +704,17 @@ export function WorkloadsView() {
   const [search, setSearch] = useState<string>(
     () => searchParams.get("q") ?? "",
   );
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // Cmd+/ broadcasts a focus-search event; the workloads view picks it up
+  // and selects the toolbar's filter input. Ref-based so the keybinding
+  // never has to know which view is mounted — see lib/focusSearch.ts.
+  const onFocusSearch = useCallback(() => {
+    const el = searchInputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, []);
+  useFocusSearch(onFocusSearch);
   const [quickFilters, setQuickFilters] = useState<Set<QuickFilter>>(
     () => new Set(),
   );
@@ -855,6 +867,7 @@ export function WorkloadsView() {
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-muted" />
                 <Input
+                  ref={searchInputRef}
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}

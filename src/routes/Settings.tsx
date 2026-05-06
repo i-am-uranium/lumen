@@ -216,6 +216,14 @@ function ShortcutsSection() {
                   <span className="text-[12px] font-medium text-text-primary">
                     {action.label}
                   </span>
+                  {action.scope === "drawer" && (
+                    <span
+                      className="rounded bg-elevated px-1 text-[9px] uppercase tracking-wide text-text-muted"
+                      title="Only fires while the resource detail drawer is open"
+                    >
+                      when drawer is open
+                    </span>
+                  )}
                   {isOverride && (
                     <span className="rounded bg-accent-primary-soft px-1 text-[9px] uppercase tracking-wide text-accent-primary">
                       custom

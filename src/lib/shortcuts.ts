@@ -25,12 +25,26 @@
 import { useEffect } from "react";
 import { useUiSettings } from "@/state/uiSettings";
 
+export type ShortcutScope =
+  /** Fires anywhere in the app (default). */
+  | "global"
+  /** Fires only when the resource detail drawer is open. */
+  | "drawer";
+
 export type ShortcutAction = {
   id: string;
   label: string;
   description: string;
   /** The chord that ships out-of-the-box — overridable per user. */
   defaultChord: string;
+  /**
+   * Where the chord applies. `global` (default) listens unconditionally;
+   * scoped chords (e.g. drawer hotkeys) only fire when the owner passes
+   * `{ enabled: true }` to useShortcut. The Settings UI surfaces the scope
+   * as a small hint label so users understand why a chord may not respond
+   * outside of its context.
+   */
+  scope?: ShortcutScope;
 };
 
 export const REGISTRY: ShortcutAction[] = [
@@ -40,6 +54,57 @@ export const REGISTRY: ShortcutAction[] = [
     description:
       "Toggles the palette over the current view. Search resources, switch contexts, run actions.",
     defaultChord: "Cmd+K",
+  },
+  {
+    id: "openLogs",
+    label: "Open logs view",
+    description:
+      "Jumps to the cluster-wide logs route for the current context.",
+    defaultChord: "Cmd+L",
+  },
+  {
+    id: "focusSearch",
+    label: "Focus search",
+    description:
+      "Focuses the in-page search/filter input on the current view (workloads, events, etc.).",
+    defaultChord: "Cmd+/",
+  },
+  {
+    id: "drawerLogs",
+    label: "Drawer: open logs tab",
+    description: "Opens the logs tab inside the resource detail drawer.",
+    defaultChord: "L",
+    scope: "drawer",
+  },
+  {
+    id: "drawerShell",
+    label: "Drawer: open shell",
+    description:
+      "Opens an exec shell for the focused pod (drawer must be open).",
+    defaultChord: "S",
+    scope: "drawer",
+  },
+  {
+    id: "drawerDownload",
+    label: "Drawer: download logs",
+    description:
+      "Downloads the focused pod's logs (drawer must be open).",
+    defaultChord: "D",
+    scope: "drawer",
+  },
+  {
+    id: "drawerYaml",
+    label: "Drawer: open YAML tab",
+    description: "Switches the resource detail drawer to the YAML tab.",
+    defaultChord: "Y",
+    scope: "drawer",
+  },
+  {
+    id: "drawerClose",
+    label: "Drawer: close",
+    description: "Closes the resource detail drawer.",
+    defaultChord: "Esc",
+    scope: "drawer",
   },
 ];
 
@@ -100,30 +165,69 @@ export function matchEvent(e: KeyboardEvent, parsed: ParsedChord): boolean {
   return e.key.toLowerCase() === parsed.key;
 }
 
+export type UseShortcutOptions = {
+  /**
+   * When false, the listener is not registered. Lets context-scoped chords
+   * (e.g. drawer hotkeys) opt-in/out without conditionally calling the hook —
+   * the React rules-of-hooks would complain otherwise.
+   */
+  enabled?: boolean;
+  /**
+   * When true, the handler is suppressed if the keydown originates inside
+   * an editable field. Defaults to true for unmodified, single-character
+   * chords (so "L" / "Y" don't fire while typing in a search input) and
+   * false for chords with Cmd/Ctrl/Alt held.
+   */
+  ignoreWhileTyping?: boolean;
+};
+
+function eventTargetIsEditable(e: KeyboardEvent): boolean {
+  const t = e.target;
+  if (!t) return false;
+  if (
+    t instanceof HTMLInputElement ||
+    t instanceof HTMLTextAreaElement ||
+    t instanceof HTMLSelectElement
+  ) {
+    return true;
+  }
+  if (t instanceof HTMLElement && t.isContentEditable) return true;
+  return false;
+}
+
 /**
  * Hook: register a global keydown handler for the given action id.
  * Re-resolves the effective chord whenever overrides change so the
  * user-edited binding takes effect without a reload.
+ *
+ * Pass `{ enabled }` to gate context-scoped chords (e.g. drawer hotkeys
+ * that should only fire while the drawer is open).
  */
 export function useShortcut(
   actionId: string,
   handler: (e: KeyboardEvent) => void,
+  options: UseShortcutOptions = {},
 ): void {
   const override = useUiSettings((s) => s.shortcuts[actionId]);
   const action = REGISTRY.find((a) => a.id === actionId);
   const chord = override ?? action?.defaultChord ?? "";
+  const { enabled = true, ignoreWhileTyping } = options;
   useEffect(() => {
+    if (!enabled) return;
     const parsed = parseChord(chord);
     if (!parsed) return;
+    const guardTyping =
+      ignoreWhileTyping ??
+      (!parsed.cmdOrCtrl && !parsed.alt && parsed.key.length === 1);
     const onKey = (e: KeyboardEvent) => {
-      if (matchEvent(e, parsed)) {
-        e.preventDefault();
-        handler(e);
-      }
+      if (!matchEvent(e, parsed)) return;
+      if (guardTyping && eventTargetIsEditable(e)) return;
+      e.preventDefault();
+      handler(e);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chord, handler]);
+  }, [chord, handler, enabled, ignoreWhileTyping]);
 }
 
 /**

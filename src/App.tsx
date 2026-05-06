@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
@@ -12,6 +12,8 @@ import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { Bell, Lock, Network, Sparkles } from "lucide-react";
 import { useClusterStore } from "@/state/cluster";
+import { useShortcut } from "@/lib/shortcuts";
+import { dispatchFocusSearch } from "@/lib/focusSearch";
 
 const named =
   <T extends Record<string, unknown>>(key: keyof T) =>
@@ -108,7 +110,8 @@ function StatusBar() {
         )}
       </div>
       <div className="hidden sm:flex items-center gap-4">
-        <span><kbd className="text-term-fg">Cmd K</kbd> search</span>
+        <span><kbd className="text-term-fg">Cmd K</kbd> palette</span>
+        <span><kbd className="text-term-fg">Cmd /</kbd> filter</span>
         <span><kbd className="text-term-fg">Cmd L</kbd> logs</span>
       </div>
     </div>
@@ -216,10 +219,29 @@ function NavBar() {
   );
 }
 
+/**
+ * Registers global app-level keybindings that need router context.
+ * Mounted once inside <BrowserRouter>. Drawer / per-view chords are
+ * registered closer to where they fire — this component only owns
+ * shortcuts that should work from anywhere.
+ */
+function GlobalShortcuts() {
+  const navigate = useNavigate();
+  const { contextName } = useClusterStore();
+  const goLogs = useCallback(() => {
+    if (!contextName) return;
+    navigate(`/cluster/${encodeURIComponent(contextName)}/logs`);
+  }, [contextName, navigate]);
+  useShortcut("openLogs", goLogs);
+  useShortcut("focusSearch", () => dispatchFocusSearch());
+  return null;
+}
+
 function Shell() {
   return (
     <BrowserRouter>
       <Toaster richColors position="bottom-right" />
+      <GlobalShortcuts />
       <div className="flex h-screen flex-col bg-term-bg text-term-fg">
         <NavBar />
         <div className="flex-1 overflow-hidden">
