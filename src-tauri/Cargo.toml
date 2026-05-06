@@ -1,6 +1,6 @@
 [package]
 name = "lumen"
-version = "0.7.0"
+version = "0.7.1"
 description = "Lumen - Kubernetes cluster workbench"
 authors = ["Lumen contributors"]
 edition = "2021"
@@ -38,6 +38,7 @@ serde_yaml = "0.9"
 http = "1"
 flate2 = "1"
 base64 = "0.22"
+tauri-plugin-updater = "2.10.1"
 
 [dev-dependencies]
 wiremock = "0.6"
