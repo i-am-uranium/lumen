@@ -15,6 +15,7 @@ import { useClusterStore } from "@/state/cluster";
 import { useShortcut } from "@/lib/shortcuts";
 import { dispatchFocusSearch } from "@/lib/focusSearch";
 import { checkForAppUpdate } from "@/lib/autoUpdater";
+import { APP_VERSION } from "@/lib/appInfo";
 
 const named =
   <T extends Record<string, unknown>>(key: keyof T) =>
@@ -121,6 +122,7 @@ function StatusBar() {
         )}
       </div>
       <div className="hidden sm:flex items-center gap-4">
+        <span className="font-mono text-term-subtle">v{APP_VERSION}</span>
         <span><kbd className="text-term-fg">Cmd K</kbd> palette</span>
         <span><kbd className="text-term-fg">Cmd /</kbd> filter</span>
         <span><kbd className="text-term-fg">Cmd L</kbd> logs</span>

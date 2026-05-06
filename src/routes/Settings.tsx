@@ -4,6 +4,7 @@ import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
 import { cn } from "@/lib/utils";
 import { captureChord, REGISTRY } from "@/lib/shortcuts";
+import { APP_VERSION } from "@/lib/appInfo";
 
 /**
  * Lumen settings page (D7 — minimal scope).
@@ -134,6 +135,15 @@ export function Settings() {
         </Section>
 
         <ShortcutsSection />
+
+        <Section title="About" description="Installed Lumen build information.">
+          <div className="flex items-center justify-between rounded border border-border-subtle bg-elevated px-3 py-2.5">
+            <span className="text-[12px] font-medium text-text-primary">Version</span>
+            <span className="font-mono text-[12px] text-text-secondary">
+              v{APP_VERSION}
+            </span>
+          </div>
+        </Section>
 
         <Section
           title="Coming soon"
