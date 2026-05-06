@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,14 +11,16 @@ import {
   Server,
   ShieldOff,
   SignalZero,
+  Star,
 } from "lucide-react";
 import { toast } from "sonner";
 import { k8s, type DrainSummary, type NodeSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
-import { useUiSettings } from "@/state/uiSettings";
+import { applyColumnLayout, useUiSettings } from "@/state/uiSettings";
 import { ColumnPicker } from "@/components/ColumnPicker";
+import { usePinnedResources } from "@/hooks/usePinnedResources";
 
 function formatBytes(n: number): string {
   const u = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -196,9 +198,11 @@ const NODE_COLUMNS: NodeColumn[] = [
   },
 ];
 
-function visibleNodeColumns(hidden: string[]): NodeColumn[] {
-  if (hidden.length === 0) return NODE_COLUMNS;
-  return NODE_COLUMNS.filter((c) => c.alwaysOn || !hidden.includes(c.key));
+function laidOutNodeColumns(
+  order: string[],
+  hidden: string[],
+): NodeColumn[] {
+  return applyColumnLayout(NODE_COLUMNS, order, hidden);
 }
 
 function Row({
@@ -206,12 +210,16 @@ function Row({
   columns,
   busy,
   readOnly,
+  favorited,
+  onToggleFavorite,
   onAction,
 }: {
   n: NodeSummary;
   columns: NodeColumn[];
   busy: boolean;
   readOnly: boolean;
+  favorited: boolean;
+  onToggleFavorite: (n: NodeSummary) => void;
   onAction: (a: NodeAction) => void;
 }) {
   // `busy` reflects an in-flight server action on this row; `readOnly` is the
@@ -219,8 +227,35 @@ function Row({
   // and reach for `readOnly` first when picking the tooltip.
   const lockedTitle = readOnly ? " (read-only mode)" : "";
   const disabled = busy || readOnly;
+  const favLabel = favorited
+    ? `Unfavorite node ${n.name}`
+    : `Favorite node ${n.name}`;
   return (
-    <tr className="border-b border-border-subtle hover:bg-elevated">
+    <tr className="group border-b border-border-subtle hover:bg-elevated">
+      <td className="w-7 px-1 py-2.5">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleFavorite(n);
+          }}
+          aria-label={favLabel}
+          aria-pressed={favorited}
+          title={favLabel}
+          className={cn(
+            "inline-flex size-5 items-center justify-center rounded transition-opacity",
+            favorited
+              ? "text-term-amber opacity-100"
+              : "text-text-muted opacity-0 group-hover:opacity-100 hover:text-term-amber",
+          )}
+        >
+          <Star
+            className={cn("size-3.5", favorited && "fill-current")}
+            aria-hidden="true"
+          />
+        </button>
+      </td>
       {columns.map((c) => (
         <React.Fragment key={c.key}>{c.cell(n)}</React.Fragment>
       ))}
@@ -306,12 +341,42 @@ export function NodesView() {
 
   const readOnly = useUiSettings((s) => s.readOnly);
   const hiddenNodeColumns = useUiSettings((s) => s.hiddenColumns.nodes);
+  const nodeColumnOrder = useUiSettings((s) => s.columnOrder.nodes);
   const visibleCols = useMemo(
-    () => visibleNodeColumns(hiddenNodeColumns),
-    [hiddenNodeColumns],
+    () => laidOutNodeColumns(nodeColumnOrder, hiddenNodeColumns),
+    [nodeColumnOrder, hiddenNodeColumns],
   );
   const [pendingAction, setPendingAction] = useState<NodeAction | null>(null);
   const [actionBusyNode, setActionBusyNode] = useState<string | null>(null);
+
+  // Favorites — D10 finish. Reuses the cluster-scoped pinned store so
+  // starring a node here surfaces it in the workspace sidebar's
+  // Pinned section, no extra plumbing needed.
+  const favorites = usePinnedResources(context);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const hasFavoriteNodes = useMemo(
+    () =>
+      nodes.some((n) =>
+        favorites.isPinned({ kind: "node", namespace: null, name: n.name }),
+      ),
+    [nodes, favorites],
+  );
+  useEffect(() => {
+    if (favoritesOnly && !hasFavoriteNodes) setFavoritesOnly(false);
+  }, [favoritesOnly, hasFavoriteNodes]);
+  const visibleNodes = useMemo(
+    () =>
+      favoritesOnly
+        ? nodes.filter((n) =>
+            favorites.isPinned({
+              kind: "node",
+              namespace: null,
+              name: n.name,
+            }),
+          )
+        : nodes,
+    [nodes, favoritesOnly, favorites],
+  );
 
   async function performPendingAction() {
     if (!pendingAction) return;
@@ -358,9 +423,33 @@ export function NodesView() {
           </h1>
           <p className="text-[12px] text-text-secondary">
             {context} · {data?.length ?? 0} node{data?.length === 1 ? "" : "s"}
+            {favoritesOnly &&
+              ` · ${visibleNodes.length} favorited`}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {hasFavoriteNodes && (
+            <button
+              type="button"
+              aria-pressed={favoritesOnly}
+              onClick={() => setFavoritesOnly((v) => !v)}
+              title={
+                favoritesOnly ? "show all nodes" : "show favorites only"
+              }
+              className={cn(
+                "inline-flex h-8 items-center gap-1 rounded-control border px-2.5 text-[11px] font-medium transition-colors",
+                favoritesOnly
+                  ? "border-term-amber/50 bg-term-amber/10 text-term-amber"
+                  : "border-border-default text-text-secondary hover:bg-hover hover:text-text-primary",
+              )}
+            >
+              <Star
+                className={cn("size-3", favoritesOnly && "fill-current")}
+                aria-hidden="true"
+              />
+              favorites
+            </button>
+          )}
           <ColumnPicker
             view="nodes"
             columns={NODE_COLUMNS.map((c) => ({
@@ -401,6 +490,10 @@ export function NodesView() {
               <table className="w-full">
                 <thead>
                   <tr className="bg-shell">
+                    <th
+                      className="text-left px-1 py-2 w-7"
+                      aria-label="favorite"
+                    />
                     {visibleCols.map((c) => (
                       <th
                         key={c.key}
@@ -421,16 +514,26 @@ export function NodesView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {nodes.map((n) => (
-                    <Row
-                      key={n.name}
-                      n={n}
-                      columns={visibleCols}
-                      busy={actionBusyNode === n.name}
-                      readOnly={readOnly}
-                      onAction={setPendingAction}
-                    />
-                  ))}
+                  {visibleNodes.map((n) => {
+                    const ref = {
+                      kind: "node",
+                      namespace: null,
+                      name: n.name,
+                    };
+                    const isFav = favorites.isPinned(ref);
+                    return (
+                      <Row
+                        key={n.name}
+                        n={n}
+                        columns={visibleCols}
+                        busy={actionBusyNode === n.name}
+                        readOnly={readOnly}
+                        favorited={isFav}
+                        onToggleFavorite={() => favorites.toggle(ref)}
+                        onAction={setPendingAction}
+                      />
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
