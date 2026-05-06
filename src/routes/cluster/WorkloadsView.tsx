@@ -1,4 +1,11 @@
-import React, { memo, useCallback, useMemo, useRef, useState } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useFocusSearch } from "@/lib/focusSearch";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueries, useQuery } from "@tanstack/react-query";
@@ -33,8 +40,10 @@ import {
 import { StatusBadge } from "@/components/ui/status-badge";
 import { LumenPage, PageHeader, SectionPanel, ToolbarSurface } from "@/components/lumen/page";
 import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
+import { Star } from "lucide-react";
 import { ColumnPicker } from "@/components/ColumnPicker";
-import { useUiSettings } from "@/state/uiSettings";
+import { applyColumnLayout, useUiSettings } from "@/state/uiSettings";
+import { usePinnedResources } from "@/hooks/usePinnedResources";
 
 // ─── URL slug ↔ WorkloadKind ──────────────────────────────────────────────
 
@@ -538,12 +547,12 @@ const POD_COLUMNS: WorkloadColumn[] = [
   },
 ];
 
-function visibleColumns(
+function laidOutColumns(
   columns: WorkloadColumn[],
+  order: string[],
   hidden: string[],
 ): WorkloadColumn[] {
-  if (hidden.length === 0) return columns;
-  return columns.filter((c) => c.alwaysOn || !hidden.includes(c.key));
+  return applyColumnLayout(columns, order, hidden);
 }
 
 // ─── Generic row (non-pod kinds) ──────────────────────────────────────────
@@ -551,17 +560,26 @@ function visibleColumns(
 const Row = memo(function Row({
   w,
   columns,
+  favorited,
+  onToggleFavorite,
   onClick,
 }: {
   w: WorkloadSummary;
   columns: WorkloadColumn[];
+  favorited: boolean;
+  onToggleFavorite: (w: WorkloadSummary) => void;
   onClick: (w: WorkloadSummary) => void;
 }) {
   return (
-    <DataTableRow className="cursor-pointer" onClick={() => onClick(w)}>
+    <DataTableRow className="group cursor-pointer" onClick={() => onClick(w)}>
       <DataTableCell
         className={cn("w-1 p-0", severityBg(w))}
         aria-hidden="true"
+      />
+      <FavoriteCell
+        w={w}
+        favorited={favorited}
+        onToggle={onToggleFavorite}
       />
       {columns.map((c) => (
         <React.Fragment key={c.key}>{c.cell(w)}</React.Fragment>
@@ -575,17 +593,26 @@ const Row = memo(function Row({
 const PodRow = memo(function PodRow({
   w,
   columns,
+  favorited,
+  onToggleFavorite,
   onClick,
 }: {
   w: WorkloadSummary;
   columns: WorkloadColumn[];
+  favorited: boolean;
+  onToggleFavorite: (w: WorkloadSummary) => void;
   onClick: (w: WorkloadSummary) => void;
 }) {
   return (
-    <DataTableRow className="cursor-pointer" onClick={() => onClick(w)}>
+    <DataTableRow className="group cursor-pointer" onClick={() => onClick(w)}>
       <DataTableCell
         className={cn("w-1 p-0", severityBg(w))}
         aria-hidden="true"
+      />
+      <FavoriteCell
+        w={w}
+        favorited={favorited}
+        onToggle={onToggleFavorite}
       />
       {columns.map((c) => (
         <React.Fragment key={c.key}>{c.cell(w)}</React.Fragment>
@@ -593,6 +620,50 @@ const PodRow = memo(function PodRow({
     </DataTableRow>
   );
 });
+
+// Star cell — left of the row's first user column. Always reserves
+// space (so the column width is stable) but the icon only fades in on
+// row hover when not favorited; favorited rows show the filled star
+// permanently as a status anchor.
+function FavoriteCell({
+  w,
+  favorited,
+  onToggle,
+}: {
+  w: WorkloadSummary;
+  favorited: boolean;
+  onToggle: (w: WorkloadSummary) => void;
+}) {
+  const label = favorited
+    ? `Unfavorite ${w.kind}/${w.name}`
+    : `Favorite ${w.kind}/${w.name}`;
+  return (
+    <DataTableCell className="w-7 px-1">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggle(w);
+        }}
+        aria-label={label}
+        aria-pressed={favorited}
+        title={label}
+        className={cn(
+          "inline-flex size-5 items-center justify-center rounded transition-opacity",
+          favorited
+            ? "text-term-amber opacity-100"
+            : "text-text-muted opacity-0 group-hover:opacity-100 hover:text-term-amber",
+        )}
+      >
+        <Star
+          className={cn("size-3.5", favorited && "fill-current")}
+          aria-hidden="true"
+        />
+      </button>
+    </DataTableCell>
+  );
+}
 
 // Lumen-distinct: tiny chiclet row showing each container as a colored
 // square. More information-dense than Lens's "x/y" string at a glance.
@@ -639,8 +710,8 @@ function SkeletonRows({
   isPodView: boolean;
   columnCount: number;
 }) {
-  // +1 for the leading severity strip column.
-  const total = columnCount + 1;
+  // +1 for the leading severity strip column, +1 for the favorites star.
+  const total = columnCount + 2;
   return (
     <DataTableShell>
       <DataTable className={cn(isPodView && "min-w-[1100px]")}>
@@ -679,18 +750,20 @@ export function WorkloadsView() {
     : null;
   const isPodView = filterKind === "pod";
 
-  // Column visibility — D10. Watching only this view's slot keeps the
-  // store subscription scoped; flipping a checkbox doesn't re-render
-  // anything outside this route.
+  // Column visibility + order — D10 + D10 finish. Watching only this
+  // view's slot keeps the store subscription scoped; flipping a
+  // checkbox doesn't re-render anything outside this route.
   const podHidden = useUiSettings((s) => s.hiddenColumns["workloads-pod"]);
   const otherHidden = useUiSettings((s) => s.hiddenColumns["workloads-other"]);
+  const podOrder = useUiSettings((s) => s.columnOrder["workloads-pod"]);
+  const otherOrder = useUiSettings((s) => s.columnOrder["workloads-other"]);
   const podVisible = useMemo(
-    () => visibleColumns(POD_COLUMNS, podHidden),
-    [podHidden],
+    () => laidOutColumns(POD_COLUMNS, podOrder, podHidden),
+    [podOrder, podHidden],
   );
   const otherVisible = useMemo(
-    () => visibleColumns(OTHER_COLUMNS, otherHidden),
-    [otherHidden],
+    () => laidOutColumns(OTHER_COLUMNS, otherOrder, otherHidden),
+    [otherOrder, otherHidden],
   );
 
   const kindsToFetch = filterKind ? [filterKind] : ALL_KINDS;
@@ -766,6 +839,27 @@ export function WorkloadsView() {
     return merged;
   }, [queries]);
 
+  // Per-resource favorites — D10 finish. Reuses the existing pinned-
+  // resources store: favorites and pins are conceptually the same
+  // ("things I want one click away"), and reusing means the cluster
+  // sidebar's Pinned section gets the new starred rows for free.
+  const favorites = usePinnedResources(context);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const hasFavoritesInView = useMemo(() => {
+    return items.some((w) =>
+      favorites.isPinned({
+        kind: w.kind,
+        namespace: w.namespace,
+        name: w.name,
+      }),
+    );
+  }, [items, favorites]);
+  // If the user filters to favorites and then unstars the last one in
+  // view, drop the filter so they don't see a permanently empty table.
+  useEffect(() => {
+    if (favoritesOnly && !hasFavoritesInView) setFavoritesOnly(false);
+  }, [favoritesOnly, hasFavoritesInView]);
+
   // Lumen-distinct filter DSL — typed tokens AND-combine. Supported:
   //   status:running        → match pod_phase exactly
   //   ns:dev                → match namespace (substring)
@@ -778,15 +872,28 @@ export function WorkloadsView() {
   // Plain text remains backward-compatible — typing "order-svc" still works.
   const filteredItems = useMemo(() => {
     const tokens = parseFilterTokens(search);
-    if (tokens.length === 0 && quickFilters.size === 0) return items;
+    if (
+      tokens.length === 0 &&
+      quickFilters.size === 0 &&
+      !favoritesOnly
+    ) {
+      return items;
+    }
     return items.filter(
       (w) =>
         tokens.every((t) => matchToken(w, t)) &&
-        matchQuickFilters(w, quickFilters),
+        matchQuickFilters(w, quickFilters) &&
+        (!favoritesOnly ||
+          favorites.isPinned({
+            kind: w.kind,
+            namespace: w.namespace,
+            name: w.name,
+          })),
     );
-  }, [items, search, quickFilters]);
+  }, [items, search, quickFilters, favoritesOnly, favorites]);
 
-  const hasFilters = search.trim().length > 0 || quickFilters.size > 0;
+  const hasFilters =
+    search.trim().length > 0 || quickFilters.size > 0 || favoritesOnly;
   const explorerStats = useMemo(() => {
     const pods = items.filter((w) => w.kind === "pod");
     const failed = items.filter((w) => w.health === "failed" || w.pod_phase === "Failed").length;
@@ -814,6 +921,7 @@ export function WorkloadsView() {
   function clearFilters() {
     setSearch("");
     setQuickFilters(new Set());
+    setFavoritesOnly(false);
   }
 
   function selectKind(kind: WorkloadKind | null) {
@@ -975,6 +1083,28 @@ export function WorkloadsView() {
                     </button>
                   );
                 })}
+                {hasFavoritesInView && (
+                  <button
+                    type="button"
+                    aria-pressed={favoritesOnly}
+                    onClick={() => setFavoritesOnly((v) => !v)}
+                    className={cn(
+                      "inline-flex h-8 items-center gap-1 rounded-control border px-2.5 text-[11px] font-medium transition-colors",
+                      favoritesOnly
+                        ? "border-term-amber/50 bg-term-amber/10 text-term-amber"
+                        : "border-border-default text-text-secondary hover:bg-hover hover:text-text-primary",
+                    )}
+                  >
+                    <Star
+                      className={cn(
+                        "size-3",
+                        favoritesOnly && "fill-current",
+                      )}
+                      aria-hidden="true"
+                    />
+                    favorites
+                  </button>
+                )}
                 {hasFilters && (
                   <button
                     type="button"
@@ -1026,18 +1156,28 @@ export function WorkloadsView() {
                   <DataTableHeader>
                     <DataTableRow>
                       <Th />
+                      <Th />
                       {(isPodView ? podVisible : otherVisible).map((c) => (
                         <Th key={c.key}>{c.label}</Th>
                       ))}
                     </DataTableRow>
                   </DataTableHeader>
                   <DataTableBody>
-                    {filteredItems.map((w) =>
-                      isPodView || w.kind === "pod" ? (
+                    {filteredItems.map((w) => {
+                      const ref = {
+                        kind: w.kind,
+                        namespace: w.namespace,
+                        name: w.name,
+                      };
+                      const isFav = favorites.isPinned(ref);
+                      const onToggleFav = () => favorites.toggle(ref);
+                      return isPodView || w.kind === "pod" ? (
                         <PodRow
                           key={`${w.kind}/${w.namespace}/${w.name}`}
                           w={w}
                           columns={podVisible}
+                          favorited={isFav}
+                          onToggleFavorite={onToggleFav}
                           onClick={openResource}
                         />
                       ) : (
@@ -1045,10 +1185,12 @@ export function WorkloadsView() {
                           key={`${w.kind}/${w.namespace}/${w.name}`}
                           w={w}
                           columns={otherVisible}
+                          favorited={isFav}
+                          onToggleFavorite={onToggleFav}
                           onClick={openResource}
                         />
-                      ),
-                    )}
+                      );
+                    })}
                   </DataTableBody>
                 </DataTable>
               </DataTableShell>
