@@ -617,6 +617,79 @@ export type ArgoSyncOptions = {
   resources?: ArgoResourceRef[];
 };
 
+// ─── ArgoCD ApplicationSet + AppProject ───────────────────────────────────
+//
+// Both CRDs ship with the standard ArgoCD install. ApplicationSet is the
+// templated-Application generator; AppProject is the project boundary.
+// Read-only surfaces in v1 — sync, CRUD, role editing are clean follow-ups.
+
+export type ArgoApplicationSetSummary = {
+  name: string;
+  namespace: string;
+  /** First key under .spec.generators[0]: list / git / cluster / matrix / merge / ... */
+  generator_kind: string | null;
+  /** .spec.template.metadata.name — usually a templated string. */
+  template_app_name_pattern: string | null;
+  /** Number of Applications materialized, from .status.applicationStatus[]. */
+  generated_count: number;
+  age_seconds: number;
+};
+
+export type ArgoGeneratedApplicationRef = {
+  name: string;
+  namespace: string;
+  /** Resolved from the matching Application CR; "Unknown" if not found. */
+  sync_status: string;
+  health_status: string;
+};
+
+export type ArgoApplicationSetDetail = {
+  summary: ArgoApplicationSetSummary;
+  /** Pretty-printed JSON-as-YAML of .spec.generators (empty if absent). */
+  generators_yaml: string;
+  /** Pretty-printed JSON-as-YAML of .spec.template (empty if absent). */
+  template_yaml: string;
+  generated_apps: ArgoGeneratedApplicationRef[];
+};
+
+export type ArgoAppProjectSummary = {
+  name: string;
+  /** The CR's metadata.namespace — usually `argocd`. */
+  namespace: string;
+  description: string;
+  source_repos_count: number;
+  destinations_count: number;
+  cluster_resource_whitelist_count: number;
+  namespace_resource_whitelist_count: number;
+  age_seconds: number;
+};
+
+export type ArgoAppProjectDestination = {
+  server: string;
+  namespace: string;
+};
+
+export type ArgoAppProjectResourceRule = {
+  group: string;
+  kind: string;
+};
+
+export type ArgoAppProjectRole = {
+  name: string;
+  description: string;
+  /** Raw Casbin policy lines, one per entry. */
+  policies: string[];
+};
+
+export type ArgoAppProjectDetail = {
+  summary: ArgoAppProjectSummary;
+  source_repos: string[];
+  destinations: ArgoAppProjectDestination[];
+  cluster_resource_whitelist: ArgoAppProjectResourceRule[];
+  namespace_resource_whitelist: ArgoAppProjectResourceRule[];
+  roles: ArgoAppProjectRole[];
+};
+
 // ─── Tekton ───────────────────────────────────────────────────────────────
 //
 // Mirrors src-tauri/src/k8s/tekton.rs. Read-mostly surface plus a
@@ -1070,6 +1143,39 @@ export const k8s = {
       namespace,
       name,
       hard,
+    }),
+  /** Cheap probe — true when the cluster has the ApplicationSet CRD.
+   *  Usually redundant with `detectArgocd` since the CRD ships in the
+   *  same install; exposed so tabs can be hidden cleanly when a custom
+   *  install strips it out. */
+  detectArgocdApplicationSets: (context?: string) =>
+    invoke<boolean>("detect_argocd_application_sets", { context }),
+  listArgocdApplicationSets: (context?: string, namespace?: string) =>
+    invoke<ArgoApplicationSetSummary[]>("list_argocd_application_sets", {
+      context,
+      namespace,
+    }),
+  getArgocdApplicationSet: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+  ) =>
+    invoke<ArgoApplicationSetDetail>("get_argocd_application_set", {
+      context,
+      namespace,
+      name,
+    }),
+  listArgocdAppProjects: (context?: string) =>
+    invoke<ArgoAppProjectSummary[]>("list_argocd_app_projects", { context }),
+  getArgocdAppProject: (
+    context: string | undefined,
+    namespace: string,
+    name: string,
+  ) =>
+    invoke<ArgoAppProjectDetail>("get_argocd_app_project", {
+      context,
+      namespace,
+      name,
     }),
   // ── Tekton ────────────────────────────────────────────────────────────
   /** Cheap probe — true when the cluster registers the PipelineRun CRD

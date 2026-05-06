@@ -1,6 +1,6 @@
 {
   "routeInlineStyles": [
-    "src/routes/cluster/ArgocdView.tsx:617",
+    "src/routes/cluster/ArgocdView.tsx:725",
     "src/routes/cluster/CloudMap.tsx:731",
     "src/routes/cluster/CloudMap.tsx:811",
     "src/routes/cluster/CloudMap.tsx:1030",

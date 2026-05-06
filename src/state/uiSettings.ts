@@ -37,10 +37,18 @@ export const UI_SETTINGS_STORAGE_KEY = "lumen:ui-settings";
  *
  *   • `argocdResourceView` — how the ArgoCD Application detail panel
  *                      renders managed resources: a flat alphabetical
- *                      list ("list") or kind-grouped collapsible
- *                      sections ("tree"). Defaults to "tree" — closer
- *                      to ArgoCD's native topology view, which is the
- *                      thing users still leave Lumen for.
+ *                      list ("list"), kind-grouped collapsible sections
+ *                      ("tree"), or owner-ref topology built from
+ *                      per-resource K8s round-trips ("topology").
+ *                      Defaults to "tree" — closer to ArgoCD's native
+ *                      kind-grouped view, which is the thing users
+ *                      still leave Lumen for.
+ *
+ *   • `argocdTreeCollapsed` — kind keys the user has collapsed in the
+ *                      kind-grouped tree view. Persisted globally (not
+ *                      per-app) so a workflow like "always hide
+ *                      ConfigMaps" sticks across app switches. Default
+ *                      = empty (every section expanded).
  *
  *   • `argocdDetailPanelWidth` — width in pixels of the ArgoCD detail
  *                      panel (right side of the master/detail split).
@@ -51,7 +59,7 @@ export const UI_SETTINGS_STORAGE_KEY = "lumen:ui-settings";
 
 export type ColumnView = "workloads-pod" | "workloads-other" | "nodes";
 
-export type ArgocdResourceView = "list" | "tree";
+export type ArgocdResourceView = "list" | "tree" | "topology";
 
 export type UiSettings = {
   readOnly: boolean;
@@ -65,6 +73,8 @@ export type UiSettings = {
   argocdResourceView: ArgocdResourceView;
   /** ArgoCD Application detail: width of the right-side detail panel in pixels. */
   argocdDetailPanelWidth: number;
+  /** Kind keys collapsed in the kind-grouped tree view. */
+  argocdTreeCollapsed: string[];
 };
 
 export const ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT = 460;
@@ -92,6 +102,7 @@ function defaults(): UiSettings {
     shortcuts: {},
     argocdResourceView: "tree",
     argocdDetailPanelWidth: ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
+    argocdTreeCollapsed: [],
   };
 }
 
@@ -152,12 +163,18 @@ function readPersisted(): UiSettings {
           : {},
       argocdResourceView:
         parsed.argocdResourceView === "list" ||
-        parsed.argocdResourceView === "tree"
+        parsed.argocdResourceView === "tree" ||
+        parsed.argocdResourceView === "topology"
           ? parsed.argocdResourceView
           : "tree",
       argocdDetailPanelWidth: normalizeDetailPanelWidth(
         parsed.argocdDetailPanelWidth,
       ),
+      argocdTreeCollapsed: Array.isArray(parsed.argocdTreeCollapsed)
+        ? parsed.argocdTreeCollapsed.filter(
+            (x): x is string => typeof x === "string",
+          )
+        : [],
     };
   } catch {
     return defaults();
@@ -200,6 +217,8 @@ type Store = UiSettings & {
   resetShortcuts: () => void;
   setArgocdResourceView: (next: ArgocdResourceView) => void;
   setArgocdDetailPanelWidth: (next: number) => void;
+  toggleArgocdTreeKind: (kind: string) => void;
+  resetArgocdTreeCollapsed: () => void;
 };
 
 export const useUiSettings = create<Store>((set, get) => {
@@ -301,6 +320,20 @@ export const useUiSettings = create<Store>((set, get) => {
       const snapshot = { ...get(), argocdDetailPanelWidth: normalized };
       writePersisted(snapshot);
       set({ argocdDetailPanelWidth: normalized });
+    },
+    toggleArgocdTreeKind: (kind) => {
+      const current = get().argocdTreeCollapsed;
+      const nextList = current.includes(kind)
+        ? current.filter((k) => k !== kind)
+        : [...current, kind];
+      const snapshot = { ...get(), argocdTreeCollapsed: nextList };
+      writePersisted(snapshot);
+      set({ argocdTreeCollapsed: nextList });
+    },
+    resetArgocdTreeCollapsed: () => {
+      const snapshot = { ...get(), argocdTreeCollapsed: [] };
+      writePersisted(snapshot);
+      set({ argocdTreeCollapsed: [] });
     },
   };
 });

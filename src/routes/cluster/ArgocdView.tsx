@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -17,6 +17,7 @@ import {
   ExternalLink,
   GitBranch,
   History as HistoryIcon,
+  Layers,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -33,8 +34,11 @@ import {
   k8s,
   type ArgoApplicationResource,
   type ArgoApplicationSummary,
+  type ArgoApplicationSetSummary,
+  type ArgoAppProjectSummary,
   type ArgoHistoryEntry,
   type ArgoSyncOptions,
+  type WorkloadKind,
 } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -57,6 +61,12 @@ import {
   useUiSettings,
 } from "@/state/uiSettings";
 import { groupResourcesByKind } from "./argocdResourceTree";
+import {
+  buildOwnerTree,
+  flattenTree,
+  type OwnerFact,
+  type ResourceWithOwner,
+} from "./argocdOwnerTree";
 
 /** Upper bound on the detail panel width as a fraction of the viewport. */
 const DETAIL_PANEL_MAX_VW_FRACTION = 0.75;
@@ -131,9 +141,107 @@ const HEALTH_STATUSES = [
 type SyncStatus = (typeof SYNC_STATUSES)[number];
 type HealthStatus = (typeof HEALTH_STATUSES)[number];
 
+/**
+ * Top-level tab identity for the ArgocdView. Persisted in the URL search
+ * param `tab` so a deep-link / refresh / back-button restores the user's
+ * last-viewed tab. Defaults to "applications" for backwards compatibility
+ * with the original (untabbed) view.
+ */
+type ArgocdTab = "applications" | "applicationsets" | "appprojects";
+
+const ARGOCD_TABS: ReadonlyArray<{ id: ArgocdTab; label: string }> = [
+  { id: "applications", label: "Applications" },
+  { id: "applicationsets", label: "ApplicationSets" },
+  { id: "appprojects", label: "AppProjects" },
+];
+
+function parseTab(value: string | null): ArgocdTab {
+  if (value === "applicationsets" || value === "appprojects") return value;
+  return "applications";
+}
+
 export function ArgocdView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = parseTab(searchParams.get("tab"));
+
+  function setTab(next: ArgocdTab): void {
+    const params = new URLSearchParams(searchParams);
+    if (next === "applications") {
+      params.delete("tab");
+    } else {
+      params.set("tab", next);
+    }
+    // Drop sub-selections when changing tab so the new view starts fresh
+    // (an `app=...` selection from the Applications tab is meaningless on
+    // the AppProjects tab).
+    params.delete("app");
+    params.delete("appset");
+    params.delete("project");
+    setSearchParams(params, { replace: true });
+  }
+
+  return (
+    <LumenPage>
+      <ArgocdTabStrip active={tab} onChange={setTab} />
+      {tab === "applications" && <ApplicationsTab context={context} />}
+      {tab === "applicationsets" && <ApplicationSetsTab context={context} />}
+      {tab === "appprojects" && <AppProjectsTab context={context} />}
+    </LumenPage>
+  );
+}
+
+/**
+ * Top-of-page tab strip. Three buttons, ARIA-tab semantics, current tab
+ * highlighted with the same accent treatment as ViewModeToggle so the
+ * page reads as one cohesive surface.
+ */
+function ArgocdTabStrip({
+  active,
+  onChange,
+}: {
+  active: ArgocdTab;
+  onChange: (next: ArgocdTab) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="argocd resource type"
+      className="-mt-2 mb-1 flex items-center gap-1 border-b border-border-subtle"
+    >
+      {ARGOCD_TABS.map((t) => {
+        const isActive = active === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onChange(t.id)}
+            className={cn(
+              "relative -mb-px px-3 py-2 text-[12px] transition-colors",
+              isActive
+                ? "border-b-2 border-accent-primary text-text-primary"
+                : "border-b-2 border-transparent text-text-muted hover:text-text-primary",
+            )}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The original Applications view, factored out of the component that's
+ * now the routing entry point. Behavior is unchanged — same filter
+ * strip, master/detail split, polling cadence, and per-resource CTAs.
+ * The only difference vs PR #42's shape is that this component owns
+ * its own LumenPage children rather than the page wrapper itself.
+ */
+function ApplicationsTab({ context }: { context: string }) {
   const qc = useQueryClient();
   const readOnly = useUiSettings((s) => s.readOnly);
 
@@ -221,7 +329,7 @@ export function ArgocdView() {
     (filter.trim() ? 1 : 0);
 
   return (
-    <LumenPage>
+    <>
       <PageHeader
         eyebrow="argocd"
         title="Applications"
@@ -421,7 +529,7 @@ export function ArgocdView() {
           }
         />
       )}
-    </LumenPage>
+    </>
   );
 }
 
@@ -926,6 +1034,7 @@ function ApplicationDetailPanel({
       )}
 
       <ManagedResourcesSection
+        context={context}
         loading={detail.isLoading}
         resources={detail.data?.resources}
         inCluster={inCluster}
@@ -1495,6 +1604,7 @@ function toDrawerResource(r: ArgoApplicationResource): {
  * returns (`ApplicationDetail.resources`).
  */
 function ManagedResourcesSection({
+  context,
   loading,
   resources,
   inCluster,
@@ -1506,6 +1616,7 @@ function ManagedResourcesSection({
   onFilterChange,
   searchInputRef,
 }: {
+  context: string;
   loading: boolean;
   resources: ArgoApplicationResource[] | undefined;
   inCluster: boolean;
@@ -1560,10 +1671,28 @@ function ManagedResourcesSection({
           totalCount={resources.length}
         />
         <span className="shrink-0">
-          <ViewModeToggle value={view} onChange={setView} />
+          <ViewModeToggle
+            value={view}
+            onChange={setView}
+            // Topology fetches K8s objects per resource; only meaningful
+            // for in-cluster destinations. Disable the topology button
+            // when the destination is external rather than letting the
+            // user pick a mode that will silently render as a flat list.
+            topologyEnabled={inCluster}
+          />
         </span>
       </div>
-      {view === "tree" ? (
+      {view === "topology" && inCluster ? (
+        <ResourceTopology
+          context={context}
+          resources={resources}
+          inCluster={inCluster}
+          readOnly={readOnly}
+          syncBusyKey={syncBusyKey}
+          onOpen={onOpen}
+          onSync={onSync}
+        />
+      ) : view === "tree" ? (
         <ResourceTree
           resources={resources}
           filterText={trimmed}
@@ -1669,37 +1798,57 @@ function ResourceSearchInput({
 }
 
 /**
- * View-mode toggle. Two-state segmented control rendered inline in the
- * managed-resources header. Persists via uiSettings.
+ * View-mode toggle. Three-state segmented control rendered inline in the
+ * managed-resources header. Persists via uiSettings. The topology
+ * option is gated on the destination being in-cluster — for external
+ * destinations there's no Lumen K8s API to fetch owner refs from, so
+ * we render the button disabled with a hint.
  */
 function ViewModeToggle({
   value,
   onChange,
+  topologyEnabled,
 }: {
   value: ArgocdResourceView;
   onChange: (next: ArgocdResourceView) => void;
+  topologyEnabled: boolean;
 }) {
+  const titleFor = (mode: ArgocdResourceView): string => {
+    if (mode === "tree") return "group by Kind";
+    if (mode === "topology") {
+      return topologyEnabled
+        ? "owner-ref topology (Deployment → ReplicaSet → Pod)"
+        : "topology requires an in-cluster destination";
+    }
+    return "flat list";
+  };
   return (
     <div
       className="inline-flex overflow-hidden rounded border border-border-default bg-surface text-text-secondary"
       role="tablist"
       aria-label="managed resources view"
     >
-      {(["list", "tree"] as const).map((mode) => {
+      {(["list", "tree", "topology"] as const).map((mode) => {
         const active = value === mode;
+        const disabled = mode === "topology" && !topologyEnabled;
         return (
           <button
             key={mode}
             type="button"
             role="tab"
             aria-selected={active}
-            onClick={() => onChange(mode)}
-            title={mode === "tree" ? "group by Kind" : "flat list"}
+            onClick={() => {
+              if (disabled) return;
+              onChange(mode);
+            }}
+            disabled={disabled}
+            title={titleFor(mode)}
             className={cn(
               "px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-normal transition-colors",
               active
                 ? "bg-accent-primary-soft text-accent-primary"
                 : "hover:bg-hover",
+              disabled && "cursor-not-allowed opacity-40 hover:bg-transparent",
             )}
           >
             {mode}
@@ -1801,16 +1950,12 @@ function ResourceTree({
   onSync: (r: ArgoApplicationResource) => void;
 }) {
   const groups = useMemo(() => groupResourcesByKind(resources), [resources]);
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-
-  function toggle(kind: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(kind)) next.delete(kind);
-      else next.add(kind);
-      return next;
-    });
-  }
+  // Persisted globally via uiSettings so a workflow like "always hide
+  // ConfigMaps" sticks across app switches and across cluster
+  // workspaces. Falls back to "everything expanded" on first run.
+  const collapsedList = useUiSettings((s) => s.argocdTreeCollapsed);
+  const toggle = useUiSettings((s) => s.toggleArgocdTreeKind);
+  const collapsed = useMemo(() => new Set(collapsedList), [collapsedList]);
 
   const hasFilter = filterText.length > 0;
   const filteredGroups = useMemo(() => {
@@ -1900,6 +2045,145 @@ function ResourceTree({
 }
 
 /**
+ * Owner-reference topology view.
+ *
+ * For each managed resource that's in-cluster we issue a parallel
+ * `k8s.getResource` query (cached for 30s via React Query). The result
+ * gives us `metadata.ownerReferences` from which we build a real
+ * Deployment → ReplicaSet → Pod tree. Resources whose K8s objects
+ * Lumen doesn't know about (cluster-scoped CRDs, kinds not in the
+ * WorkloadKind enum, RBAC failures) gracefully degrade to roots —
+ * they show up at the top level alongside everything else.
+ *
+ * UX:
+ *  • Loading shows a "loading topology…" line with X / Y progress.
+ *  • Once enough has arrived to draw, we render incrementally — every
+ *    resource shows up immediately as a root and re-parents itself
+ *    when its owner-fetch resolves. This keeps the panel useful even
+ *    on apps with hundreds of pods.
+ *  • Same ResourceRow leaf as the kind-grouped tree, with depth-based
+ *    indent and chevron-collapse markers. Collapse state is local to
+ *    this render — the user is exploring topology, not curating a
+ *    persistent shape.
+ */
+function ResourceTopology({
+  context,
+  resources,
+  inCluster,
+  readOnly,
+  syncBusyKey,
+  onOpen,
+  onSync,
+}: {
+  context: string;
+  resources: ArgoApplicationResource[];
+  inCluster: boolean;
+  readOnly: boolean;
+  syncBusyKey: string | null;
+  onOpen: (r: ArgoApplicationResource) => void;
+  onSync: (r: ArgoApplicationResource) => void;
+}) {
+  // Stable key per resource → React Query cache hit on re-renders.
+  const queries = useQueries({
+    queries: resources.map((r) => {
+      const lumenKind = argocdKindToLumenKind(r.kind) as WorkloadKind;
+      const namespace = r.namespace ?? "";
+      return {
+        queryKey: [
+          "argocd-topology",
+          context,
+          lumenKind,
+          namespace,
+          r.name,
+        ] as const,
+        queryFn: () =>
+          k8s.getResource(namespace, lumenKind, r.name, context || undefined),
+        staleTime: 30_000,
+        // Topology fetches are best-effort enrichment — failures map
+        // to a root-level node, not an error toast. retry=false avoids
+        // spending tokens on cluster-scoped CRDs Lumen doesn't model.
+        retry: false,
+      };
+    }),
+  });
+
+  const loadedCount = queries.filter((q) => !q.isPending).length;
+  const totalCount = resources.length;
+
+  // Build the (resource → owner-fact) list, then the tree. We pass
+  // `undefined` for resources whose query is still pending so the
+  // builder treats them as roots until the fetch resolves — that's
+  // what keeps the view incremental.
+  const treeInput: ResourceWithOwner[] = useMemo(() => {
+    return resources.map((resource, i) => {
+      const q = queries[i];
+      if (q.isPending) return { resource, owner: undefined };
+      if (q.isError || !q.data) return { resource, owner: undefined };
+      const refs = q.data.owner_refs ?? [];
+      const first = refs[0];
+      const owner: OwnerFact | null = first
+        ? { kind: first.kind, name: first.name }
+        : null;
+      return { resource, owner };
+    });
+    // queries change identity each render but their .data / .isPending
+    // are stable — we'd over-rebuild without depending on the loaded
+    // count + identity of each resource. eslint-disable-next-line is
+    // intentional; the value-shape change is what we care about.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resources, loadedCount, totalCount]);
+
+  const tree = useMemo(() => buildOwnerTree(treeInput), [treeInput]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const rows = useMemo(() => flattenTree(tree, collapsed), [tree, collapsed]);
+
+  function toggleCollapsed(key: string): void {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  return (
+    <div>
+      {loadedCount < totalCount && (
+        <div className="mb-1 flex items-center gap-2 text-[10px] text-text-muted">
+          <Loader2 className="size-3 animate-spin" />
+          <span>
+            loading topology… {loadedCount} / {totalCount}
+          </span>
+        </div>
+      )}
+      <ul className="max-h-72 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
+        {rows.map((row) => {
+          const isCollapsed = collapsed.has(row.key);
+          const syncBusy = syncBusyKey === resourceKey(row.resource);
+          return (
+            <ResourceRow
+              key={row.key}
+              resource={row.resource}
+              inCluster={inCluster}
+              readOnly={readOnly}
+              syncBusy={syncBusy}
+              onOpen={() => onOpen(row.resource)}
+              onSync={() => onSync(row.resource)}
+              indentLevel={row.depth}
+              expandable={
+                row.hasChildren
+                  ? { collapsed: isCollapsed, onToggle: () => toggleCollapsed(row.key) }
+                  : undefined
+              }
+            />
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * One managed-resource row. Click → opens the Lumen drawer. Hover →
  * exposes a per-resource Sync button. Lockable by readOnly.
  */
@@ -1911,6 +2195,8 @@ function ResourceRow({
   onOpen,
   onSync,
   hideKind = false,
+  indentLevel,
+  expandable,
 }: {
   resource: ArgoApplicationResource;
   inCluster: boolean;
@@ -1924,20 +2210,46 @@ function ResourceRow({
    * twice.
    */
   hideKind?: boolean;
+  /** Topology view: depth in the owner tree (0 = root). */
+  indentLevel?: number;
+  /** Topology view: chevron-collapse marker for nodes with children. */
+  expandable?: { collapsed: boolean; onToggle: () => void };
 }) {
   const lockedTitle = readOnly ? " (read-only mode)" : "";
   const openLabel = inCluster
     ? `open ${resource.kind}/${resource.name} in drawer`
     : `external destination — drawer is only available for in-cluster resources`;
+  const indentPx = indentLevel ? indentLevel * 12 : 0;
   return (
     <li
       className={cn(
         "group relative flex items-center gap-2 rounded px-1 py-0.5 transition-colors",
         inCluster ? "cursor-pointer hover:bg-elevated" : "opacity-90",
       )}
+      style={indentPx > 0 ? { paddingLeft: indentPx + 4 } : undefined}
       onClick={inCluster ? onOpen : undefined}
       title={openLabel}
     >
+      {expandable ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            expandable.onToggle();
+          }}
+          aria-label={expandable.collapsed ? "expand subtree" : "collapse subtree"}
+          className="-ml-1 inline-flex shrink-0 items-center text-text-muted hover:text-text-primary"
+        >
+          {expandable.collapsed ? (
+            <ChevronRight className="size-3" aria-hidden="true" />
+          ) : (
+            <ChevronDown className="size-3" aria-hidden="true" />
+          )}
+        </button>
+      ) : indentLevel !== undefined ? (
+        // Spacer so leaf rows align with their expandable siblings.
+        <span className="inline-block size-3 shrink-0" aria-hidden="true" />
+      ) : null}
       <ResourceDot sync={resource.sync_status} health={resource.health_status} />
       {!hideKind && <span className="text-text-muted">{resource.kind}</span>}
       <span className="text-text-primary">{resource.name}</span>
@@ -2134,5 +2446,692 @@ function Th({ children }: { children: React.ReactNode }) {
     <DataTableHead className="whitespace-nowrap text-[10px]">
       {children}
     </DataTableHead>
+  );
+}
+
+// ─── ApplicationSets tab ──────────────────────────────────────────────────
+//
+// Mirrors the Applications tab structure (filter strip, master/detail
+// split) but pared down — no sync/refresh/rollback CTAs. v1 is read-only
+// while we figure out which AppSet mutations are safe to expose without
+// a confirm dialog (template patches are scary).
+
+function ApplicationSetsTab({ context }: { context: string }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedKey = searchParams.get("appset") ?? null;
+  const [filter, setFilter] = useState("");
+
+  const list = useQuery({
+    queryKey: ["argocd", "appsets", context],
+    queryFn: () => k8s.listArgocdApplicationSets(context || undefined),
+    staleTime: 5_000,
+    refetchInterval: 30_000,
+  });
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const data = list.data ?? [];
+    if (!q) return data;
+    return data.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.namespace.toLowerCase().includes(q) ||
+        (s.generator_kind ?? "").toLowerCase().includes(q),
+    );
+  }, [list.data, filter]);
+
+  const selected = useMemo(() => {
+    if (!selectedKey) return null;
+    return (list.data ?? []).find(
+      (s) => `${s.namespace}/${s.name}` === selectedKey,
+    );
+  }, [list.data, selectedKey]);
+
+  function selectAppSet(s: ArgoApplicationSetSummary | null): void {
+    const next = new URLSearchParams(searchParams);
+    if (s) next.set("appset", `${s.namespace}/${s.name}`);
+    else next.delete("appset");
+    setSearchParams(next, { replace: true });
+  }
+
+  function jumpToApplication(namespace: string, name: string): void {
+    const next = new URLSearchParams(searchParams);
+    next.delete("tab");
+    next.delete("appset");
+    next.set("app", `${namespace}/${name}`);
+    setSearchParams(next, { replace: true });
+  }
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="argocd"
+        title="ApplicationSets"
+        description="Templated Application generators. List/git/cluster/matrix generators expand into a fleet of Applications visible on the Applications tab."
+        icon={<Layers className="size-4" />}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => list.refetch()}
+            disabled={list.isFetching}
+          >
+            <RefreshCw
+              className={cn("size-3.5", list.isFetching && "animate-spin")}
+            />
+            refresh list
+          </Button>
+        }
+      />
+
+      <SectionPanel className="py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="filter by name / namespace / generator"
+            className="h-8 w-72"
+          />
+          <span className="ml-auto text-[11px] text-text-muted tabular-nums">
+            {filtered.length} of {list.data?.length ?? 0}
+          </span>
+        </div>
+      </SectionPanel>
+
+      {list.error ? (
+        <SectionPanel className="border border-danger/30 bg-[var(--status-error-soft)]">
+          <p className="text-[12px] text-danger">
+            {(list.error as Error).message ?? "failed to fetch ApplicationSets"}
+          </p>
+        </SectionPanel>
+      ) : list.isLoading ? (
+        <SectionPanel>
+          <div className="flex items-center gap-2 text-[12px] text-text-muted">
+            <Loader2 className="size-3.5 animate-spin" /> loading ApplicationSets…
+          </div>
+        </SectionPanel>
+      ) : (list.data ?? []).length === 0 ? (
+        <SectionPanel>
+          <p className="text-[12px] text-text-muted">
+            No ApplicationSets found. The CRD ships with the standard ArgoCD
+            install but is unused on this cluster — Applications are
+            either hand-crafted or templated by something else.
+          </p>
+        </SectionPanel>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
+          <SectionPanel className="overflow-hidden p-0">
+            <DataTableShell>
+              <DataTable>
+                <DataTableHeader>
+                  <DataTableRow>
+                    <Th>name</Th>
+                    <Th>namespace</Th>
+                    <Th>generator</Th>
+                    <Th>generated</Th>
+                  </DataTableRow>
+                </DataTableHeader>
+                <DataTableBody>
+                  {filtered.map((s) => {
+                    const key = `${s.namespace}/${s.name}`;
+                    const active = selectedKey === key;
+                    return (
+                      <DataTableRow
+                        key={key}
+                        onClick={() => selectAppSet(s)}
+                        className={cn(
+                          "cursor-pointer",
+                          active && "bg-accent-primary-soft",
+                        )}
+                      >
+                        <DataTableCell className="px-4">
+                          <span className="text-[13px] font-medium text-text-primary">
+                            {s.name}
+                          </span>
+                        </DataTableCell>
+                        <DataTableCell mono className="text-[11px]">
+                          {s.namespace}
+                        </DataTableCell>
+                        <DataTableCell>
+                          <GeneratorPill kind={s.generator_kind} />
+                        </DataTableCell>
+                        <DataTableCell mono className="text-[11px] tabular-nums">
+                          {s.generated_count}
+                        </DataTableCell>
+                      </DataTableRow>
+                    );
+                  })}
+                </DataTableBody>
+              </DataTable>
+            </DataTableShell>
+            {filtered.length === 0 && (
+              <p className="px-4 py-3 text-[11px] text-text-muted">
+                No ApplicationSets match the current filter.
+              </p>
+            )}
+          </SectionPanel>
+
+          {selected ? (
+            <ApplicationSetDetailPanel
+              context={context}
+              appSet={selected}
+              onClose={() => selectAppSet(null)}
+              onJumpToApplication={jumpToApplication}
+            />
+          ) : (
+            <SectionPanel>
+              <p className="text-[12px] text-text-muted">
+                Select an ApplicationSet to view its generator spec, template,
+                and the Applications it currently materializes.
+              </p>
+            </SectionPanel>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function GeneratorPill({ kind }: { kind: string | null }) {
+  if (!kind) {
+    return (
+      <span className="inline-flex rounded border border-border-default bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+        none
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex rounded border border-info/40 bg-info-soft px-1.5 py-0.5 font-mono text-[10px] text-info">
+      {kind}
+    </span>
+  );
+}
+
+function ApplicationSetDetailPanel({
+  context,
+  appSet,
+  onClose,
+  onJumpToApplication,
+}: {
+  context: string;
+  appSet: ArgoApplicationSetSummary;
+  onClose: () => void;
+  onJumpToApplication: (namespace: string, name: string) => void;
+}) {
+  const detail = useQuery({
+    queryKey: [
+      "argocd",
+      "appset",
+      context,
+      appSet.namespace,
+      appSet.name,
+    ] as const,
+    queryFn: () =>
+      k8s.getArgocdApplicationSet(
+        context || undefined,
+        appSet.namespace,
+        appSet.name,
+      ),
+    staleTime: 1_000,
+    refetchInterval: 15_000,
+  });
+
+  return (
+    <SectionPanel className="self-start">
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="mds-heading text-[14px] text-text-primary truncate">
+            {appSet.name}
+          </h2>
+          <p className="font-mono text-[11px] text-text-muted">
+            {appSet.namespace}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+          aria-label="close"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <GeneratorPill kind={appSet.generator_kind} />
+        <span className="rounded border border-border-default bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+          {appSet.generated_count} apps
+        </span>
+      </div>
+
+      {appSet.template_app_name_pattern && (
+        <div className="mb-3 text-[11px]">
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
+            template app name
+          </div>
+          <code className="block break-all rounded border border-border-subtle bg-elevated px-2 py-1 font-mono text-[11px] text-text-primary">
+            {appSet.template_app_name_pattern}
+          </code>
+        </div>
+      )}
+
+      {detail.isLoading ? (
+        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+          <Loader2 className="size-3 animate-spin" /> loading detail…
+        </div>
+      ) : detail.error ? (
+        <p className="text-[11px] text-danger">
+          {(detail.error as Error).message ?? "failed to fetch detail"}
+        </p>
+      ) : detail.data ? (
+        <>
+          {detail.data.generators_yaml && (
+            <YamlBlock label="generators" yaml={detail.data.generators_yaml} />
+          )}
+          {detail.data.template_yaml && (
+            <YamlBlock label="template" yaml={detail.data.template_yaml} />
+          )}
+          <div className="mt-4">
+            <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
+              generated applications · {detail.data.generated_apps.length}
+            </div>
+            {detail.data.generated_apps.length === 0 ? (
+              <p className="text-[11px] text-text-muted">
+                The status block doesn't list any generated Applications yet.
+                Reconciliation may be in progress.
+              </p>
+            ) : (
+              <ul className="max-h-44 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
+                {detail.data.generated_apps.map((g) => {
+                  const key = `${g.namespace}/${g.name}`;
+                  return (
+                    <li
+                      key={key}
+                      className="group flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-elevated"
+                      onClick={() => onJumpToApplication(g.namespace, g.name)}
+                      title={`open ${g.name} on the Applications tab`}
+                    >
+                      <ResourceDot
+                        sync={g.sync_status}
+                        health={g.health_status}
+                      />
+                      <span className="text-text-primary">{g.name}</span>
+                      <span className="text-text-muted">· {g.namespace}</span>
+                      <span className="ml-auto inline-flex items-center gap-1">
+                        <SyncPill status={g.sync_status} />
+                        <HealthPill status={g.health_status} />
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </>
+      ) : null}
+    </SectionPanel>
+  );
+}
+
+function YamlBlock({ label, yaml }: { label: string; yaml: string }) {
+  return (
+    <div className="mb-3">
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
+        {label}
+      </div>
+      <pre className="max-h-48 overflow-auto rounded border border-border-subtle bg-elevated p-2 font-mono text-[10px] text-text-primary">
+        {yaml}
+      </pre>
+    </div>
+  );
+}
+
+// ─── AppProjects tab ──────────────────────────────────────────────────────
+//
+// Read-only list of project boundaries. Detail panel renders source-repo
+// allowlist, destinations, cluster/namespace resource whitelists, and
+// roles. CRUD is a clean follow-up.
+
+function AppProjectsTab({ context }: { context: string }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedKey = searchParams.get("project") ?? null;
+  const [filter, setFilter] = useState("");
+
+  const list = useQuery({
+    queryKey: ["argocd", "projects", context],
+    queryFn: () => k8s.listArgocdAppProjects(context || undefined),
+    staleTime: 5_000,
+    refetchInterval: 60_000,
+  });
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const data = list.data ?? [];
+    if (!q) return data;
+    return data.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q),
+    );
+  }, [list.data, filter]);
+
+  const selected = useMemo(() => {
+    if (!selectedKey) return null;
+    return (list.data ?? []).find(
+      (p) => `${p.namespace}/${p.name}` === selectedKey,
+    );
+  }, [list.data, selectedKey]);
+
+  function selectProject(p: ArgoAppProjectSummary | null): void {
+    const next = new URLSearchParams(searchParams);
+    if (p) next.set("project", `${p.namespace}/${p.name}`);
+    else next.delete("project");
+    setSearchParams(next, { replace: true });
+  }
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="argocd"
+        title="AppProjects"
+        description="Project boundaries that scope source repos, destination clusters, allowed resource kinds, and per-role policies."
+        icon={<ServerCog className="size-4" />}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => list.refetch()}
+            disabled={list.isFetching}
+          >
+            <RefreshCw
+              className={cn("size-3.5", list.isFetching && "animate-spin")}
+            />
+            refresh list
+          </Button>
+        }
+      />
+
+      <SectionPanel className="py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="filter by name / description"
+            className="h-8 w-72"
+          />
+          <span className="ml-auto text-[11px] text-text-muted tabular-nums">
+            {filtered.length} of {list.data?.length ?? 0}
+          </span>
+        </div>
+      </SectionPanel>
+
+      {list.error ? (
+        <SectionPanel className="border border-danger/30 bg-[var(--status-error-soft)]">
+          <p className="text-[12px] text-danger">
+            {(list.error as Error).message ?? "failed to fetch AppProjects"}
+          </p>
+        </SectionPanel>
+      ) : list.isLoading ? (
+        <SectionPanel>
+          <div className="flex items-center gap-2 text-[12px] text-text-muted">
+            <Loader2 className="size-3.5 animate-spin" /> loading AppProjects…
+          </div>
+        </SectionPanel>
+      ) : (list.data ?? []).length === 0 ? (
+        <SectionPanel>
+          <p className="text-[12px] text-text-muted">
+            No AppProjects found. ArgoCD always ships with a `default`
+            project — its absence usually means RBAC is blocking the read.
+          </p>
+        </SectionPanel>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
+          <SectionPanel className="overflow-hidden p-0">
+            <DataTableShell>
+              <DataTable>
+                <DataTableHeader>
+                  <DataTableRow>
+                    <Th>name</Th>
+                    <Th>description</Th>
+                    <Th>repos</Th>
+                    <Th>destinations</Th>
+                  </DataTableRow>
+                </DataTableHeader>
+                <DataTableBody>
+                  {filtered.map((p) => {
+                    const key = `${p.namespace}/${p.name}`;
+                    const active = selectedKey === key;
+                    return (
+                      <DataTableRow
+                        key={key}
+                        onClick={() => selectProject(p)}
+                        className={cn(
+                          "cursor-pointer",
+                          active && "bg-accent-primary-soft",
+                        )}
+                      >
+                        <DataTableCell className="px-4">
+                          <span className="text-[13px] font-medium text-text-primary">
+                            {p.name}
+                          </span>
+                        </DataTableCell>
+                        <DataTableCell className="text-[11px] truncate">
+                          {p.description || "—"}
+                        </DataTableCell>
+                        <DataTableCell mono className="text-[11px] tabular-nums">
+                          {p.source_repos_count}
+                        </DataTableCell>
+                        <DataTableCell mono className="text-[11px] tabular-nums">
+                          {p.destinations_count}
+                        </DataTableCell>
+                      </DataTableRow>
+                    );
+                  })}
+                </DataTableBody>
+              </DataTable>
+            </DataTableShell>
+            {filtered.length === 0 && (
+              <p className="px-4 py-3 text-[11px] text-text-muted">
+                No AppProjects match the current filter.
+              </p>
+            )}
+          </SectionPanel>
+
+          {selected ? (
+            <AppProjectDetailPanel
+              context={context}
+              project={selected}
+              onClose={() => selectProject(null)}
+            />
+          ) : (
+            <SectionPanel>
+              <p className="text-[12px] text-text-muted">
+                Select an AppProject to view its source-repo allowlist,
+                destinations, resource whitelists, and roles.
+              </p>
+            </SectionPanel>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function AppProjectDetailPanel({
+  context,
+  project,
+  onClose,
+}: {
+  context: string;
+  project: ArgoAppProjectSummary;
+  onClose: () => void;
+}) {
+  const detail = useQuery({
+    queryKey: [
+      "argocd",
+      "project",
+      context,
+      project.namespace,
+      project.name,
+    ] as const,
+    queryFn: () =>
+      k8s.getArgocdAppProject(
+        context || undefined,
+        project.namespace,
+        project.name,
+      ),
+    staleTime: 1_000,
+    refetchInterval: 30_000,
+  });
+
+  return (
+    <SectionPanel className="self-start">
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="mds-heading text-[14px] text-text-primary truncate">
+            {project.name}
+          </h2>
+          <p className="font-mono text-[11px] text-text-muted">
+            {project.namespace}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+          aria-label="close"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+
+      {project.description && (
+        <p className="mb-3 text-[12px] text-text-secondary">
+          {project.description}
+        </p>
+      )}
+
+      {detail.isLoading ? (
+        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+          <Loader2 className="size-3 animate-spin" /> loading detail…
+        </div>
+      ) : detail.error ? (
+        <p className="text-[11px] text-danger">
+          {(detail.error as Error).message ?? "failed to fetch detail"}
+        </p>
+      ) : detail.data ? (
+        <div className="space-y-4">
+          <ProjectListSection
+            label={`source repos · ${detail.data.source_repos.length}`}
+            empty="No source repos allowed — every Application referencing this project will be rejected."
+          >
+            {detail.data.source_repos.map((repo) => (
+              <li key={repo} className="truncate text-text-primary" title={repo}>
+                {repo}
+              </li>
+            ))}
+          </ProjectListSection>
+          <ProjectListSection
+            label={`destinations · ${detail.data.destinations.length}`}
+            empty="No destinations allowed."
+          >
+            {detail.data.destinations.map((d, i) => (
+              <li
+                key={`${d.server}|${d.namespace}|${i}`}
+                className="text-text-primary"
+              >
+                <span className="text-text-muted">{d.namespace || "*"}</span>
+                <span className="text-text-muted"> @ </span>
+                <span>{d.server || "*"}</span>
+              </li>
+            ))}
+          </ProjectListSection>
+          <ProjectListSection
+            label={`cluster resource whitelist · ${detail.data.cluster_resource_whitelist.length}`}
+            empty="No cluster-scoped resources allowed."
+          >
+            {detail.data.cluster_resource_whitelist.map((r, i) => (
+              <li key={`${r.group}/${r.kind}/${i}`} className="text-text-primary">
+                <span className="text-text-muted">
+                  {r.group || "core"}/
+                </span>
+                {r.kind}
+              </li>
+            ))}
+          </ProjectListSection>
+          <ProjectListSection
+            label={`namespace resource whitelist · ${detail.data.namespace_resource_whitelist.length}`}
+            empty="No namespace-scoped resources allowed."
+          >
+            {detail.data.namespace_resource_whitelist.map((r, i) => (
+              <li key={`${r.group}/${r.kind}/${i}`} className="text-text-primary">
+                <span className="text-text-muted">
+                  {r.group || "core"}/
+                </span>
+                {r.kind}
+              </li>
+            ))}
+          </ProjectListSection>
+          {detail.data.roles.length > 0 && (
+            <div>
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
+                roles · {detail.data.roles.length}
+              </div>
+              <ul className="space-y-2">
+                {detail.data.roles.map((role) => (
+                  <li
+                    key={role.name}
+                    className="rounded border border-border-subtle bg-elevated p-2"
+                  >
+                    <div className="text-[12px] font-medium text-text-primary">
+                      {role.name}
+                    </div>
+                    {role.description && (
+                      <div className="mt-0.5 text-[11px] text-text-muted">
+                        {role.description}
+                      </div>
+                    )}
+                    {role.policies.length > 0 && (
+                      <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] text-text-primary">
+                        {role.policies.join("\n")}
+                      </pre>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </SectionPanel>
+  );
+}
+
+function ProjectListSection({
+  label,
+  empty,
+  children,
+}: {
+  label: string;
+  empty: string;
+  children: React.ReactNode;
+}) {
+  // children is always an array of <li>; check by counting via React.
+  const hasChildren = Array.isArray(children)
+    ? children.length > 0
+    : Boolean(children);
+  return (
+    <div>
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">
+        {label}
+      </div>
+      {hasChildren ? (
+        <ul className="max-h-32 space-y-0.5 overflow-auto pr-1 font-mono text-[11px]">
+          {children}
+        </ul>
+      ) : (
+        <p className="text-[11px] text-text-muted">{empty}</p>
+      )}
+    </div>
   );
 }

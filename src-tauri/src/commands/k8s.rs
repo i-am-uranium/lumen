@@ -2158,6 +2158,56 @@ pub async fn terminate_argocd_operation(
     argocd::terminate_operation(&client, &namespace, &name).await
 }
 
+#[tauri::command]
+pub async fn detect_argocd_application_sets(
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<bool> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::detect_application_sets(&client).await
+}
+
+#[tauri::command]
+pub async fn list_argocd_application_sets(
+    context: Option<String>,
+    namespace: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<argocd::ApplicationSetSummary>> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::list_application_sets(&client, namespace.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn get_argocd_application_set(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<argocd::ApplicationSetDetail> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::get_application_set(&client, &namespace, &name).await
+}
+
+#[tauri::command]
+pub async fn list_argocd_app_projects(
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<argocd::AppProjectSummary>> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::list_app_projects(&client).await
+}
+
+#[tauri::command]
+pub async fn get_argocd_app_project(
+    context: Option<String>,
+    namespace: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<argocd::AppProjectDetail> {
+    let client = client_for(&state, context.as_deref()).await?;
+    argocd::get_app_project(&client, &namespace, &name).await
+}
+
 // ─── Tekton ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
