@@ -984,6 +984,10 @@ export const k8s = {
     context?: string,
   ) =>
     invoke<void>("helm_uninstall", { request, streamId, channel, context }),
+  helmSearchRepo: (query: string) =>
+    invoke<HelmChartHit[]>("helm_search_repo", { query }),
+  helmShowValues: (chart: string, version?: string) =>
+    invoke<string>("helm_show_values", { chart, version: version ?? null }),
   // Pod attach commands. See PodTerminal for end-to-end usage.
   startPodAttach: (
     request: {
@@ -1118,6 +1122,7 @@ export type HelmInstallRequest = {
   values_yaml: string | null;
   create_namespace: boolean;
   wait: boolean;
+  dry_run?: boolean;
 };
 
 export type HelmUpgradeRequest = {
@@ -1129,6 +1134,7 @@ export type HelmUpgradeRequest = {
   install: boolean;
   wait: boolean;
   atomic: boolean;
+  dry_run?: boolean;
 };
 
 export type HelmRollbackRequest = {
@@ -1136,12 +1142,20 @@ export type HelmRollbackRequest = {
   namespace: string;
   revision: number;
   wait: boolean;
+  dry_run?: boolean;
 };
 
 export type HelmUninstallRequest = {
   release: string;
   namespace: string;
   keep_history: boolean;
+};
+
+export type HelmChartHit = {
+  name: string;
+  version: string;
+  app_version: string;
+  description: string;
 };
 
 // ─── Watches ──────────────────────────────────────────────────────────────

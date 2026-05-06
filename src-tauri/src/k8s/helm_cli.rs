@@ -23,6 +23,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
+const HELM_NOT_FOUND_HINT: &str =
+    "helm CLI not found on PATH. Install from https://helm.sh/docs/intro/install/ or add it to your shell PATH.";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HelmEvent {
@@ -41,6 +44,8 @@ pub struct HelmInstallRequest {
     pub values_yaml: Option<String>,
     pub create_namespace: bool,
     pub wait: bool,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -53,6 +58,8 @@ pub struct HelmUpgradeRequest {
     pub install: bool,
     pub wait: bool,
     pub atomic: bool,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,6 +68,8 @@ pub struct HelmRollbackRequest {
     pub namespace: String,
     pub revision: u32,
     pub wait: bool,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +109,9 @@ pub async fn install(
     if req.wait {
         cmd.arg("--wait");
     }
+    if req.dry_run {
+        cmd.arg("--dry-run");
+    }
     run_with_values(cmd, req.values_yaml.as_deref(), channel, cancel).await
 }
 
@@ -127,6 +139,9 @@ pub async fn upgrade(
     if req.atomic {
         cmd.arg("--atomic");
     }
+    if req.dry_run {
+        cmd.arg("--dry-run");
+    }
     run_with_values(cmd, req.values_yaml.as_deref(), channel, cancel).await
 }
 
@@ -144,6 +159,9 @@ pub async fn rollback(
         .arg(&req.namespace);
     if req.wait {
         cmd.arg("--wait");
+    }
+    if req.dry_run {
+        cmd.arg("--dry-run");
     }
     run(cmd, channel, cancel).await
 }
@@ -182,9 +200,7 @@ async fn run_with_values(
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AppError::K8s(
-                "helm CLI not found on PATH. Install from https://helm.sh/docs/intro/install/ or add it to your shell PATH.".into(),
-            ));
+            return Err(AppError::K8s(HELM_NOT_FOUND_HINT.into()));
         }
         Err(e) => return Err(AppError::K8s(format!("spawn helm: {e}"))),
     };
@@ -212,9 +228,7 @@ async fn run(
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AppError::K8s(
-                "helm CLI not found on PATH. Install from https://helm.sh/docs/intro/install/ or add it to your shell PATH.".into(),
-            ));
+            return Err(AppError::K8s(HELM_NOT_FOUND_HINT.into()));
         }
         Err(e) => return Err(AppError::K8s(format!("spawn helm: {e}"))),
     };
@@ -287,4 +301,185 @@ async fn pump_to_channel(
 
     let _ = channel.send(HelmEvent::Exited { code: exit_code });
     Ok(())
+}
+
+// ─── Read-only chart discovery helpers ────────────────────────────────────
+//
+// `helm search repo` and `helm show values` are synchronous — we capture the
+// full output and parse it. They power the install/upgrade wizards' chart
+// pickers and default-values seeding.
+//
+// Both are used purely for UX hints and never modify cluster state, so they
+// run as plain `output()` calls without the streaming Channel apparatus
+// that install/upgrade/rollback need.
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ChartHit {
+    pub name: String,
+    pub version: String,
+    pub app_version: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawChartHit {
+    name: String,
+    version: String,
+    #[serde(default)]
+    app_version: String,
+    #[serde(default)]
+    description: String,
+}
+
+/// Parse `helm search repo --output json` into a flat ChartHit list.
+///
+/// helm emits an empty list (`null` or `[]`) when no repos are configured
+/// or no chart matches the query — both are treated as "no results" rather
+/// than an error so the wizard can still accept manual chart entry.
+pub fn parse_search_output(json: &str) -> AppResult<Vec<ChartHit>> {
+    let trimmed = json.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(Vec::new());
+    }
+    let raw: Vec<RawChartHit> = serde_json::from_str(trimmed)
+        .map_err(|e| AppError::Internal(format!("parse helm search output: {e}")))?;
+    Ok(raw
+        .into_iter()
+        .map(|r| ChartHit {
+            name: r.name,
+            version: r.version,
+            app_version: r.app_version,
+            description: r.description,
+        })
+        .collect())
+}
+
+/// Run `helm search repo <query> --versions --output json`.
+///
+/// `query` is passed verbatim to helm; an empty string lists every chart in
+/// every configured repo. We always pass `--versions` so a single chart with
+/// multiple available versions shows up as multiple hits — the wizard groups
+/// them client-side for its version picker.
+pub async fn search_repo(query: &str) -> AppResult<Vec<ChartHit>> {
+    let mut cmd = Command::new("helm");
+    cmd.arg("search").arg("repo");
+    if !query.is_empty() {
+        cmd.arg(query);
+    }
+    cmd.arg("--versions").arg("--output").arg("json");
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AppError::K8s(HELM_NOT_FOUND_HINT.into()));
+        }
+        Err(e) => return Err(AppError::K8s(format!("spawn helm: {e}"))),
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // helm exits non-zero with "Error: no repositories configured" — treat
+        // as empty so the wizard's manual-entry path stays usable instead of
+        // erroring at the user.
+        if stderr.contains("no repositories")
+            || stderr.contains("no results found")
+            || stderr.is_empty()
+        {
+            return Ok(Vec::new());
+        }
+        return Err(AppError::K8s(format!(
+            "helm search repo exited {} — {}",
+            output.status.code().unwrap_or(-1),
+            stderr
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_search_output(&stdout)
+}
+
+/// Run `helm show values <chart> [--version <v>]` and return the YAML body.
+///
+/// helm's stdout for `show values` is the chart's default `values.yaml` —
+/// what the install wizard pre-fills its values editor with so users see
+/// every knob the chart exposes rather than having to read the registry.
+pub async fn show_values(chart: &str, version: Option<&str>) -> AppResult<String> {
+    if chart.trim().is_empty() {
+        return Err(AppError::K8s("chart must not be empty".into()));
+    }
+    let mut cmd = Command::new("helm");
+    cmd.arg("show").arg("values").arg(chart);
+    if let Some(v) = version {
+        if !v.is_empty() {
+            cmd.arg("--version").arg(v);
+        }
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AppError::K8s(HELM_NOT_FOUND_HINT.into()));
+        }
+        Err(e) => return Err(AppError::K8s(format!("spawn helm: {e}"))),
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::K8s(format!(
+            "helm show values exited {} — {}",
+            output.status.code().unwrap_or(-1),
+            stderr
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_search_output_empty_inputs() {
+        assert!(parse_search_output("").unwrap().is_empty());
+        assert!(parse_search_output("   \n").unwrap().is_empty());
+        assert!(parse_search_output("null").unwrap().is_empty());
+        assert!(parse_search_output("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_search_output_typical_helm_json() {
+        // Shape from `helm search repo bitnami/redis --versions --output json`.
+        let json = r#"[
+            {"name":"bitnami/redis","version":"19.0.1","app_version":"7.2.4","description":"Redis(R) is an open source, advanced key-value store."},
+            {"name":"bitnami/redis","version":"18.19.4","app_version":"7.2.4","description":"Redis(R) is an open source, advanced key-value store."}
+        ]"#;
+        let hits = parse_search_output(json).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].name, "bitnami/redis");
+        assert_eq!(hits[0].version, "19.0.1");
+        assert_eq!(hits[0].app_version, "7.2.4");
+        assert!(hits[0].description.contains("Redis"));
+        assert_eq!(hits[1].version, "18.19.4");
+    }
+
+    #[test]
+    fn parse_search_output_tolerates_missing_optional_fields() {
+        // Some chart authors omit appVersion / description.
+        let json = r#"[{"name":"acme/foo","version":"0.1.0"}]"#;
+        let hits = parse_search_output(json).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "acme/foo");
+        assert_eq!(hits[0].app_version, "");
+        assert_eq!(hits[0].description, "");
+    }
+
+    #[test]
+    fn parse_search_output_rejects_garbage() {
+        assert!(parse_search_output("not json").is_err());
+        // Object instead of array — shape mismatch.
+        assert!(parse_search_output("{}").is_err());
+    }
 }

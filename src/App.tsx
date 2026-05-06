@@ -80,6 +80,16 @@ const RbacBindingWizard = lazy(() =>
     named("RbacBindingWizard"),
   ),
 );
+const HelmInstallWizard = lazy(() =>
+  import("@/routes/cluster/wizards/HelmInstallWizard").then(
+    named("HelmInstallWizard"),
+  ),
+);
+const HelmUpgradeWizard = lazy(() =>
+  import("@/routes/cluster/wizards/HelmInstallWizard").then(
+    named("HelmUpgradeWizard"),
+  ),
+);
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
@@ -279,6 +289,14 @@ function Shell() {
                 <Route
                   path="wizards/rbac-binding"
                   element={<RbacBindingWizard />}
+                />
+                <Route
+                  path="helm/install"
+                  element={<HelmInstallWizard />}
+                />
+                <Route
+                  path="helm/upgrade/:release"
+                  element={<HelmUpgradeWizard />}
                 />
               </Route>
               <Route path="/settings" element={<Settings />} />

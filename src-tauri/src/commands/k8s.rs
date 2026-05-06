@@ -1857,6 +1857,21 @@ pub async fn helm_uninstall(
     Ok(())
 }
 
+/// Search configured helm repos for charts matching `query`. Empty repos
+/// or no matches return an empty list (not an error) so the install wizard's
+/// manual-entry path keeps working when the user has no repos added yet.
+#[tauri::command]
+pub async fn helm_search_repo(query: String) -> AppResult<Vec<helm_cli::ChartHit>> {
+    helm_cli::search_repo(&query).await
+}
+
+/// Returns the chart's default values.yaml as a string. Used by the install
+/// wizard to seed the values editor.
+#[tauri::command]
+pub async fn helm_show_values(chart: String, version: Option<String>) -> AppResult<String> {
+    helm_cli::show_values(&chart, version.as_deref()).await
+}
+
 // ─── Pod attach (terminal) ────────────────────────────────────────────────
 
 use crate::k8s::exec as attach;
