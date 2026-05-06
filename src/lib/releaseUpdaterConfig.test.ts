@@ -39,4 +39,10 @@ describe("release updater configuration", () => {
       expect(block).toContain("TAURI_SIGNING_PRIVATE_KEY_PASSWORD:");
     }
   });
+
+  it("lets Tauri use its CI-safe DMG bundling path", () => {
+    const releaseWorkflow = read(".github/workflows/release.yml");
+
+    expect(releaseWorkflow).not.toContain("TAURI_BUNDLER_DMG_IGNORE_CI:");
+  });
 });
