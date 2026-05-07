@@ -769,14 +769,26 @@ export function WorkloadsView() {
   const kindsToFetch = filterKind ? [filterKind] : ALL_KINDS;
 
   // Cmd-K resource jump lands here with ?q=name&ns=namespace pre-set so
-  // the user sees the row they picked, already highlighted.
+  // the user sees the row they picked, already highlighted. URL wins
+  // over persisted state so deep links land deterministically; the
+  // persisted value is the fallback for plain navigation back to this
+  // section.
   const [searchParams] = useSearchParams();
+  const persistedNamespace = useUiSettings(
+    (s) => s.selectedNamespaces[context] ?? "",
+  );
+  const setPersistedNamespace = useUiSettings((s) => s.setSelectedNamespace);
   const [namespace, setNamespace] = useState<string>(
-    () => searchParams.get("ns") ?? "",
+    () => searchParams.get("ns") ?? persistedNamespace,
   );
   const [search, setSearch] = useState<string>(
     () => searchParams.get("q") ?? "",
   );
+  // Mirror namespace changes back to the store so the next visit
+  // (same context) picks up where the user left off.
+  useEffect(() => {
+    setPersistedNamespace(context, namespace);
+  }, [context, namespace, setPersistedNamespace]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   // Cmd+/ broadcasts a focus-search event; the workloads view picks it up
   // and selects the toolbar's filter input. Ref-based so the keybinding
