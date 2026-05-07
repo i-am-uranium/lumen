@@ -75,6 +75,14 @@ export type UiSettings = {
   argocdDetailPanelWidth: number;
   /** Kind keys collapsed in the kind-grouped tree view. */
   argocdTreeCollapsed: string[];
+  /**
+   * Last-used namespace filter per cluster context. Lets users navigate
+   * away from Workloads and return without re-picking their namespace.
+   * Keyed by context name (different clusters expose different
+   * namespace sets, so a global value would be wrong). Empty string =
+   * "all namespaces".
+   */
+  selectedNamespaces: Record<string, string>;
 };
 
 export const ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT = 460;
@@ -103,6 +111,7 @@ function defaults(): UiSettings {
     argocdResourceView: "tree",
     argocdDetailPanelWidth: ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
     argocdTreeCollapsed: [],
+    selectedNamespaces: {},
   };
 }
 
@@ -175,6 +184,14 @@ function readPersisted(): UiSettings {
             (x): x is string => typeof x === "string",
           )
         : [],
+      selectedNamespaces:
+        parsed.selectedNamespaces && typeof parsed.selectedNamespaces === "object"
+          ? Object.fromEntries(
+              Object.entries(parsed.selectedNamespaces).filter(
+                ([, v]) => typeof v === "string",
+              ),
+            )
+          : {},
     };
   } catch {
     return defaults();
@@ -219,6 +236,7 @@ type Store = UiSettings & {
   setArgocdDetailPanelWidth: (next: number) => void;
   toggleArgocdTreeKind: (kind: string) => void;
   resetArgocdTreeCollapsed: () => void;
+  setSelectedNamespace: (context: string, namespace: string) => void;
 };
 
 export const useUiSettings = create<Store>((set, get) => {
@@ -334,6 +352,15 @@ export const useUiSettings = create<Store>((set, get) => {
       const snapshot = { ...get(), argocdTreeCollapsed: [] };
       writePersisted(snapshot);
       set({ argocdTreeCollapsed: [] });
+    },
+    setSelectedNamespace: (context, namespace) => {
+      if (!context) return;
+      const current = get().selectedNamespaces;
+      if (current[context] === namespace) return;
+      const next = { ...current, [context]: namespace };
+      const snapshot = { ...get(), selectedNamespaces: next };
+      writePersisted(snapshot);
+      set({ selectedNamespaces: next });
     },
   };
 });

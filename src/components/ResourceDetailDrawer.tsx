@@ -151,7 +151,8 @@ export function ResourceDetailDrawer({
         ctx || undefined,
       ),
     enabled: !!resource && !!resourceKind && (restartable || scalable),
-    staleTime: 10_000,
+    staleTime: 2_000,
+    refetchInterval: 3_000,
   });
   const desiredReplicas = desiredReplicasFromReady(actionResource.data?.summary.ready);
 
@@ -1168,7 +1169,8 @@ function NonPodPropertiesTab({
       resource.name,
     ],
     queryFn: () => k8s.getResource(resource.namespace, kind, resource.name, ctx),
-    staleTime: 10_000,
+    staleTime: 2_000,
+    refetchInterval: 3_000,
   });
   if (isLoading) {
     return (
