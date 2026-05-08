@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ClusterWorkspace, clusterSwitchPath } from "./ClusterWorkspace";
+import { clusterSwitchPath } from "@/components/ClusterSwitcher";
+import { ClusterWorkspace } from "./ClusterWorkspace";
 import { k8s, type ContextInfo } from "@/lib/k8s";
 import { useClusterStore } from "@/state/cluster";
 
@@ -89,21 +89,14 @@ describe("cluster switch routing", () => {
     );
   });
 
-  it("switches clusters from the rail header while preserving the active route", async () => {
+  it("does not duplicate the cluster switcher in the rail header", async () => {
     renderWorkspace([
       context({ name: "dev-stage" }),
       context({ name: "prod-main", is_prod: true }),
     ]);
 
-    await userEvent.click(await screen.findByRole("button", { name: /switch cluster/i }));
-    await userEvent.type(screen.getByPlaceholderText(/switch cluster/i), "prod");
-    await userEvent.click(await screen.findByRole("option", { name: /prod-main/i }));
+    await screen.findByRole("complementary", { name: /cluster navigation/i });
 
-    expect(k8s.setContext).toHaveBeenCalledWith("prod-main");
-    await waitFor(() =>
-      expect(screen.getByTestId("location")).toHaveTextContent(
-        "/cluster/prod-main/workloads/pods?ns=payments",
-      ),
-    );
+    expect(screen.queryByRole("button", { name: /switch cluster/i })).not.toBeInTheDocument();
   });
 });
