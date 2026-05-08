@@ -8,10 +8,13 @@ import React, {
 } from "react";
 import { useFocusSearch } from "@/lib/focusSearch";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Bot,
   Box,
   CheckCircle2,
   Filter,
@@ -19,7 +22,11 @@ import {
   RefreshCw,
   Search,
   Server,
+  Trash2,
+  RotateCw,
+  X,
 } from "lucide-react";
+import { toast } from "sonner";
 import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
@@ -44,6 +51,7 @@ import { Star } from "lucide-react";
 import { ColumnPicker } from "@/components/ColumnPicker";
 import { applyColumnLayout, useUiSettings } from "@/state/uiSettings";
 import { usePinnedResources } from "@/hooks/usePinnedResources";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 
 // ─── URL slug ↔ WorkloadKind ──────────────────────────────────────────────
 
@@ -103,6 +111,25 @@ function formatCpu(milli: number): string {
 }
 
 export type QuickFilter = "unhealthy" | "restarts" | "pending" | "failed";
+export type WorkloadSortKey =
+  | "namespace"
+  | "name"
+  | "kind"
+  | "ready"
+  | "health"
+  | "status"
+  | "age"
+  | "restarts"
+  | "cpu"
+  | "memory"
+  | "containers"
+  | "node"
+  | "qos";
+export type WorkloadSortDirection = "asc" | "desc";
+export type WorkloadSort = {
+  key: WorkloadSortKey;
+  direction: WorkloadSortDirection;
+};
 
 export function workloadRiskScore(w: WorkloadSummary): number {
   if (w.health === "failed") return 0;
@@ -117,6 +144,128 @@ export function workloadRiskScore(w: WorkloadSummary): number {
   }
   if (w.age_seconds < 600) return 4;
   return 5;
+}
+
+function compareText(a: string | undefined, b: string | undefined): number {
+  return (a ?? "").localeCompare(b ?? "");
+}
+
+function compareNumbers(
+  a: number | undefined,
+  b: number | undefined,
+  direction: WorkloadSortDirection = "asc",
+): number {
+  const aMissing = a === undefined || !Number.isFinite(a);
+  const bMissing = b === undefined || !Number.isFinite(b);
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  return direction === "desc" ? b - a : a - b;
+}
+
+function defaultWorkloadCompare(a: WorkloadSummary, b: WorkloadSummary): number {
+  const risk = workloadRiskScore(a) - workloadRiskScore(b);
+  if (risk !== 0) return risk;
+  if (a.namespace !== b.namespace) return a.namespace.localeCompare(b.namespace);
+  if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+  return a.name.localeCompare(b.name);
+}
+
+function compareBySortKey(
+  a: WorkloadSummary,
+  b: WorkloadSummary,
+  sort: WorkloadSort,
+): number {
+  const { key, direction } = sort;
+  switch (key) {
+    case "namespace":
+      return compareText(a.namespace, b.namespace) || compareText(a.name, b.name);
+    case "name":
+      return compareText(a.name, b.name);
+    case "kind":
+      return compareText(a.kind, b.kind) || compareText(a.namespace, b.namespace) || compareText(a.name, b.name);
+    case "ready":
+      return compareText(a.ready, b.ready) || compareText(a.name, b.name);
+    case "health":
+      return compareText(a.health, b.health) || compareText(a.name, b.name);
+    case "status":
+      return compareText(a.pod_phase, b.pod_phase) || compareText(a.name, b.name);
+    case "age":
+      return compareNumbers(a.age_seconds, b.age_seconds, direction) || compareText(a.name, b.name);
+    case "restarts":
+      return compareNumbers(a.restart_count ?? 0, b.restart_count ?? 0, direction) || compareText(a.name, b.name);
+    case "cpu":
+      return compareNumbers(a.cpu_milli, b.cpu_milli, direction) || compareText(a.name, b.name);
+    case "memory":
+      return compareNumbers(a.mem_bytes, b.mem_bytes, direction) || compareText(a.name, b.name);
+    case "containers":
+      return compareNumbers(a.container_count, b.container_count, direction) || compareText(a.name, b.name);
+    case "node":
+      return compareText(a.node_name, b.node_name) || compareText(a.name, b.name);
+    case "qos":
+      return compareText(a.qos_class, b.qos_class) || compareText(a.name, b.name);
+  }
+}
+
+export function sortWorkloads(
+  rows: WorkloadSummary[],
+  sort: WorkloadSort | null,
+): WorkloadSummary[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      const compared = sort
+        ? compareBySortKey(a.row, b.row, sort)
+        : defaultWorkloadCompare(a.row, b.row);
+      const directed =
+        sort && !["age", "restarts", "cpu", "memory", "containers"].includes(sort.key)
+          ? sort.direction === "desc"
+            ? -compared
+            : compared
+          : compared;
+      return directed || a.index - b.index;
+    })
+    .map((item) => item.row);
+}
+
+export function workloadSelectionKey(w: Pick<WorkloadSummary, "kind" | "namespace" | "name">): string {
+  return `${w.kind}/${w.namespace}/${w.name}`;
+}
+
+export function selectVisibleWorkloadKeys(rows: WorkloadSummary[]): Set<string> {
+  return new Set(rows.map(workloadSelectionKey));
+}
+
+export function restartEligibleWorkloads(rows: WorkloadSummary[]): WorkloadSummary[] {
+  return rows.filter((w) =>
+    w.kind === "deployment" || w.kind === "statefulset" || w.kind === "daemonset",
+  );
+}
+
+export function buildSelectedWorkloadsAiContext(
+  ctx: string,
+  rows: WorkloadSummary[],
+): string {
+  return [
+    "selected_workload_resources:",
+    rows.length
+      ? rows
+          .map((w) =>
+            [
+              `- ${w.kind}/${w.namespace}/${w.name}`,
+              `cluster=${ctx || "unknown"}`,
+              `health=${w.health}`,
+              `ready=${w.ready || "-"}`,
+              `phase=${w.pod_phase ?? "-"}`,
+              `restarts=${w.restart_count ?? 0}`,
+              `node=${w.node_name ?? "-"}`,
+              `cpu_milli=${w.cpu_milli ?? "-"}`,
+              `mem_bytes=${w.mem_bytes ?? "-"}`,
+            ].join(" "),
+          )
+          .join("\n")
+      : "none",
+  ].join("\n");
 }
 
 export function matchQuickFilters(
@@ -351,6 +500,7 @@ function ResourceKindNav({
 type WorkloadColumn = {
   key: string;
   label: string;
+  sortKey?: WorkloadSortKey;
   alwaysOn?: boolean;
   cell: (w: WorkloadSummary) => React.ReactNode;
 };
@@ -359,6 +509,7 @@ const OTHER_COLUMNS: WorkloadColumn[] = [
   {
     key: "name",
     label: "name",
+    sortKey: "name",
     alwaysOn: true,
     cell: (w) => (
       <DataTableCell className="px-4">
@@ -371,6 +522,7 @@ const OTHER_COLUMNS: WorkloadColumn[] = [
   {
     key: "namespace",
     label: "namespace",
+    sortKey: "namespace",
     cell: (w) => (
       <DataTableCell mono className="text-[11px]">
         {w.namespace}
@@ -380,6 +532,7 @@ const OTHER_COLUMNS: WorkloadColumn[] = [
   {
     key: "kind",
     label: "kind",
+    sortKey: "kind",
     cell: (w) => (
       <DataTableCell>
         <span className="rounded border border-border-default bg-elevated px-1.5 py-0.5 text-[10px] lowercase text-text-secondary">
@@ -391,6 +544,7 @@ const OTHER_COLUMNS: WorkloadColumn[] = [
   {
     key: "ready",
     label: "ready",
+    sortKey: "ready",
     cell: (w) => (
       <DataTableCell mono className="text-[11px] tabular-nums">
         {w.ready || "—"}
@@ -400,6 +554,7 @@ const OTHER_COLUMNS: WorkloadColumn[] = [
   {
     key: "health",
     label: "health",
+    sortKey: "health",
     cell: (w) => (
       <DataTableCell>
         <StatusBadge status={w.health} />
@@ -409,6 +564,7 @@ const OTHER_COLUMNS: WorkloadColumn[] = [
   {
     key: "age",
     label: "age",
+    sortKey: "age",
     cell: (w) => (
       <DataTableCell className="text-[11px] tabular-nums">
         {formatAge(w.age_seconds)}
@@ -421,6 +577,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "name",
     label: "name",
+    sortKey: "name",
     alwaysOn: true,
     cell: (w) => (
       <DataTableCell className="max-w-[260px] px-4">
@@ -433,6 +590,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "namespace",
     label: "namespace",
+    sortKey: "namespace",
     cell: (w) => (
       <DataTableCell mono className="text-[11px]">
         {w.namespace}
@@ -442,6 +600,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "containers",
     label: "containers",
+    sortKey: "containers",
     cell: (w) => (
       <DataTableCell>
         <ContainerChiclets
@@ -454,6 +613,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "cpu",
     label: "cpu",
+    sortKey: "cpu",
     cell: (w) => (
       <DataTableCell mono className="text-[11px] tabular-nums">
         {w.cpu_milli !== undefined ? formatCpu(w.cpu_milli) : "—"}
@@ -463,6 +623,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "memory",
     label: "memory",
+    sortKey: "memory",
     cell: (w) => (
       <DataTableCell mono className="text-[11px] tabular-nums">
         {w.mem_bytes !== undefined ? formatBytes(w.mem_bytes) : "—"}
@@ -472,6 +633,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "restarts",
     label: "restarts",
+    sortKey: "restarts",
     cell: (w) => {
       const restarts = w.restart_count ?? 0;
       return (
@@ -501,6 +663,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "node",
     label: "node",
+    sortKey: "node",
     cell: (w) => (
       <DataTableCell mono className="max-w-[200px] truncate text-[11px]">
         {w.node_name ?? "—"}
@@ -510,6 +673,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "qos",
     label: "qos",
+    sortKey: "qos",
     cell: (w) => (
       <DataTableCell>
         {w.qos_class ? (
@@ -530,6 +694,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "status",
     label: "status",
+    sortKey: "status",
     cell: (w) => (
       <DataTableCell className={cn("text-[11px]", statusColor(w.pod_phase))}>
         {w.pod_phase ?? "—"}
@@ -539,6 +704,7 @@ const POD_COLUMNS: WorkloadColumn[] = [
   {
     key: "age",
     label: "age",
+    sortKey: "age",
     cell: (w) => (
       <DataTableCell className="text-[11px] tabular-nums">
         {formatAge(w.age_seconds)}
@@ -560,21 +726,34 @@ function laidOutColumns(
 const Row = memo(function Row({
   w,
   columns,
+  selected,
   favorited,
+  onToggleSelected,
   onToggleFavorite,
   onClick,
 }: {
   w: WorkloadSummary;
   columns: WorkloadColumn[];
+  selected: boolean;
   favorited: boolean;
+  onToggleSelected: (w: WorkloadSummary) => void;
   onToggleFavorite: (w: WorkloadSummary) => void;
   onClick: (w: WorkloadSummary) => void;
 }) {
   return (
-    <DataTableRow className="group cursor-pointer" onClick={() => onClick(w)}>
+    <DataTableRow
+      className={cn("group cursor-pointer", selected && "bg-accent-primary-soft/40")}
+      data-selected={selected}
+      onClick={() => onClick(w)}
+    >
       <DataTableCell
         className={cn("w-1 p-0", severityBg(w))}
         aria-hidden="true"
+      />
+      <SelectionCell
+        w={w}
+        selected={selected}
+        onToggle={onToggleSelected}
       />
       <FavoriteCell
         w={w}
@@ -593,21 +772,34 @@ const Row = memo(function Row({
 const PodRow = memo(function PodRow({
   w,
   columns,
+  selected,
   favorited,
+  onToggleSelected,
   onToggleFavorite,
   onClick,
 }: {
   w: WorkloadSummary;
   columns: WorkloadColumn[];
+  selected: boolean;
   favorited: boolean;
+  onToggleSelected: (w: WorkloadSummary) => void;
   onToggleFavorite: (w: WorkloadSummary) => void;
   onClick: (w: WorkloadSummary) => void;
 }) {
   return (
-    <DataTableRow className="group cursor-pointer" onClick={() => onClick(w)}>
+    <DataTableRow
+      className={cn("group cursor-pointer", selected && "bg-accent-primary-soft/40")}
+      data-selected={selected}
+      onClick={() => onClick(w)}
+    >
       <DataTableCell
         className={cn("w-1 p-0", severityBg(w))}
         aria-hidden="true"
+      />
+      <SelectionCell
+        w={w}
+        selected={selected}
+        onToggle={onToggleSelected}
       />
       <FavoriteCell
         w={w}
@@ -620,6 +812,33 @@ const PodRow = memo(function PodRow({
     </DataTableRow>
   );
 });
+
+function SelectionCell({
+  w,
+  selected,
+  onToggle,
+}: {
+  w: WorkloadSummary;
+  selected: boolean;
+  onToggle: (w: WorkloadSummary) => void;
+}) {
+  const label = selected
+    ? `Deselect ${w.kind}/${w.name}`
+    : `Select ${w.kind}/${w.name}`;
+  return (
+    <DataTableCell className="w-8 px-2">
+      <input
+        type="checkbox"
+        checked={selected}
+        aria-label={label}
+        title={label}
+        onChange={() => onToggle(w)}
+        onClick={(e) => e.stopPropagation()}
+        className="size-4 rounded border-border-default bg-elevated accent-[var(--accent-primary)]"
+      />
+    </DataTableCell>
+  );
+}
 
 // Star cell — left of the row's first user column. Always reserves
 // space (so the column width is stable) but the icon only fades in on
@@ -710,8 +929,8 @@ function SkeletonRows({
   isPodView: boolean;
   columnCount: number;
 }) {
-  // +1 for the leading severity strip column, +1 for the favorites star.
-  const total = columnCount + 2;
+  // +1 for the severity strip, +1 for selection, +1 for favorites.
+  const total = columnCount + 3;
   return (
     <DataTableShell>
       <DataTable className={cn(isPodView && "min-w-[1100px]")}>
@@ -743,6 +962,7 @@ function SkeletonRows({
 export function WorkloadsView() {
   const { ctx = "", kind: kindSlug } = useParams();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const context = decodeURIComponent(ctx);
 
   const filterKind: WorkloadKind | null = kindSlug
@@ -757,6 +977,7 @@ export function WorkloadsView() {
   const otherHidden = useUiSettings((s) => s.hiddenColumns["workloads-other"]);
   const podOrder = useUiSettings((s) => s.columnOrder["workloads-pod"]);
   const otherOrder = useUiSettings((s) => s.columnOrder["workloads-other"]);
+  const readOnly = useUiSettings((s) => s.readOnly);
   const podVisible = useMemo(
     () => laidOutColumns(POD_COLUMNS, podOrder, podHidden),
     [podOrder, podHidden],
@@ -803,6 +1024,10 @@ export function WorkloadsView() {
   const [quickFilters, setQuickFilters] = useState<Set<QuickFilter>>(
     () => new Set(),
   );
+  const [sort, setSort] = useState<WorkloadSort | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [pendingBulkAction, setPendingBulkAction] = useState<"delete" | "restart" | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const { data: namespaces = [] } = useQuery({
     queryKey: ["k8s", "namespaces", context],
@@ -841,14 +1066,7 @@ export function WorkloadsView() {
     for (const q of queries) {
       if (q.data) merged.push(...q.data);
     }
-    merged.sort((a, b) => {
-      const risk = workloadRiskScore(a) - workloadRiskScore(b);
-      if (risk !== 0) return risk;
-      if (a.namespace !== b.namespace) return a.namespace.localeCompare(b.namespace);
-      if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
-      return a.name.localeCompare(b.name);
-    });
-    return merged;
+    return sortWorkloads(merged, null);
   }, [queries]);
 
   // Per-resource favorites — D10 finish. Reuses the existing pinned-
@@ -903,6 +1121,36 @@ export function WorkloadsView() {
           })),
     );
   }, [items, search, quickFilters, favoritesOnly, favorites]);
+  const visibleItems = useMemo(
+    () => sortWorkloads(filteredItems, sort),
+    [filteredItems, sort],
+  );
+  const visibleKeys = useMemo(
+    () => selectVisibleWorkloadKeys(visibleItems),
+    [visibleItems],
+  );
+  const selectedItems = useMemo(
+    () => items.filter((w) => selectedKeys.has(workloadSelectionKey(w))),
+    [items, selectedKeys],
+  );
+  const selectedRestartableItems = useMemo(
+    () => restartEligibleWorkloads(selectedItems),
+    [selectedItems],
+  );
+  const selectedSkipRestartCount = selectedItems.length - selectedRestartableItems.length;
+  const allVisibleSelected =
+    visibleItems.length > 0 &&
+    visibleItems.every((w) => selectedKeys.has(workloadSelectionKey(w)));
+  const someVisibleSelected =
+    visibleItems.some((w) => selectedKeys.has(workloadSelectionKey(w))) &&
+    !allVisibleSelected;
+
+  useEffect(() => {
+    setSelectedKeys((prev) => {
+      const next = new Set([...prev].filter((key) => visibleKeys.has(key)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleKeys]);
 
   const hasFilters =
     search.trim().length > 0 || quickFilters.size > 0 || favoritesOnly;
@@ -934,6 +1182,93 @@ export function WorkloadsView() {
     setSearch("");
     setQuickFilters(new Set());
     setFavoritesOnly(false);
+  }
+
+  function toggleSort(key: WorkloadSortKey) {
+    setSort((prev) => {
+      if (!prev || prev.key !== key) return { key, direction: "asc" };
+      if (prev.direction === "asc") return { key, direction: "desc" };
+      return null;
+    });
+  }
+
+  function toggleSelected(w: WorkloadSummary) {
+    const key = workloadSelectionKey(w);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleAllVisibleSelected() {
+    setSelectedKeys((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        for (const key of visibleKeys) next.delete(key);
+        return next;
+      }
+      return new Set([...prev, ...visibleKeys]);
+    });
+  }
+
+  async function invalidateWorkloadResources() {
+    await qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
+    await qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
+    await qc.invalidateQueries({ queryKey: ["k8s", "resource-action-meta"] });
+  }
+
+  async function handleBulkDelete() {
+    if (bulkBusy || selectedItems.length === 0 || readOnly) return;
+    setBulkBusy(true);
+    try {
+      for (const item of selectedItems) {
+        await k8s.deleteResource(item.namespace, item.kind, item.name, context || undefined);
+      }
+      toast.success(`deleted ${selectedItems.length} workload${selectedItems.length === 1 ? "" : "s"}`);
+      setSelectedKeys(new Set());
+      setPendingBulkAction(null);
+      await invalidateWorkloadResources();
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleBulkRestart() {
+    if (bulkBusy || selectedRestartableItems.length === 0 || readOnly) return;
+    setBulkBusy(true);
+    try {
+      for (const item of selectedRestartableItems) {
+        await k8s.restartWorkload(item.namespace, item.kind, item.name, context || undefined);
+      }
+      toast.success(
+        `restart triggered for ${selectedRestartableItems.length} workload${selectedRestartableItems.length === 1 ? "" : "s"}`,
+      );
+      setSelectedKeys(new Set());
+      setPendingBulkAction(null);
+      await invalidateWorkloadResources();
+    } catch (e) {
+      toast.error((e as Error).message ?? String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function askAiAboutSelected() {
+    if (selectedItems.length === 0) return;
+    try {
+      const key = `lumen-ai-context-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      window.sessionStorage.setItem(
+        key,
+        buildSelectedWorkloadsAiContext(context, selectedItems),
+      );
+      navigate(`/cluster/${encodeURIComponent(context)}/ai?task=root-cause&aiContext=${encodeURIComponent(key)}`);
+    } catch (e) {
+      toast.error((e as Error).message ?? "Unable to prepare selected resources for AI");
+    }
   }
 
   function selectKind(kind: WorkloadKind | null) {
@@ -1128,6 +1463,19 @@ export function WorkloadsView() {
                 )}
               </div>
             </div>
+            {selectedItems.length > 0 && (
+              <BulkActionBar
+                selectedCount={selectedItems.length}
+                restartableCount={selectedRestartableItems.length}
+                skippedRestartCount={selectedSkipRestartCount}
+                readOnly={readOnly}
+                busy={bulkBusy}
+                onAskAi={askAiAboutSelected}
+                onRestart={() => setPendingBulkAction("restart")}
+                onDelete={() => setPendingBulkAction("delete")}
+                onClear={() => setSelectedKeys(new Set())}
+              />
+            )}
             {firstError ? (
               <div className="flex items-center justify-between gap-4 rounded-panel border border-danger/30 bg-[var(--status-error-soft)] p-4 text-sm text-danger">
                 <span className="truncate">{firstError.message}</span>
@@ -1168,27 +1516,43 @@ export function WorkloadsView() {
                   <DataTableHeader>
                     <DataTableRow>
                       <Th />
+                      <SelectionHeader
+                        checked={allVisibleSelected}
+                        indeterminate={someVisibleSelected}
+                        disabled={visibleItems.length === 0}
+                        onChange={toggleAllVisibleSelected}
+                      />
                       <Th />
                       {(isPodView ? podVisible : otherVisible).map((c) => (
-                        <Th key={c.key}>{c.label}</Th>
+                        <Th
+                          key={c.key}
+                          sortKey={c.sortKey}
+                          sort={sort}
+                          onSort={toggleSort}
+                        >
+                          {c.label}
+                        </Th>
                       ))}
                     </DataTableRow>
                   </DataTableHeader>
                   <DataTableBody>
-                    {filteredItems.map((w) => {
+                    {visibleItems.map((w) => {
                       const ref = {
                         kind: w.kind,
                         namespace: w.namespace,
                         name: w.name,
                       };
                       const isFav = favorites.isPinned(ref);
+                      const isSelected = selectedKeys.has(workloadSelectionKey(w));
                       const onToggleFav = () => favorites.toggle(ref);
                       return isPodView || w.kind === "pod" ? (
                         <PodRow
                           key={`${w.kind}/${w.namespace}/${w.name}`}
                           w={w}
                           columns={podVisible}
+                          selected={isSelected}
                           favorited={isFav}
+                          onToggleSelected={toggleSelected}
                           onToggleFavorite={onToggleFav}
                           onClick={openResource}
                         />
@@ -1197,7 +1561,9 @@ export function WorkloadsView() {
                           key={`${w.kind}/${w.namespace}/${w.name}`}
                           w={w}
                           columns={otherVisible}
+                          selected={isSelected}
                           favorited={isFav}
+                          onToggleSelected={toggleSelected}
                           onToggleFavorite={onToggleFav}
                           onClick={openResource}
                         />
@@ -1215,14 +1581,170 @@ export function WorkloadsView() {
         resource={drawerResource}
         onClose={() => setDrawerResource(null)}
       />
+      <ConfirmActionDialog
+        open={pendingBulkAction === "delete"}
+        title="delete selected workloads"
+        description={`This will delete ${selectedItems.length} selected workload${selectedItems.length === 1 ? "" : "s"} from ${context}. The action is sent to Kubernetes for each selected resource.`}
+        target={`${selectedItems.length} selected`}
+        confirmLabel="delete"
+        intent="danger"
+        busy={bulkBusy}
+        onCancel={() => setPendingBulkAction(null)}
+        onConfirm={handleBulkDelete}
+      />
+      <ConfirmActionDialog
+        open={pendingBulkAction === "restart"}
+        title="restart selected workloads"
+        description={
+          selectedSkipRestartCount > 0
+            ? `This will trigger rolling restarts for ${selectedRestartableItems.length} eligible controller workload${selectedRestartableItems.length === 1 ? "" : "s"}. ${selectedSkipRestartCount} selected resource${selectedSkipRestartCount === 1 ? "" : "s"} will be skipped because only deployments, statefulsets, and daemonsets support restart.`
+            : `This will trigger rolling restarts for ${selectedRestartableItems.length} selected controller workload${selectedRestartableItems.length === 1 ? "" : "s"}.`
+        }
+        target={`${selectedRestartableItems.length} restartable`}
+        confirmLabel="restart"
+        intent="warning"
+        busy={bulkBusy}
+        onCancel={() => setPendingBulkAction(null)}
+        onConfirm={handleBulkRestart}
+      />
     </LumenPage>
   );
 }
 
-function Th({ children }: { children?: React.ReactNode }) {
+function Th({
+  children,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  children?: React.ReactNode;
+  sortKey?: WorkloadSortKey;
+  sort?: WorkloadSort | null;
+  onSort?: (key: WorkloadSortKey) => void;
+}) {
+  const active = !!sortKey && sort?.key === sortKey;
   return (
     <DataTableHead className="whitespace-nowrap text-[10px]">
-      {children}
+      {sortKey && onSort ? (
+        <button
+          type="button"
+          onClick={() => onSort(sortKey)}
+          className={cn(
+            "inline-flex items-center gap-1 rounded px-1 py-0.5 uppercase tracking-[0.12em] transition-colors",
+            active
+              ? "text-text-primary"
+              : "text-text-muted hover:bg-hover hover:text-text-primary",
+          )}
+        >
+          <span>{children}</span>
+          {active ? (
+            sort?.direction === "asc" ? (
+              <ArrowUp className="size-3" aria-hidden="true" />
+            ) : (
+              <ArrowDown className="size-3" aria-hidden="true" />
+            )
+          ) : null}
+        </button>
+      ) : (
+        children
+      )}
     </DataTableHead>
+  );
+}
+
+function SelectionHeader({
+  checked,
+  indeterminate,
+  disabled,
+  onChange,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  disabled: boolean;
+  onChange: () => void;
+}) {
+  const ref = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <DataTableHead className="w-8 px-2">
+      <input
+        ref={ref}
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        aria-label="Select visible workloads"
+        onChange={onChange}
+        className="size-4 rounded border-border-default bg-elevated accent-[var(--accent-primary)] disabled:opacity-40"
+      />
+    </DataTableHead>
+  );
+}
+
+function BulkActionBar({
+  selectedCount,
+  restartableCount,
+  skippedRestartCount,
+  readOnly,
+  busy,
+  onAskAi,
+  onRestart,
+  onDelete,
+  onClear,
+}: {
+  selectedCount: number;
+  restartableCount: number;
+  skippedRestartCount: number;
+  readOnly: boolean;
+  busy: boolean;
+  onAskAi: () => void;
+  onRestart: () => void;
+  onDelete: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="mb-4 flex flex-col gap-3 rounded-control border border-accent-primary/30 bg-accent-primary-soft px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 text-[12px] font-medium text-text-primary">
+        {selectedCount} selected
+        {skippedRestartCount > 0 && (
+          <span className="ml-2 text-[11px] font-normal text-text-muted">
+            {restartableCount} restartable
+          </span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onAskAi}>
+          <Bot className="size-3.5" />
+          Ask AI
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={busy || readOnly || restartableCount === 0}
+          onClick={onRestart}
+          title={readOnly ? "Read-only mode is enabled" : undefined}
+        >
+          <RotateCw className="size-3.5" />
+          Restart
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          disabled={busy || readOnly}
+          onClick={onDelete}
+          title={readOnly ? "Read-only mode is enabled" : undefined}
+        >
+          <Trash2 className="size-3.5" />
+          Delete
+        </Button>
+        <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClear}>
+          <X className="size-3.5" />
+          Clear
+        </Button>
+      </div>
+    </div>
   );
 }
