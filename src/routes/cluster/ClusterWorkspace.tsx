@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo } from "react";
-import { NavLink, Outlet, useParams, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NavLink, Outlet, useLocation, useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle,
   Boxes,
   Box,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -23,6 +24,7 @@ import {
   Package,
   Repeat,
   RefreshCw,
+  Search,
   Server,
   ServerCog,
   ShieldAlert,
@@ -32,7 +34,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { PortForwardsChip } from "@/components/PortForwardsChip";
-import { k8s } from "@/lib/k8s";
+import { k8s, type ContextInfo } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useClusterStore } from "@/state/cluster";
 import { useRailState } from "@/hooks/useRailState";
@@ -43,6 +45,20 @@ const RAIL_W = 220;
 const RAIL_W_COLLAPSED = 56;
 const COLLAPSED_ROW =
   "mx-auto flex size-10 items-center justify-center rounded-control border text-text-secondary transition-colors";
+
+export function clusterSwitchPath(
+  pathname: string,
+  search: string,
+  currentContext: string,
+  nextContext: string,
+): string {
+  const currentPrefix = `/cluster/${encodeURIComponent(currentContext)}`;
+  const nextPrefix = `/cluster/${encodeURIComponent(nextContext)}`;
+  const suffix = pathname.startsWith(currentPrefix)
+    ? pathname.slice(currentPrefix.length)
+    : "";
+  return `${nextPrefix}${suffix || "/workloads"}${search}`;
+}
 
 type LeafItem = {
   kind: "leaf";
@@ -306,15 +322,19 @@ function Header({
   context,
   isProd,
   cluster,
+  contexts,
   collapsed,
   onBack,
+  onSwitchContext,
   onReprobe,
 }: {
   context: string;
   isProd: boolean;
   cluster?: string | null;
+  contexts: ContextInfo[];
   collapsed: boolean;
   onBack: () => void;
+  onSwitchContext: (context: string) => Promise<void>;
   onReprobe: () => void;
 }) {
   if (collapsed) {
@@ -330,7 +350,7 @@ function Header({
     );
   }
   return (
-    <div className="h-12 px-3 flex items-center gap-2 border-b border-border-default shrink-0">
+    <div className="relative h-12 px-3 flex items-center gap-2 border-b border-border-default shrink-0">
       <button
         onClick={onBack}
         className="text-text-secondary hover:text-text-primary inline-flex items-center gap-1 text-[11px] shrink-0"
@@ -339,26 +359,13 @@ function Header({
         <ChevronLeft className="size-3.5" /> fleet
       </button>
       <span className="text-text-muted">/</span>
-      <div className="flex flex-col min-w-0 flex-1">
-        <span
-          className="mds-heading text-[13px] text-text-primary truncate"
-          title={context}
-        >
-          {context}
-        </span>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          {isProd && (
-            <span className="px-1 py-px text-[9px] rounded bg-danger/15 text-danger border border-danger/40 font-semibold uppercase tracking-wide">
-              prod
-            </span>
-          )}
-          {cluster && (
-            <span className="text-[10px] text-text-muted truncate" title={cluster}>
-              {cluster}
-            </span>
-          )}
-        </div>
-      </div>
+      <ClusterSwitcher
+        context={context}
+        isProd={isProd}
+        cluster={cluster}
+        contexts={contexts}
+        onSwitchContext={onSwitchContext}
+      />
       <button
         type="button"
         onClick={onReprobe}
@@ -368,6 +375,171 @@ function Header({
       >
         <RefreshCw className="size-3" aria-hidden="true" />
       </button>
+    </div>
+  );
+}
+
+function ClusterSwitcher({
+  context,
+  isProd,
+  cluster,
+  contexts,
+  onSwitchContext,
+}: {
+  context: string;
+  isProd: boolean;
+  cluster?: string | null;
+  contexts: ContextInfo[];
+  onSwitchContext: (context: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [switching, setSwitching] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredContexts = useMemo(() => {
+    if (!normalizedQuery) return contexts;
+    return contexts.filter((item) =>
+      [item.name, item.cluster, item.user]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(normalizedQuery)),
+    );
+  }, [contexts, normalizedQuery]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  async function chooseContext(nextContext: string) {
+    if (nextContext === context) {
+      setOpen(false);
+      setQuery("");
+      return;
+    }
+    setSwitching(nextContext);
+    try {
+      await onSwitchContext(nextContext);
+      setOpen(false);
+      setQuery("");
+    } finally {
+      setSwitching(null);
+    }
+  }
+
+  return (
+    <div ref={rootRef} className="min-w-0 flex-1">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label="switch cluster"
+        className="flex w-full min-w-0 flex-col rounded-control px-1.5 py-0.5 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className="mds-heading truncate text-[13px] text-text-primary"
+            title={context}
+          >
+            {context}
+          </span>
+          <ChevronDown
+            className={cn("size-3 shrink-0 text-text-muted transition-transform", open && "rotate-180")}
+            aria-hidden="true"
+          />
+        </span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
+          {isProd && (
+            <span className="rounded border border-danger/40 bg-danger/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-danger">
+              prod
+            </span>
+          )}
+          {cluster && (
+            <span className="truncate text-[10px] text-text-muted" title={cluster}>
+              {cluster}
+            </span>
+          )}
+        </span>
+      </button>
+
+      {open && (
+        <div className="absolute left-3 right-3 top-[calc(100%-2px)] z-30 overflow-hidden rounded-panel border border-border-default bg-shell shadow-[var(--shadow-panel)]">
+          <div className="flex items-center gap-2 border-b border-border-subtle px-2 py-2">
+            <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setOpen(false);
+                  setQuery("");
+                }
+              }}
+              placeholder="switch cluster..."
+              className="h-7 min-w-0 flex-1 bg-transparent text-[12px] text-text-primary outline-none placeholder:text-text-muted"
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto p-1" role="listbox" aria-label="clusters">
+            {filteredContexts.length ? (
+              filteredContexts.map((item) => {
+                const active = item.name === context;
+                const busy = switching === item.name;
+                return (
+                  <button
+                    key={item.name}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    disabled={!!switching}
+                    onClick={() => void chooseContext(item.name)}
+                    className={cn(
+                      "flex w-full min-w-0 items-start gap-2 rounded-control px-2 py-2 text-left transition-colors",
+                      active
+                        ? "bg-accent-primary-soft text-text-primary"
+                        : "text-text-secondary hover:bg-hover hover:text-text-primary",
+                      switching && "opacity-60",
+                    )}
+                  >
+                    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+                      {active || busy ? (
+                        <Check className="size-3.5 text-accent-primary" aria-hidden="true" />
+                      ) : (
+                        <Network className="size-3.5 text-text-muted" aria-hidden="true" />
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate font-mono text-[12px]">{item.name}</span>
+                        {item.is_prod && (
+                          <span className="rounded border border-danger/40 bg-danger/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-danger">
+                            prod
+                          </span>
+                        )}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[10px] text-text-muted">
+                        {item.cluster} · {item.user}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="px-3 py-4 text-[12px] text-text-muted">
+                No clusters match.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -716,6 +888,7 @@ export function ClusterWorkspace() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
   const nav = useNavigate();
+  const location = useLocation();
   const { setContext } = useClusterStore();
   const rail = useRailState(context);
 
@@ -793,6 +966,22 @@ export function ClusterWorkspace() {
     toast.message("re-probing capabilities…");
   }, [context, qc]);
 
+  const switchContext = useCallback(
+    async (nextContext: string) => {
+      try {
+        await k8s.setContext(nextContext);
+        setContext(nextContext);
+        await qc.invalidateQueries({ queryKey: ["k8s", "contexts"] });
+        await qc.invalidateQueries({ queryKey: ["k8s", "namespaces"] });
+        nav(clusterSwitchPath(location.pathname, location.search, context, nextContext));
+      } catch (error) {
+        toast.error((error as Error).message ?? String(error));
+        throw error;
+      }
+    },
+    [context, location.pathname, location.search, nav, qc, setContext],
+  );
+
   return (
     <div className="flex h-full">
       <aside
@@ -804,8 +993,10 @@ export function ClusterWorkspace() {
           context={context}
           isProd={!!info?.is_prod}
           cluster={info?.cluster ?? null}
+          contexts={ctxs ?? []}
           collapsed={collapsed}
           onBack={() => nav("/cluster")}
+          onSwitchContext={switchContext}
           onReprobe={reprobeCapabilities}
         />
 
