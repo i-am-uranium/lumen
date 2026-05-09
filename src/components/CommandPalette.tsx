@@ -21,6 +21,7 @@ import {
 } from "@/lib/k8s/resourceRegistry";
 import {
   Boxes,
+  Clock3,
   FileText,
   Laptop,
   Lock,
@@ -268,6 +269,7 @@ export function CommandPalette() {
                   <NavItem value="go: helm" icon={Boxes} onSelect={() => pickTab("helm")} />
                   <NavItem value="go: access" icon={UserPlus} onSelect={() => pickTab("access")} />
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
+                  <NavItem value="go: rollout timeline" icon={Clock3} onSelect={() => pickTab("timeline")} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />
                   <NavItem value="go: tekton pipelines" icon={Workflow} onSelect={() => pickTab("tekton")} />

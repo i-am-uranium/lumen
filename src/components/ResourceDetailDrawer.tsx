@@ -30,6 +30,7 @@ import { useShellDock } from "@/hooks/useShellDock";
 import { useUiSettings } from "@/state/uiSettings";
 import { aiResourceUrl } from "@/lib/aiNavigation";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
+import { summarizeSmartYamlDiff } from "@/lib/smartDiff";
 import { cn } from "@/lib/utils";
 import { useShortcut } from "@/lib/shortcuts";
 import { Button } from "@/components/ui/button";
@@ -2001,6 +2002,9 @@ function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
 
   const canEdit = !sensitive && updateAccess.data?.allowed === true;
   const dirty = mode === "edit" && draft !== (data?.yaml ?? "");
+  const smartDiff = dryRunOutput
+    ? summarizeSmartYamlDiff(data?.yaml ?? "", dryRunOutput)
+    : null;
 
   async function copyYaml() {
     const text = mode === "edit" ? draft : (data?.yaml ?? "");
@@ -2179,6 +2183,30 @@ function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
           <summary className="cursor-pointer select-none px-3 py-2 text-[11px] text-success">
             dry-run output
           </summary>
+          {smartDiff && (
+            <div className="border-b border-border-subtle px-3 py-2">
+              <div className="mb-1 text-[11px] font-medium text-text-primary">
+                smart diff
+              </div>
+              {smartDiff.isNoOp ? (
+                <div className="text-[11px] text-success">
+                  no operationally meaningful changes detected
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {smartDiff.changes.slice(0, 6).map((change) => (
+                    <span
+                      key={`${change.category}-${change.path}`}
+                      className="rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
+                      title={`${change.path}: ${change.before ?? "empty"} -> ${change.after ?? "empty"}`}
+                    >
+                      {change.category}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <pre className="max-h-[220px] overflow-auto p-3 font-mono text-[11px] text-text-secondary whitespace-pre">
             {dryRunOutput}
           </pre>
