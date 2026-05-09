@@ -25,6 +25,7 @@ import {
   Clock3,
   FileText,
   Gauge,
+  Inbox,
   Laptop,
   Lock,
   LockOpen,
@@ -266,6 +267,7 @@ export function CommandPalette() {
                   <NavItem value="go: cloudmap" icon={Network} onSelect={() => pickTab("map")} />
                   <NavItem value="go: incident triage" icon={Siren} onSelect={() => pickTab("triage")} />
                   <NavItem value="go: metrics explorer" icon={Gauge} onSelect={() => pickTab("metrics")} />
+                  <NavItem value="go: alert inbox" icon={Inbox} onSelect={() => pickTab("alerts")} />
                   <NavItem value="go: nodes" icon={Server} onSelect={() => pickTab("nodes")} />
                   <NavItem value="go: security" icon={ShieldAlert} onSelect={() => pickTab("security")} />
                   <NavItem value="go: crds" icon={Boxes} onSelect={() => pickTab("crds")} />

@@ -36,7 +36,11 @@ export default defineConfig(async () => ({
   test: {
     environment: "jsdom",
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.worktrees/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      ...(process.cwd().includes("/.worktrees/") ? [] : ["**/.worktrees/**"]),
+    ],
     setupFiles: ["./src/test-setup.ts"],
     globals: true,
   },

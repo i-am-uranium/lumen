@@ -75,6 +75,9 @@ const EventsView = lazy(() =>
 const TriageView = lazy(() =>
   import("@/routes/cluster/TriageView").then(named("TriageView")),
 );
+const AlertInboxView = lazy(() =>
+  import("@/routes/cluster/AlertInboxView").then(named("AlertInboxView")),
+);
 const RolloutTimelineView = lazy(() =>
   import("@/routes/cluster/RolloutTimelineView").then(named("RolloutTimelineView")),
 );
@@ -326,6 +329,7 @@ function Shell() {
                 <Route path="workloads/:kind" element={<WorkloadsView />} />
                 <Route path="namespaces" element={<NamespacesView />} />
                 <Route path="triage" element={<TriageView />} />
+                <Route path="alerts" element={<AlertInboxView />} />
                 <Route path="events" element={<EventsView />} />
                 <Route path="timeline" element={<RolloutTimelineView />} />
                 <Route path="map" element={<CloudMap />} />

@@ -106,6 +106,7 @@ const SECTIONS: Item[] = [
     defaultTo: "triage",
     children: [
       { to: "triage", label: "incidents", end: true },
+      { to: "alerts", label: "alert inbox", end: true },
       { to: "workloads", label: "workloads", end: true },
       { to: "workloads/pods", label: "pods" },
       { to: "events", label: "events" },
