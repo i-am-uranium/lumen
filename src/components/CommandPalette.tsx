@@ -25,6 +25,7 @@ import {
   Clock3,
   FileText,
   Gauge,
+  History,
   Inbox,
   Laptop,
   Lock,
@@ -275,6 +276,7 @@ export function CommandPalette() {
                   <NavItem value="go: access" icon={UserPlus} onSelect={() => pickTab("access")} />
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
                   <NavItem value="go: rollout timeline" icon={Clock3} onSelect={() => pickTab("timeline")} />
+                  <NavItem value="go: change history" icon={History} onSelect={() => pickTab("change-history")} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                   <NavItem value="go: workspaces" icon={BookOpenCheck} onSelect={() => pickTab("workspaces")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />

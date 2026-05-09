@@ -96,6 +96,9 @@ const TektonView = lazy(() =>
 const WorkspacesView = lazy(() =>
   import("@/routes/cluster/WorkspacesView").then(named("WorkspacesView")),
 );
+const ChangeHistoryView = lazy(() =>
+  import("@/routes/cluster/ChangeHistoryView").then(named("ChangeHistoryView")),
+);
 const NetworkPolicyWizard = lazy(() =>
   import("@/routes/cluster/wizards/NetworkPolicyWizard").then(
     named("NetworkPolicyWizard"),
@@ -345,6 +348,7 @@ function Shell() {
                 <Route path="argocd" element={<ArgocdView />} />
                 <Route path="tekton" element={<TektonView />} />
                 <Route path="workspaces" element={<WorkspacesView />} />
+                <Route path="change-history" element={<ChangeHistoryView />} />
                 <Route
                   path="wizards/network-policy"
                   element={<NetworkPolicyWizard />}
