@@ -66,6 +66,9 @@ const NamespacesView = lazy(() =>
 const EventsView = lazy(() =>
   import("@/routes/cluster/EventsView").then(named("EventsView")),
 );
+const RolloutTimelineView = lazy(() =>
+  import("@/routes/cluster/RolloutTimelineView").then(named("RolloutTimelineView")),
+);
 const AiAssistant = lazy(() =>
   import("@/routes/cluster/AiAssistant").then(named("AiAssistant")),
 );
@@ -311,6 +314,7 @@ function Shell() {
                 <Route path="workloads/:kind" element={<WorkloadsView />} />
                 <Route path="namespaces" element={<NamespacesView />} />
                 <Route path="events" element={<EventsView />} />
+                <Route path="timeline" element={<RolloutTimelineView />} />
                 <Route path="map" element={<CloudMap />} />
                 <Route path="nodes" element={<NodesView />} />
                 <Route path="security" element={<SecurityView />} />

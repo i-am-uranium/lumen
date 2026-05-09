@@ -84,6 +84,7 @@ const SECTIONS: Item[] = [
       { to: "workloads", label: "workloads", end: true },
       { to: "workloads/pods", label: "pods" },
       { to: "events", label: "events" },
+      { to: "timeline", label: "timeline" },
       { to: "logs", label: "logs" },
       { to: "ai", label: "AI assistant" },
     ],
@@ -204,7 +205,6 @@ const SECTIONS: Item[] = [
   { kind: "divider" },
   { kind: "leaf", to: "map", label: "cloudmap", icon: MapIcon },
 ];
-
 // Optional in-cluster integrations. Each leaf is gated by a CRD-detection
 // query in ClusterWorkspace and only inserted into the rail when present —
 // keeps clusters without GitOps / Tekton / etc. clean of menu entries that
