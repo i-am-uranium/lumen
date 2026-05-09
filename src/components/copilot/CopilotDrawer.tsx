@@ -7,7 +7,12 @@ import {
   DrawerHeader,
   DrawerPanel,
 } from "@/components/lumen/drawer";
-import { buildCopilotResponse, type CopilotResponse } from "@/lib/copilotAssistant";
+import {
+  buildCopilotResponse,
+  buildNativeCopilotResponse,
+  type CopilotResponse,
+  type NativeCopilotResponse,
+} from "@/lib/copilotAssistant";
 import {
   buildCopilotPromptContext,
   buildCopilotRouteContext,
@@ -36,6 +41,9 @@ export function CopilotDrawer({ clusterContext }: Props) {
   const setActiveSession = useCopilotUi((s) => s.setActiveSession);
   const startNewInvestigation = useCopilotUi((s) => s.startNewInvestigation);
   const [sessionVersion, setSessionVersion] = useState(0);
+  const [liveResponse, setLiveResponse] = useState<NativeCopilotResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const route = useMemo(
     () => buildCopilotRouteContext(location.pathname, location.search),
@@ -45,7 +53,7 @@ export function CopilotDrawer({ clusterContext }: Props) {
     () => listAiSessions().find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessionVersion],
   );
-  const response = useMemo(
+  const sessionResponse = useMemo(
     () =>
       activeSession
         ? buildCopilotResponse({
@@ -56,28 +64,46 @@ export function CopilotDrawer({ clusterContext }: Props) {
         : null,
     [activeSession, clusterContext, route],
   );
+  const response = liveResponse ?? sessionResponse;
+  const nativeResponse: NativeCopilotResponse | null =
+    response && "mode" in response ? (response as NativeCopilotResponse) : null;
 
   if (!isOpen) return null;
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = draft.trim();
-    if (!question) return;
+    if (!question || running) return;
 
-    const nextResponse = buildCopilotResponse({
-      prompt: question,
-      clusterContext,
-      route,
-    });
-    const session = createCopilotSession({
-      clusterContext,
-      question,
-      route,
-      response: nextResponse,
-    });
-    saveAiSession(session);
-    setActiveSession(session.id);
-    setSessionVersion((value) => value + 1);
+    setRunning(true);
+    setError(null);
+    try {
+      const nextResponse = await buildNativeCopilotResponse({
+        prompt: question,
+        clusterContext,
+        route,
+      });
+      const session = createCopilotSession({
+        clusterContext,
+        question,
+        route,
+        response: nextResponse,
+      });
+      saveAiSession(session);
+      setLiveResponse(nextResponse);
+      setActiveSession(session.id);
+      setSessionVersion((value) => value + 1);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  function newInvestigation() {
+    setLiveResponse(null);
+    setError(null);
+    startNewInvestigation();
   }
 
   const title = response?.title ?? activeSession?.title ?? "Ask about this cluster";
@@ -111,7 +137,7 @@ export function CopilotDrawer({ clusterContext }: Props) {
               type="button"
               variant="ghost"
               size="icon"
-              onClick={startNewInvestigation}
+              onClick={newInvestigation}
               aria-label="new investigation"
               title="new investigation"
             >
@@ -147,6 +173,40 @@ export function CopilotDrawer({ clusterContext }: Props) {
 
             {response && (
               <section className="space-y-3" aria-label="Copilot response">
+                {nativeResponse?.target && (
+                  <div className="space-y-2">
+                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+                      target
+                    </h3>
+                    <div className="rounded-control border border-border-default bg-elevated px-3 py-2">
+                      <div className="text-[12px] font-medium text-text-primary">
+                        {nativeResponse.target.displayName}
+                      </div>
+                      <div className="mt-1 text-[11px] text-text-muted">
+                        {nativeResponse.target.source} / score {nativeResponse.target.score}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {nativeResponse?.candidates && nativeResponse.candidates.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+                      candidates
+                    </h3>
+                    <div className="space-y-2">
+                      {nativeResponse.candidates.map((candidate) => (
+                        <div
+                          key={candidate.id}
+                          className="rounded-control border border-border-default bg-elevated px-3 py-2 text-[12px] text-text-primary"
+                        >
+                          {candidate.displayName} ({candidate.score})
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {response.ctas.length > 0 && (
                   <div className="space-y-2">
                     <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
@@ -158,18 +218,56 @@ export function CopilotDrawer({ clusterContext }: Props) {
                   </div>
                 )}
 
-                <div className="space-y-2">
-                  <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-                    notes
-                  </h3>
-                  <ul className="space-y-1.5 text-[12px] leading-5 text-text-secondary">
-                    {response.details.map((detail) => (
-                      <li key={detail} className="rounded-control border border-border-default bg-elevated px-3 py-2">
-                        {detail}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                {response.details.length > 0 && nativeResponse?.mode !== "ambiguous" && (
+                  <div className="space-y-2">
+                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+                      notes
+                    </h3>
+                    <ul className="space-y-1.5 text-[12px] leading-5 text-text-secondary">
+                      {response.details.map((detail) => (
+                        <li
+                          key={detail}
+                          className="rounded-control border border-border-default bg-elevated px-3 py-2"
+                        >
+                          {detail}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {nativeResponse?.evidence && (
+                  <div className="space-y-2">
+                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+                      evidence
+                    </h3>
+                    <div className="space-y-2">
+                      {[
+                        ...nativeResponse.evidence.facts,
+                        ...nativeResponse.evidence.warnings,
+                      ].map((fact) => (
+                        <div
+                          key={fact.id}
+                          className="rounded-control border border-border-default bg-elevated px-3 py-2"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[12px] font-medium text-text-primary">
+                              {fact.label}
+                            </span>
+                            <span className="text-right text-[12px] text-text-secondary">
+                              {fact.value}
+                            </span>
+                          </div>
+                          {fact.detail && (
+                            <p className="mt-1 text-[11px] leading-4 text-text-muted">
+                              {fact.detail}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {response.commands.length > 0 && (
                   <div className="space-y-2">
@@ -207,12 +305,12 @@ export function CopilotDrawer({ clusterContext }: Props) {
               />
             </label>
             <div className="mt-2 flex items-center justify-between gap-2">
-              <p className="text-[11px] text-text-muted">
-                CTAs navigate; actions stay on their owning pages.
+              <p className={cn("text-[11px]", error ? "text-danger" : "text-text-muted")}>
+                {error ?? "CTAs navigate; actions stay on their owning pages."}
               </p>
-              <Button type="submit" size="sm" disabled={!draft.trim()} aria-label="send">
+              <Button type="submit" size="sm" disabled={!draft.trim() || running} aria-label="send">
                 <SendHorizontal className="size-3.5" />
-                Send
+                {running ? "Thinking" : "Send"}
               </Button>
             </div>
           </form>
