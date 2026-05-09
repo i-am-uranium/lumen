@@ -66,6 +66,9 @@ const Overview = lazy(() =>
 const WorkloadsView = lazy(() =>
   import("@/routes/cluster/WorkloadsView").then(named("WorkloadsView")),
 );
+const ClusterCompareView = lazy(() =>
+  import("@/routes/cluster/ClusterCompareView").then(named("ClusterCompareView")),
+);
 const NamespacesView = lazy(() =>
   import("@/routes/cluster/NamespacesView").then(named("NamespacesView")),
 );
@@ -330,6 +333,7 @@ function Shell() {
                 <Route path="overview" element={<Overview />} />
                 <Route path="workloads" element={<WorkloadsView />} />
                 <Route path="workloads/:kind" element={<WorkloadsView />} />
+                <Route path="compare" element={<ClusterCompareView />} />
                 <Route path="namespaces" element={<NamespacesView />} />
                 <Route path="triage" element={<TriageView />} />
                 <Route path="alerts" element={<AlertInboxView />} />

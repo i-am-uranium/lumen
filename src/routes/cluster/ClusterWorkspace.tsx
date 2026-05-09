@@ -26,6 +26,7 @@ import {
   Database,
   FileBox,
   Folder,
+  GitCompareArrows,
   Layers,
   Lock,
   Map as MapIcon,
@@ -119,6 +120,7 @@ const SECTIONS: Item[] = [
   { kind: "leaf", to: "nodes", label: "nodes", icon: Server },
   { kind: "leaf", to: "metrics", label: "metrics explorer", icon: Gauge },
   { kind: "leaf", to: "namespaces", label: "namespaces", icon: Folder },
+  { kind: "leaf", to: "compare", label: "compare", icon: GitCompareArrows },
 
   { kind: "divider" },
   {
