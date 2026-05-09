@@ -1,10 +1,16 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ActivityDrawer } from "@/components/ActivityDrawer";
+import {
+  ClusterSwitcher,
+  clusterSwitchPath,
+  useClusterContexts,
+} from "@/components/ClusterSwitcher";
 import { useActivityStream } from "@/state/activityStream";
 import { useUiSettings } from "@/state/uiSettings";
 import { ShellDock } from "@/components/shell/ShellDock";
@@ -100,11 +106,7 @@ const qc = new QueryClient({
 function StatusBar() {
   const { pathname } = useLocation();
   const { contextName, namespace } = useClusterStore();
-  const { data: ctxs = [] } = useQuery({
-    queryKey: ["k8s", "contexts"],
-    queryFn: k8s.listContexts,
-    enabled: pathname.startsWith("/cluster"),
-  });
+  const { data: ctxs = [] } = useQuery(useClusterContexts(pathname.startsWith("/cluster")));
   const activeCtx = ctxs.find((c) => c.name === contextName);
 
   return (
@@ -155,9 +157,15 @@ function ReadOnlyChip() {
 
 function NavBar() {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const { contextName } = useClusterStore();
+  const { pathname, search } = useLocation();
+  const queryClient = useQueryClient();
+  const { contextName, setContext } = useClusterStore();
   const aiActive = pathname.endsWith("/ai");
+  const { data: contexts = [] } = useQuery(useClusterContexts(pathname.startsWith("/cluster")));
+  const activeContext = contexts.find((item) => item.name === contextName);
+  const activeClusterPath = contextName
+    ? pathname.startsWith(`/cluster/${encodeURIComponent(contextName)}`)
+    : false;
 
   const startActivity = useActivityStream((s) => s.start);
   const stopActivity = useActivityStream((s) => s.stop);
@@ -177,13 +185,41 @@ function NavBar() {
     }
   }, [contextName, activeStreamCtx, startActivity, stopActivity]);
 
+  const switchContext = useCallback(
+    async (nextContext: string) => {
+      if (!contextName) return;
+      try {
+        await k8s.setContext(nextContext);
+        setContext(nextContext);
+        navigate(clusterSwitchPath(pathname, search, contextName, nextContext));
+        await queryClient.invalidateQueries({ queryKey: ["k8s", "contexts"] });
+        await queryClient.invalidateQueries({ queryKey: ["k8s", "namespaces"] });
+      } catch (error) {
+        toast.error((error as Error).message ?? String(error));
+        throw error;
+      }
+    },
+    [contextName, navigate, pathname, queryClient, search, setContext],
+  );
+
   return (
     <>
       <nav className="flex items-center gap-2 px-4 py-2 border-b border-term-border-soft bg-term-panel">
         <span className="mds-heading text-[19px] text-term-fg">lumen</span>
-        <span className="rounded-[4px] border border-term-green/40 bg-term-green/10 px-2 py-1 text-[11px] uppercase tracking-wide text-term-green">
-          cluster
-        </span>
+        {contextName && activeClusterPath ? (
+          <ClusterSwitcher
+            context={contextName}
+            isProd={!!activeContext?.is_prod}
+            cluster={activeContext?.cluster ?? null}
+            contexts={contexts}
+            onSwitchContext={switchContext}
+            variant="top"
+          />
+        ) : (
+          <span className="rounded-[4px] border border-term-green/40 bg-term-green/10 px-2 py-1 text-[11px] uppercase tracking-wide text-term-green">
+            cluster
+          </span>
+        )}
         <ReadOnlyChip />
         <div className="flex-1" />
         <ThemeSwitcher />
