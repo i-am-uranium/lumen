@@ -39,6 +39,9 @@ const CloudMap = lazy(() =>
 const SecurityView = lazy(() =>
   import("@/routes/cluster/SecurityView").then(named("SecurityView")),
 );
+const NetworkDebuggerView = lazy(() =>
+  import("@/routes/cluster/NetworkDebuggerView").then(named("NetworkDebuggerView")),
+);
 const NodesView = lazy(() =>
   import("@/routes/cluster/NodesView").then(named("NodesView")),
 );
@@ -66,6 +69,12 @@ const NamespacesView = lazy(() =>
 const EventsView = lazy(() =>
   import("@/routes/cluster/EventsView").then(named("EventsView")),
 );
+const TriageView = lazy(() =>
+  import("@/routes/cluster/TriageView").then(named("TriageView")),
+);
+const RolloutTimelineView = lazy(() =>
+  import("@/routes/cluster/RolloutTimelineView").then(named("RolloutTimelineView")),
+);
 const AiAssistant = lazy(() =>
   import("@/routes/cluster/AiAssistant").then(named("AiAssistant")),
 );
@@ -77,6 +86,9 @@ const ArgocdView = lazy(() =>
 );
 const TektonView = lazy(() =>
   import("@/routes/cluster/TektonView").then(named("TektonView")),
+);
+const WorkspacesView = lazy(() =>
+  import("@/routes/cluster/WorkspacesView").then(named("WorkspacesView")),
 );
 const NetworkPolicyWizard = lazy(() =>
   import("@/routes/cluster/wizards/NetworkPolicyWizard").then(
@@ -310,10 +322,13 @@ function Shell() {
                 <Route path="workloads" element={<WorkloadsView />} />
                 <Route path="workloads/:kind" element={<WorkloadsView />} />
                 <Route path="namespaces" element={<NamespacesView />} />
+                <Route path="triage" element={<TriageView />} />
                 <Route path="events" element={<EventsView />} />
+                <Route path="timeline" element={<RolloutTimelineView />} />
                 <Route path="map" element={<CloudMap />} />
                 <Route path="nodes" element={<NodesView />} />
                 <Route path="security" element={<SecurityView />} />
+                <Route path="network-debugger" element={<NetworkDebuggerView />} />
                 <Route path="crds" element={<CrdBrowser />} />
                 <Route path="helm" element={<HelmBrowser />} />
                 <Route path="access" element={<TeamAccess />} />
@@ -321,6 +336,7 @@ function Shell() {
                 <Route path="ai" element={<AiAssistant />} />
                 <Route path="argocd" element={<ArgocdView />} />
                 <Route path="tekton" element={<TektonView />} />
+                <Route path="workspaces" element={<WorkspacesView />} />
                 <Route
                   path="wizards/network-policy"
                   element={<NetworkPolicyWizard />}

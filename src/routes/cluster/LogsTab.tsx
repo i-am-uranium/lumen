@@ -55,7 +55,7 @@ export function LogsTab() {
     sp.get("c") || null,
   );
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(sp.get("grep") ?? "");
 
   // Persist selection in the URL so deep-links from CloudMap work.
   useEffect(() => {
@@ -64,9 +64,10 @@ export function LogsTab() {
     if (kind) next.set("kind", kind);
     if (name) next.set("name", name);
     if (container) next.set("c", container);
+    if (filter) next.set("grep", filter);
     setSp(next, { replace: true });
     // loc.pathname intentionally omitted — setSearchParams is stable.
-  }, [namespace, kind, name, container, setSp, loc.pathname]);
+  }, [namespace, kind, name, container, filter, setSp, loc.pathname]);
 
   // Reset container when the workload selection changes — the previously
   // picked container probably doesn't exist on a different pod.

@@ -20,7 +20,9 @@ import {
   resourceKindToSlug,
 } from "@/lib/k8s/resourceRegistry";
 import {
+  BookOpenCheck,
   Boxes,
+  Clock3,
   FileText,
   Laptop,
   Lock,
@@ -33,6 +35,7 @@ import {
   Server,
   ShieldAlert,
   Sparkles,
+  Siren,
   Sun,
   Terminal,
   UserPlus,
@@ -260,13 +263,16 @@ export function CommandPalette() {
               {currentCtx && (
                 <>
                   <NavItem value="go: cloudmap" icon={Network} onSelect={() => pickTab("map")} />
+                  <NavItem value="go: incident triage" icon={Siren} onSelect={() => pickTab("triage")} />
                   <NavItem value="go: nodes" icon={Server} onSelect={() => pickTab("nodes")} />
                   <NavItem value="go: security" icon={ShieldAlert} onSelect={() => pickTab("security")} />
                   <NavItem value="go: crds" icon={Boxes} onSelect={() => pickTab("crds")} />
                   <NavItem value="go: helm" icon={Boxes} onSelect={() => pickTab("helm")} />
                   <NavItem value="go: access" icon={UserPlus} onSelect={() => pickTab("access")} />
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
+                  <NavItem value="go: rollout timeline" icon={Clock3} onSelect={() => pickTab("timeline")} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
+                  <NavItem value="go: workspaces" icon={BookOpenCheck} onSelect={() => pickTab("workspaces")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />
                   <NavItem value="go: tekton pipelines" icon={Workflow} onSelect={() => pickTab("tekton")} />
                   <NavItem

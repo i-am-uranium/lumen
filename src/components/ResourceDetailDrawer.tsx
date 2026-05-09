@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, Channel } from "@tauri-apps/api/core";
@@ -30,11 +30,18 @@ import { useShellDock } from "@/hooks/useShellDock";
 import { useUiSettings } from "@/state/uiSettings";
 import { aiResourceUrl } from "@/lib/aiNavigation";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
+import { summarizeSmartYamlDiff } from "@/lib/smartDiff";
 import { cn } from "@/lib/utils";
 import { useShortcut } from "@/lib/shortcuts";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
+import {
+  analyzeYamlPreflight,
+  buildActionPreflight,
+  type PreflightImpact,
+  type PreflightTarget,
+} from "@/lib/preflight";
 import {
   DrawerBackdrop,
   DrawerHeader,
@@ -79,6 +86,19 @@ function desiredReplicasFromReady(ready: string | undefined): number | null {
   if (!match) return null;
   const parsed = Number.parseInt(match[1], 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function preflightTargetFromResource(
+  resource: Resource,
+  replicas?: number | null,
+): PreflightTarget {
+  return {
+    kind: resource.kind,
+    namespace: resource.namespace || null,
+    name: resource.name,
+    replicas: replicas ?? null,
+    currentReplicas: replicas ?? null,
+  };
 }
 
 export function ResourceDetailDrawer({
@@ -155,6 +175,36 @@ export function ResourceDetailDrawer({
     refetchInterval: 3_000,
   });
   const desiredReplicas = desiredReplicasFromReady(actionResource.data?.summary.ready);
+  const deletePreflight = useMemo<PreflightImpact | null>(() => {
+    if (!resource) return null;
+    return buildActionPreflight({
+      actionType: "delete",
+      targets: [preflightTargetFromResource(resource, desiredReplicas)],
+    });
+  }, [desiredReplicas, resource]);
+  const pendingActionPreflight = useMemo<PreflightImpact | null>(() => {
+    if (!resource || !pendingAction) return null;
+    const target = preflightTargetFromResource(resource, desiredReplicas);
+    if (pendingAction.kind === "restart") {
+      return buildActionPreflight({ actionType: "restart", targets: [target] });
+    }
+    if (pendingAction.kind === "trigger") {
+      return buildActionPreflight({ actionType: "trigger", targets: [target] });
+    }
+    if (pendingAction.kind === "setImage") {
+      return buildActionPreflight({
+        actionType: "set-image",
+        targets: [target],
+        note: `${pendingAction.container} will use ${pendingAction.image}.`,
+      });
+    }
+    return buildActionPreflight({
+      actionType: "scale",
+      targets: [target],
+      desiredReplicas: pendingAction.replicas,
+      currentReplicas: desiredReplicas,
+    });
+  }, [desiredReplicas, pendingAction, resource]);
 
   function openShell() {
     if (!resource || !isPod) return;
@@ -441,29 +491,29 @@ export function ResourceDetailDrawer({
         </div>
       </DrawerPanel>
       {resource && (
-        <ConfirmActionDialog
+        <PreflightPreviewDialog
           open={deleteConfirmOpen}
-          title={`delete ${resource.kind}`}
+          title={`preflight delete ${resource.kind}`}
           description={`This will delete ${resource.kind}/${resource.name} from ${resource.namespace || "cluster scope"} in ${ctx}. The action is sent to Kubernetes immediately after confirmation.`}
-          target={`${resource.namespace || "cluster"}/${resource.name}`}
+          impact={deletePreflight}
+          confirmText={`${resource.namespace || "cluster"}/${resource.name}`}
           confirmLabel="delete"
-          intent="danger"
           busy={deleting}
           onCancel={() => setDeleteConfirmOpen(false)}
           onConfirm={handleDelete}
         />
       )}
       {resource && pendingAction && (
-        <ConfirmActionDialog
+        <PreflightPreviewDialog
           open
           title={
             pendingAction.kind === "restart"
-              ? `restart ${resource.kind}`
+              ? `preflight restart ${resource.kind}`
               : pendingAction.kind === "trigger"
-                ? `trigger ${resource.kind}`
+                ? `preflight trigger ${resource.kind}`
                 : pendingAction.kind === "setImage"
-                  ? `set image on ${resource.kind}`
-                  : `scale ${resource.kind}`
+                  ? `preflight set image on ${resource.kind}`
+                  : `preflight scale ${resource.kind}`
           }
           description={
             pendingAction.kind === "restart"
@@ -474,7 +524,8 @@ export function ResourceDetailDrawer({
                   ? `This will patch container ${pendingAction.container} on ${resource.kind}/${resource.name} to use image ${pendingAction.image}. Kubernetes will roll the workload through its normal update strategy.`
                   : `This will set replicas for ${resource.kind}/${resource.name} to ${pendingAction.replicas}.`
           }
-          target={`${resource.namespace || "cluster"}/${resource.name}`}
+          impact={pendingActionPreflight}
+          confirmText={`${resource.namespace || "cluster"}/${resource.name}`}
           confirmLabel={
             pendingAction.kind === "restart"
               ? "restart"
@@ -484,7 +535,6 @@ export function ResourceDetailDrawer({
                   ? "set image"
                   : "scale"
           }
-          intent="warning"
           busy={actionBusy}
           onCancel={() => setPendingAction(null)}
           onConfirm={handleResourceAction}
@@ -2001,6 +2051,21 @@ function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
 
   const canEdit = !sensitive && updateAccess.data?.allowed === true;
   const dirty = mode === "edit" && draft !== (data?.yaml ?? "");
+  const smartDiff = dryRunOutput
+    ? summarizeSmartYamlDiff(data?.yaml ?? "", dryRunOutput)
+    : null;
+  const applyPreflight = useMemo(() => {
+    return analyzeYamlPreflight({
+      actionType: "apply",
+      target: {
+        kind: resource.kind,
+        namespace: resource.namespace || null,
+        name: resource.name,
+      },
+      beforeYaml: data?.yaml ?? "",
+      afterYaml: draft,
+    });
+  }, [data?.yaml, draft, resource.kind, resource.name, resource.namespace]);
 
   async function copyYaml() {
     const text = mode === "edit" ? draft : (data?.yaml ?? "");
@@ -2179,19 +2244,43 @@ function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
           <summary className="cursor-pointer select-none px-3 py-2 text-[11px] text-success">
             dry-run output
           </summary>
+          {smartDiff && (
+            <div className="border-b border-border-subtle px-3 py-2">
+              <div className="mb-1 text-[11px] font-medium text-text-primary">
+                smart diff
+              </div>
+              {smartDiff.isNoOp ? (
+                <div className="text-[11px] text-success">
+                  no operationally meaningful changes detected
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {smartDiff.changes.slice(0, 6).map((change) => (
+                    <span
+                      key={`${change.category}-${change.path}`}
+                      className="rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
+                      title={`${change.path}: ${change.before ?? "empty"} -> ${change.after ?? "empty"}`}
+                    >
+                      {change.category}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <pre className="max-h-[220px] overflow-auto p-3 font-mono text-[11px] text-text-secondary whitespace-pre">
             {dryRunOutput}
           </pre>
         </details>
       )}
 
-      <ConfirmActionDialog
+      <PreflightPreviewDialog
         open={applyConfirmOpen}
-        title={`apply ${resource.kind}`}
+        title={`preflight apply ${resource.kind}`}
         description={`This server-side apply can create or update ${resource.kind}/${resource.name} in ${resource.namespace || "cluster scope"}. Dry-run first if you only want validation.`}
-        target={`${resource.namespace || "cluster"}/${resource.name}`}
+        impact={applyPreflight}
+        confirmText={`${resource.namespace || "cluster"}/${resource.name}`}
         confirmLabel="apply"
-        intent="warning"
         busy={busy}
         onCancel={() => setApplyConfirmOpen(false)}
         onConfirm={() => {

@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Copy, Eye, FlaskConical, Pencil, ShieldOff, X } from "lucide-react";
 import { toast } from "sonner";
 import { k8s, type ApplyOutcome, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
-import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
+import { analyzeYamlPreflight } from "@/lib/preflight";
 
 type EditCapability = {
   /** Namespace of the target. Required because apply_resource pins it server-side. */
@@ -133,6 +134,19 @@ export function YamlModal({
   };
 
   const dirty = mode === "edit" && draft !== (yaml ?? "");
+  const applyPreflight = useMemo(() => {
+    if (!editCapability) return null;
+    return analyzeYamlPreflight({
+      actionType: "apply",
+      target: {
+        kind: editCapability.kind,
+        namespace: editCapability.namespace || null,
+        name: editCapability.name,
+      },
+      beforeYaml: yaml ?? "",
+      afterYaml: draft,
+    });
+  }, [draft, editCapability, yaml]);
 
   return (
     <div
@@ -277,13 +291,13 @@ export function YamlModal({
           </div>
         )}
         {editCapability && (
-          <ConfirmActionDialog
+          <PreflightPreviewDialog
             open={applyConfirmOpen}
-            title={`apply ${editCapability.kind}`}
+            title={`preflight apply ${editCapability.kind}`}
             description={`This server-side apply can create or update ${editCapability.kind}/${editCapability.name} in ${editCapability.namespace || "cluster scope"}. Dry-run first if you only want validation.`}
-            target={`${editCapability.namespace || "cluster"}/${editCapability.name}`}
+            impact={applyPreflight}
+            confirmText={`${editCapability.namespace || "cluster"}/${editCapability.name}`}
             confirmLabel="apply"
-            intent="warning"
             busy={busy}
             onCancel={() => setApplyConfirmOpen(false)}
             onConfirm={() => {

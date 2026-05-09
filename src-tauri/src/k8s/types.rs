@@ -328,6 +328,170 @@ pub struct CloudMap {
     pub fetched_at_ms: i64,
 }
 
+// ─── Network Debugger ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDebugSnapshot {
+    pub namespaces: Vec<NetworkNamespace>,
+    pub pods: Vec<NetworkPod>,
+    pub services: Vec<NetworkService>,
+    pub endpoints: Vec<NetworkEndpoints>,
+    pub endpoint_slices: Vec<NetworkEndpointSlice>,
+    pub ingresses: Vec<NetworkIngress>,
+    pub network_policies: Vec<NetworkPolicyResource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkNamespace {
+    pub name: String,
+    pub labels: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPod {
+    pub name: String,
+    pub namespace: String,
+    pub labels: BTreeMap<String, String>,
+    pub ready: bool,
+    pub phase: Option<String>,
+    pub pod_ip: Option<String>,
+    pub ports: Vec<NetworkPodPort>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPodPort {
+    pub name: Option<String>,
+    pub container_port: i32,
+    pub protocol: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkService {
+    pub name: String,
+    pub namespace: String,
+    pub r#type: Option<String>,
+    pub selector: BTreeMap<String, String>,
+    pub ports: Vec<NetworkServicePort>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkServicePort {
+    pub name: Option<String>,
+    pub protocol: Option<String>,
+    pub port: i32,
+    pub target_port: Option<IntOrStringValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum IntOrStringValue {
+    Int(i32),
+    String(String),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkEndpoints {
+    pub name: String,
+    pub namespace: String,
+    pub addresses: Vec<NetworkEndpointAddress>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkEndpointSlice {
+    pub name: String,
+    pub namespace: String,
+    pub service_name: String,
+    pub ports: Vec<NetworkEndpointPort>,
+    pub endpoints: Vec<NetworkEndpointAddress>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkEndpointPort {
+    pub name: Option<String>,
+    pub protocol: Option<String>,
+    pub port: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkEndpointAddress {
+    pub addresses: Vec<String>,
+    pub ready: bool,
+    pub target_ref: Option<NetworkEndpointRef>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkEndpointRef {
+    pub kind: Option<String>,
+    pub name: Option<String>,
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkIngress {
+    pub name: String,
+    pub namespace: String,
+    pub class_name: Option<String>,
+    pub rules: Vec<NetworkIngressRule>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkIngressRule {
+    pub host: Option<String>,
+    pub paths: Vec<NetworkIngressBackend>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkIngressBackend {
+    pub path: String,
+    pub path_type: Option<String>,
+    pub service_name: String,
+    pub service_port: Option<IntOrStringValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPolicyResource {
+    pub name: String,
+    pub namespace: String,
+    pub pod_selector: BTreeMap<String, String>,
+    pub policy_types: Vec<String>,
+    pub ingress: Vec<NetworkPolicyIngressRule>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkPolicyIngressRule {
+    pub from: Vec<NetworkPolicyPeer>,
+    pub ports: Vec<NetworkPolicyPort>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkPolicyPeer {
+    pub pod_selector: Option<BTreeMap<String, String>>,
+    pub namespace_selector: Option<BTreeMap<String, String>>,
+    pub ip_block: Option<NetworkPolicyIpBlock>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkPolicyIpBlock {
+    pub cidr: String,
+    pub except: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkPolicyPort {
+    pub protocol: Option<String>,
+    pub port: Option<IntOrStringValue>,
+}
+
 // ─── Security / DevSec ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Serialize)]
