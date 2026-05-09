@@ -20,6 +20,7 @@ import {
   resourceKindToSlug,
 } from "@/lib/k8s/resourceRegistry";
 import {
+  BookOpenCheck,
   Boxes,
   Clock3,
   FileText,
@@ -271,6 +272,7 @@ export function CommandPalette() {
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
                   <NavItem value="go: rollout timeline" icon={Clock3} onSelect={() => pickTab("timeline")} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
+                  <NavItem value="go: workspaces" icon={BookOpenCheck} onSelect={() => pickTab("workspaces")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />
                   <NavItem value="go: tekton pipelines" icon={Workflow} onSelect={() => pickTab("tekton")} />
                   <NavItem

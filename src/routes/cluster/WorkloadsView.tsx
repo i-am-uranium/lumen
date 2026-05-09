@@ -999,7 +999,7 @@ export function WorkloadsView() {
   // over persisted state so deep links land deterministically; the
   // persisted value is the fallback for plain navigation back to this
   // section.
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const persistedNamespace = useUiSettings(
     (s) => s.selectedNamespaces[context] ?? "",
   );
@@ -1010,6 +1010,31 @@ export function WorkloadsView() {
   const [search, setSearch] = useState<string>(
     () => searchParams.get("q") ?? "",
   );
+  const lastSyncedSearchParams = useRef(searchParams.toString());
+  const applyingUrlSearchParams = useRef(false);
+  useEffect(() => {
+    const current = searchParams.toString();
+    if (current === lastSyncedSearchParams.current) return;
+    const nextNamespace = searchParams.get("ns") ?? persistedNamespace;
+    const nextSearch = searchParams.get("q") ?? "";
+    applyingUrlSearchParams.current = true;
+    setNamespace(nextNamespace);
+    setSearch(nextSearch);
+    lastSyncedSearchParams.current = current;
+  }, [persistedNamespace, searchParams]);
+  useEffect(() => {
+    if (applyingUrlSearchParams.current) {
+      applyingUrlSearchParams.current = false;
+      return;
+    }
+    const next = new URLSearchParams();
+    if (namespace) next.set("ns", namespace);
+    if (search) next.set("q", search);
+    const nextString = next.toString();
+    if (nextString === searchParams.toString()) return;
+    lastSyncedSearchParams.current = nextString;
+    setSearchParams(next, { replace: true });
+  }, [namespace, search, searchParams, setSearchParams]);
   // Mirror namespace changes back to the store so the next visit
   // (same context) picks up where the user left off.
   useEffect(() => {
