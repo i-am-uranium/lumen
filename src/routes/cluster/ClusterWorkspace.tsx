@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useMemo } from "react";
-import { NavLink, Outlet, useParams, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  BookmarkPlus,
+  BookOpenCheck,
   Boxes,
   Box,
   ChevronDown,
@@ -31,10 +39,25 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { PortForwardsChip } from "@/components/PortForwardsChip";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useClusterStore } from "@/state/cluster";
+import { useUiSettings } from "@/state/uiSettings";
+import {
+  useWorkspacesStore,
+  type WorkspaceInput,
+} from "@/state/workspaces";
 import { useRailState } from "@/hooks/useRailState";
 import { usePinnedResources, type PinnedRef } from "@/hooks/usePinnedResources";
 import { useRecentResources } from "@/hooks/useRecentResources";
@@ -196,6 +219,13 @@ const SECTIONS: Item[] = [
   },
 
   { kind: "divider" },
+  {
+    kind: "leaf",
+    to: "workspaces",
+    label: "workspaces",
+    icon: BookOpenCheck,
+  },
+  { kind: "divider" },
   { kind: "leaf", to: "access", label: "access control", icon: UserPlus },
   { kind: "leaf", to: "helm", label: "helm", icon: Package },
   { kind: "leaf", to: "crds", label: "custom resources", icon: Boxes },
@@ -307,11 +337,13 @@ function Header({
   collapsed,
   onBack,
   onReprobe,
+  onSaveWorkspace,
 }: {
   context: string;
   collapsed: boolean;
   onBack: () => void;
   onReprobe: () => void;
+  onSaveWorkspace: () => void;
 }) {
   if (collapsed) {
     return (
@@ -338,6 +370,15 @@ function Header({
       <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-muted" title={context}>
         {context}
       </span>
+      <button
+        type="button"
+        onClick={onSaveWorkspace}
+        title="save current workspace"
+        aria-label="save current workspace"
+        className="shrink-0 inline-flex items-center justify-center size-6 rounded-md text-text-muted hover:bg-hover hover:text-text-primary"
+      >
+        <BookmarkPlus className="size-3" aria-hidden="true" />
+      </button>
       <button
         type="button"
         onClick={onReprobe}
@@ -695,7 +736,15 @@ export function ClusterWorkspace() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
   const nav = useNavigate();
+  const location = useLocation();
   const { setContext } = useClusterStore();
+  const selectedNamespace = useUiSettings(
+    (s) => s.selectedNamespaces[context] ?? "",
+  );
+  const addWorkspace = useWorkspacesStore((s) => s.addWorkspace);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [workspaceNotes, setWorkspaceNotes] = useState("");
   const rail = useRailState(context);
   useEffect(() => {
     if (!context) return;
@@ -765,6 +814,58 @@ export function ClusterWorkspace() {
     toast.message("re-probing capabilities…");
   }, [context, qc]);
 
+  const currentWorkspaceDraft = useCallback(
+    (name: string, notes: string): WorkspaceInput => {
+      const params = new URLSearchParams(location.search);
+      const logKind = params.get("kind") ?? "";
+      const logName = params.get("name") ?? "";
+      const logNs = params.get("ns") ?? "";
+      return {
+        name,
+        context,
+        namespace: params.get("ns") ?? selectedNamespace,
+        route: `${location.pathname}${location.search}`,
+        search: params.get("q") ?? "",
+        logQuery:
+          location.pathname.endsWith("/logs") && logNs && logKind && logName
+            ? {
+                namespace: logNs,
+                kind: logKind,
+                name: logName,
+                container: params.get("c"),
+                filter: params.get("grep") ?? "",
+              }
+            : null,
+        notes,
+      };
+    },
+    [context, location.pathname, location.search, selectedNamespace],
+  );
+
+  function openSaveDialog() {
+    const params = new URLSearchParams(location.search);
+    const routePart =
+      location.pathname.split("/").slice(3).join("/") || "workloads";
+    const nsPart = params.get("ns") ?? selectedNamespace;
+    setWorkspaceName(
+      [context, routePart, nsPart].filter(Boolean).join(" · "),
+    );
+    setWorkspaceNotes("");
+    setSaveOpen(true);
+  }
+
+  function saveCurrentWorkspace() {
+    try {
+      const saved = addWorkspace(
+        currentWorkspaceDraft(workspaceName, workspaceNotes),
+      );
+      toast.success(`saved workspace: ${saved.name}`);
+      setSaveOpen(false);
+    } catch (error) {
+      toast.error((error as Error).message ?? String(error));
+    }
+  }
+
   return (
     <div className="flex h-full">
       <aside
@@ -777,6 +878,7 @@ export function ClusterWorkspace() {
           collapsed={collapsed}
           onBack={() => nav("/cluster")}
           onReprobe={reprobeCapabilities}
+          onSaveWorkspace={openSaveDialog}
         />
 
         <nav className={cn("flex-1 min-h-0 overflow-y-auto", collapsed ? "py-2" : "py-1.5")}>
@@ -914,6 +1016,49 @@ export function ClusterWorkspace() {
       <div className="flex-1 min-w-0 min-h-0">
         <Outlet />
       </div>
+      <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
+        <DialogContent className="max-w-md border-border-default bg-surface text-text-primary">
+          <DialogHeader>
+            <DialogTitle className="text-[16px]">Save workspace</DialogTitle>
+            <DialogDescription className="text-[12px] text-text-secondary">
+              Stores this cluster route, namespace, URL filters, and log target locally.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block text-[11px] font-medium uppercase tracking-wide text-text-muted">
+              Name
+              <Input
+                value={workspaceName}
+                onChange={(e) => setWorkspaceName(e.target.value)}
+                className="mt-1"
+                autoFocus
+              />
+            </label>
+            <label className="block text-[11px] font-medium uppercase tracking-wide text-text-muted">
+              Notes
+              <textarea
+                value={workspaceNotes}
+                onChange={(e) => setWorkspaceNotes(e.target.value)}
+                rows={4}
+                className="mt-1 w-full rounded-control border border-border-default bg-elevated px-3 py-2 text-[12px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+              />
+            </label>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setSaveOpen(false)}
+            >
+              cancel
+            </Button>
+            <Button type="button" onClick={saveCurrentWorkspace}>
+              <BookmarkPlus className="size-3.5" />
+              save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
