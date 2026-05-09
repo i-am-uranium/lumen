@@ -121,8 +121,37 @@ export function buildEventsCta(
   };
 }
 
+export function buildWorkloadCta(
+  context: string,
+  target: CopilotResolvedTarget,
+): CopilotCta {
+  const params = new URLSearchParams();
+  if (target.namespace) params.set("ns", target.namespace);
+  if (target.name) params.set("q", target.name);
+
+  return {
+    id: "open-workload",
+    label: "Open workload",
+    description: "Navigate to Workloads with this resource prefilled.",
+    to: clusterPath(context, `workloads/${workloadSlug(target.kind)}`, params),
+    intent: "search",
+    readOnly: true,
+  };
+}
+
 function clusterPath(context: string, page: string, params: URLSearchParams): string {
   const qs = params.toString();
   const base = `/cluster/${encodeURIComponent(context)}/${page}`;
   return qs ? `${base}?${qs}` : base;
+}
+
+function workloadSlug(kind: string): string {
+  const lower = kind.toLowerCase();
+  if (lower === "pod") return "pods";
+  if (lower === "ingress") return "ingresses";
+  if (lower === "service") return "services";
+  if (lower === "statefulset") return "statefulsets";
+  if (lower === "daemonset") return "daemonsets";
+  if (lower === "job") return "jobs";
+  return `${lower}s`;
 }
