@@ -27,6 +27,21 @@ describe("classifyCopilotIntent", () => {
     });
   });
 
+  it("extracts investigation targets from failure questions", () => {
+    expect(classifyCopilotIntent("why is customer service failing")).toMatchObject({
+      kind: "investigate",
+      targetText: "customer service",
+    });
+  });
+
+  it("classifies mutation requests as read-only handoff intents", () => {
+    expect(classifyCopilotIntent("restart customer service")).toMatchObject({
+      kind: "mutation-request",
+      targetText: "customer service",
+      requestedAction: "mutate",
+    });
+  });
+
   it("falls back to investigation for unknown questions", () => {
     expect(classifyCopilotIntent("why is this failing")).toMatchObject({
       kind: "investigate",

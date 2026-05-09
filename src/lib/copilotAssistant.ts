@@ -1,11 +1,21 @@
 import type { CopilotRouteContext } from "./copilotContext";
 import { classifyCopilotIntent } from "./copilotIntent";
 import {
+  collectCopilotEvidence,
+  type CopilotEvidenceBundle,
+  type CopilotEvidenceClient,
+} from "./copilotEvidence";
+import {
   buildArgocdAppCta,
   buildEventsCta,
   buildLogsTargetCta,
   type CopilotCta,
 } from "./copilotNavigation";
+import {
+  resolveCopilotResource,
+  type CopilotResolvedResource,
+  type CopilotResolverClient,
+} from "./copilotResourceResolver";
 
 export type CopilotResponse = {
   title: string;
@@ -20,6 +30,99 @@ export type CopilotResponseInput = {
   clusterContext: string;
   route: CopilotRouteContext;
 };
+
+export type CopilotResponseMode =
+  | "resolved"
+  | "ambiguous"
+  | "not_found"
+  | "handoff"
+  | "route";
+
+export type NativeCopilotResponse = CopilotResponse & {
+  mode: CopilotResponseMode;
+  target?: CopilotResolvedResource;
+  candidates?: CopilotResolvedResource[];
+  evidence?: CopilotEvidenceBundle;
+};
+
+export type NativeCopilotDependencies = {
+  resolver?: CopilotResolverClient;
+  evidence?: CopilotEvidenceClient;
+};
+
+export async function buildNativeCopilotResponse(
+  input: CopilotResponseInput,
+  dependencies: NativeCopilotDependencies = {},
+): Promise<NativeCopilotResponse> {
+  const intent = classifyCopilotIntent(input.prompt);
+  if (intent.kind === "argocd-app" || intent.kind === "incident-update") {
+    return { ...buildCopilotResponse(input), mode: "route" };
+  }
+
+  const query = intent.targetText || input.route.resource || input.prompt;
+  const resolved = await resolveCopilotResource(
+    {
+      context: input.clusterContext,
+      query,
+      namespace: input.route.namespace || undefined,
+      intent: intent.kind,
+    },
+    dependencies.resolver,
+  );
+
+  if (resolved.status === "ambiguous") {
+    return {
+      mode: "ambiguous",
+      title: "Choose a matching resource",
+      summary: `I found ${resolved.candidates.length} possible matches for ${resolved.query}.`,
+      details: resolved.candidates.map(
+        (candidate) =>
+          `${candidate.kind}/${candidate.namespace}/${candidate.name} (${candidate.score})`,
+      ),
+      commands: [],
+      ctas: [],
+      candidates: resolved.candidates,
+    };
+  }
+
+  if (!resolved.selected) {
+    return {
+      mode: "not_found",
+      title: "No matching resource found",
+      summary: `I searched ${resolved.searchedKinds.join(", ")} for ${resolved.query}, but did not find a confident match.`,
+      details: [
+        `Normalized query: ${resolved.normalizedQuery || "empty"}.`,
+        "Try a namespace, exact workload name, or open Workloads search.",
+      ],
+      commands: [],
+      ctas: buildCopilotResponse(input).ctas,
+      candidates: [],
+    };
+  }
+
+  const evidence = await collectCopilotEvidence(
+    input.clusterContext,
+    resolved.selected,
+    dependencies.evidence,
+  );
+  const mutation = intent.kind === "mutation-request";
+
+  return {
+    mode: mutation ? "handoff" : "resolved",
+    title: `Found ${resolved.selected.kind}/${resolved.selected.name}`,
+    summary: mutation
+      ? `Copilot is read-only and cannot ${firstWord(input.prompt)} ${resolved.selected.name}. Review the target and use the existing guarded workflow for any change.`
+      : summarizeEvidence(resolved.selected, evidence),
+    details: [
+      ...resolved.selected.reasons,
+      ...evidence.facts.map((fact) => `${fact.label}: ${fact.value}`),
+    ],
+    commands: readOnlyCommands(input.clusterContext, resolved.selected),
+    ctas: evidence.ctas,
+    target: resolved.selected,
+    evidence,
+  };
+}
 
 export function buildCopilotResponse(input: CopilotResponseInput): CopilotResponse {
   const intent = classifyCopilotIntent(input.prompt);
@@ -151,4 +254,31 @@ function slugifyName(value: string): string {
 
 function shellToken(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-") || "app";
+}
+
+function summarizeEvidence(
+  target: CopilotResolvedResource,
+  evidence: CopilotEvidenceBundle,
+): string {
+  const warningText = evidence.warnings
+    .slice(0, 2)
+    .map((warning) => `${warning.label}: ${warning.detail ?? warning.value}`)
+    .join("; ");
+  const health = `I resolved ${target.displayName}. Health is ${evidence.health}.`;
+  return warningText ? `${health} ${warningText}.` : health;
+}
+
+function readOnlyCommands(
+  context: string,
+  target: CopilotResolvedResource,
+): string[] {
+  return [
+    `kubectl get ${target.kind} -n ${target.namespace} ${target.name}`,
+    `kubectl get events -n ${target.namespace} --field-selector involvedObject.name=${target.name}`,
+    `# context: ${context}`,
+  ];
+}
+
+function firstWord(value: string): string {
+  return value.trim().split(/\s+/)[0]?.toLowerCase() || "change";
 }

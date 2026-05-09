@@ -2,9 +2,10 @@ export type CopilotIntentKind =
   | "logs"
   | "argocd-app"
   | "incident-update"
+  | "mutation-request"
   | "investigate";
 
-export type CopilotRequestedAction = "sync" | "open" | "none";
+export type CopilotRequestedAction = "sync" | "open" | "mutate" | "none";
 
 export type CopilotIntent = {
   kind: CopilotIntentKind;
@@ -22,6 +23,16 @@ const LOG_PATTERNS = [
 const ARGO_SYNC_PATTERNS = [
   /\b(?:deployed|deploying|released|release)\s+(?:the\s+)?(.+?)(?:,|\s+and)?\s+(?:please\s+)?(?:sync|open\s+sync)\b/i,
   /\b(?:sync|open)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application))?$/i,
+];
+
+const MUTATION_PATTERNS = [
+  /\b(?:restart|delete|scale|rollback|sync|apply|upgrade|uninstall)\s+(?:the\s+)?(.+)$/i,
+];
+
+const INVESTIGATION_PATTERNS = [
+  /\bwhy\s+is\s+(?:the\s+)?(.+?)\s+(?:failing|broken|unhealthy|crashing|restarting|down)\b/i,
+  /\binvestigate\s+(?:the\s+)?(.+)$/i,
+  /\bexplain\s+(?:the\s+)?(.+)$/i,
 ];
 
 export function classifyCopilotIntent(prompt: string): CopilotIntent {
@@ -49,6 +60,18 @@ export function classifyCopilotIntent(prompt: string): CopilotIntent {
     }
   }
 
+  for (const pattern of MUTATION_PATTERNS) {
+    const targetText = extractTarget(normalized, pattern);
+    if (targetText) {
+      return {
+        kind: "mutation-request",
+        targetText,
+        requestedAction: "mutate",
+        prompt,
+      };
+    }
+  }
+
   if (/\b(?:incident|update|handoff|status)\b/i.test(normalized)) {
     return {
       kind: "incident-update",
@@ -56,6 +79,18 @@ export function classifyCopilotIntent(prompt: string): CopilotIntent {
       requestedAction: "none",
       prompt,
     };
+  }
+
+  for (const pattern of INVESTIGATION_PATTERNS) {
+    const targetText = extractTarget(normalized, pattern);
+    if (targetText && !/^(?:this|that|it)$/i.test(targetText)) {
+      return {
+        kind: "investigate",
+        targetText,
+        requestedAction: "none",
+        prompt,
+      };
+    }
   }
 
   return {
