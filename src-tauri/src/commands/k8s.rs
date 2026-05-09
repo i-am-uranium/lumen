@@ -268,31 +268,28 @@ pub async fn network_debug_snapshot(
     let ingress_api: Api<Ingress> = Api::namespaced(client.clone(), &namespace);
     let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client, &namespace);
 
-    let (
-        namespaces,
-        pods,
-        services,
-        endpoints,
-        endpoint_slices,
-        ingresses,
-        network_policies,
-    ) = tokio::try_join!(
-        ns_api.list(&lp),
-        pod_api.list(&lp),
-        service_api.list(&lp),
-        endpoints_api.list(&lp),
-        endpoint_slice_api.list(&lp),
-        ingress_api.list(&lp),
-        network_policy_api.list(&lp),
-    )
-    .map_err(|e| AppError::K8s(e.to_string()))?;
+    let (namespaces, pods, services, endpoints, endpoint_slices, ingresses, network_policies) =
+        tokio::try_join!(
+            ns_api.list(&lp),
+            pod_api.list(&lp),
+            service_api.list(&lp),
+            endpoints_api.list(&lp),
+            endpoint_slice_api.list(&lp),
+            ingress_api.list(&lp),
+            network_policy_api.list(&lp),
+        )
+        .map_err(|e| AppError::K8s(e.to_string()))?;
 
     Ok(NetworkDebugSnapshot {
         namespaces: namespaces.items.iter().map(network_namespace).collect(),
         pods: pods.items.iter().map(network_pod).collect(),
         services: services.items.iter().map(network_service).collect(),
         endpoints: endpoints.items.iter().map(network_endpoints).collect(),
-        endpoint_slices: endpoint_slices.items.iter().map(network_endpoint_slice).collect(),
+        endpoint_slices: endpoint_slices
+            .items
+            .iter()
+            .map(network_endpoint_slice)
+            .collect(),
         ingresses: ingresses.items.iter().map(network_ingress).collect(),
         network_policies: network_policies
             .items
@@ -321,7 +318,11 @@ fn network_pod(pod: &Pod) -> NetworkPod {
         .status
         .as_ref()
         .and_then(|s| s.conditions.as_ref())
-        .and_then(|conditions| conditions.iter().find(|condition| condition.type_ == "Ready"))
+        .and_then(|conditions| {
+            conditions
+                .iter()
+                .find(|condition| condition.type_ == "Ready")
+        })
         .map(|condition| condition.status == "True")
         .unwrap_or_else(|| phase.as_deref() == Some("Running"));
     let ports = pod
