@@ -33,6 +33,7 @@ import {
   Server,
   ShieldAlert,
   Sparkles,
+  Siren,
   Sun,
   Terminal,
   UserPlus,
@@ -260,6 +261,7 @@ export function CommandPalette() {
               {currentCtx && (
                 <>
                   <NavItem value="go: cloudmap" icon={Network} onSelect={() => pickTab("map")} />
+                  <NavItem value="go: incident triage" icon={Siren} onSelect={() => pickTab("triage")} />
                   <NavItem value="go: nodes" icon={Server} onSelect={() => pickTab("nodes")} />
                   <NavItem value="go: security" icon={ShieldAlert} onSelect={() => pickTab("security")} />
                   <NavItem value="go: crds" icon={Boxes} onSelect={() => pickTab("crds")} />

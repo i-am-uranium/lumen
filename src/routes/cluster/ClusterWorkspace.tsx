@@ -79,8 +79,9 @@ const SECTIONS: Item[] = [
     id: "triage",
     label: "triage",
     icon: Layers,
-    defaultTo: "workloads",
+    defaultTo: "triage",
     children: [
+      { to: "triage", label: "incidents", end: true },
       { to: "workloads", label: "workloads", end: true },
       { to: "workloads/pods", label: "pods" },
       { to: "events", label: "events" },
