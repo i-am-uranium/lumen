@@ -17,6 +17,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
 import { HelmActionDialog, type HelmDialogAction } from "@/components/HelmActionDialog";
+import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
+import { buildActionPreflight } from "@/lib/preflight";
 import {
   buildPreviewCommand,
   groupSearchHits,
@@ -85,6 +87,7 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
     wait: false,
   });
   const [pendingAction, setPendingAction] = useState<HelmDialogAction | null>(null);
+  const [pendingPreviewAction, setPendingPreviewAction] = useState<HelmDialogAction | null>(null);
   const [dryRunPending, setDryRunPending] = useState<HelmDialogAction | null>(null);
   const [valuesPrefilled, setValuesPrefilled] = useState(mode === "upgrade");
 
@@ -121,14 +124,14 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
         request: { ...toInstallRequest(spec), dry_run: dryRun },
       };
       if (dryRun) setDryRunPending(action);
-      else setPendingAction(action);
+      else setPendingPreviewAction(action);
     } else {
       const action: HelmDialogAction = {
         kind: "upgrade",
         request: { ...toUpgradeRequest(spec), dry_run: dryRun },
       };
       if (dryRun) setDryRunPending(action);
-      else setPendingAction(action);
+      else setPendingPreviewAction(action);
     }
   }
 
@@ -142,6 +145,24 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
       }),
     [mode, context, spec],
   );
+  const helmPreflight = useMemo(() => {
+    if (!pendingPreviewAction) return null;
+    if (pendingPreviewAction.kind !== "install" && pendingPreviewAction.kind !== "upgrade") {
+      return null;
+    }
+    const request = pendingPreviewAction.request;
+    return buildActionPreflight({
+      actionType: pendingPreviewAction.kind === "install" ? "helm-install" : "helm-upgrade",
+      targets: [
+        {
+          kind: "helmrelease",
+          namespace: request.namespace || null,
+          name: request.release,
+        },
+      ],
+      note: `Chart ${request.chart}${request.version ? `@${request.version}` : ""} will run through your local helm CLI.`,
+    });
+  }, [pendingPreviewAction]);
 
   return (
     <LumenPage>
@@ -356,6 +377,22 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
           }}
         />
       )}
+      {pendingPreviewAction &&
+        (pendingPreviewAction.kind === "install" || pendingPreviewAction.kind === "upgrade") && (
+          <PreflightPreviewDialog
+            open
+            title={`preflight helm ${pendingPreviewAction.kind}`}
+            description="This preview is local and conservative. Use dry run to inspect the rendered manifest before executing."
+            impact={helmPreflight}
+            confirmText={`${pendingPreviewAction.request.namespace || "default"}/${pendingPreviewAction.request.release}`}
+            confirmLabel={pendingPreviewAction.kind}
+            onCancel={() => setPendingPreviewAction(null)}
+            onConfirm={() => {
+              setPendingAction(pendingPreviewAction);
+              setPendingPreviewAction(null);
+            }}
+          />
+        )}
       {dryRunPending && (
         <HelmActionDialog
           action={dryRunPending}

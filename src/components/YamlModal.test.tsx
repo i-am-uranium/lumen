@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { YamlModal } from "./YamlModal";
@@ -33,7 +33,15 @@ function renderYamlModal() {
   );
 }
 
-function renderEditableYamlModal() {
+function renderEditableYamlModal({
+  yaml = "kind: ConfigMap\nmetadata:\n  name: app\n",
+  kind = "configmap",
+  name = "app",
+}: {
+  yaml?: string;
+  kind?: "configmap" | "deployment";
+  name?: string;
+} = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.mocked(k8s.checkAccess).mockResolvedValue({
     allowed: true,
@@ -48,13 +56,13 @@ function renderEditableYamlModal() {
   return render(
     <QueryClientProvider client={qc}>
       <YamlModal
-        title="configmap/app"
+        title={`${kind}/${name}`}
         subtitle="default"
-        yaml={"kind: ConfigMap\nmetadata:\n  name: app\n"}
+        yaml={yaml}
         editable={{
           namespace: "default",
-          kind: "configmap",
-          name: "app",
+          kind,
+          name,
           context: "dev",
         }}
         onClose={vi.fn()}
@@ -101,5 +109,80 @@ describe("YamlModal", () => {
       "dev",
     );
     expect(dialog).not.toBeInTheDocument();
+  });
+
+  it("shows a preflight preview and requires high-risk confirmation for risky YAML changes", async () => {
+    renderEditableYamlModal({
+      kind: "deployment",
+      name: "api",
+      yaml: `kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    spec:
+      containers:
+      - name: api
+        image: ghcr.io/acme/api:v1
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+`,
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: {
+        value: `kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: api-v2
+  template:
+    spec:
+      containers:
+      - name: api
+        image: ghcr.io/acme/api:v2
+`,
+      },
+    });
+    await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /preflight apply deployment/i });
+    expect(within(dialog).getAllByText(/selector changed/i).length).toBeGreaterThan(0);
+    expect(
+      within(dialog).getAllByText(/readiness\/liveness probe removed/i).length,
+    ).toBeGreaterThan(0);
+
+    const confirm = within(dialog).getByRole("button", { name: /^apply$/i });
+    await userEvent.type(
+      within(dialog).getByRole("textbox", { name: /confirmation text/i }),
+      "default/api",
+    );
+    expect(confirm).toBeDisabled();
+
+    await userEvent.type(
+      within(dialog).getByRole("textbox", { name: /high risk confirmation/i }),
+      "HIGH RISK",
+    );
+    expect(confirm).toBeEnabled();
+    await userEvent.click(confirm);
+
+    expect(k8s.applyResource).toHaveBeenCalledWith(
+      "default",
+      "deployment",
+      "api",
+      expect.stringContaining("api-v2"),
+      false,
+      "dev",
+    );
   });
 });

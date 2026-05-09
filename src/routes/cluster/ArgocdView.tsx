@@ -53,8 +53,9 @@ import {
   DataTableShell,
 } from "@/components/ui/data-table";
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
-import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
+import { buildActionPreflight } from "@/lib/preflight";
 import {
   ARGOCD_DETAIL_PANEL_WIDTH_MIN,
   type ArgocdResourceView,
@@ -753,6 +754,8 @@ function ApplicationDetailPanel({
     null | "sync" | "refresh-soft" | "refresh-hard" | "terminate" | "rollback"
   >(null);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [pendingSyncOptions, setPendingSyncOptions] =
+    useState<ArgoSyncOptions | null>(null);
   const [terminateConfirm, setTerminateConfirm] = useState(false);
   const [pendingRollback, setPendingRollback] =
     useState<ArgoHistoryEntry | null>(null);
@@ -805,6 +808,41 @@ function ApplicationDetailPanel({
   const lockedTitle = readOnly ? " (read-only mode)" : "";
   const operationRunning = detail.data?.operation_state?.phase === "Running";
   const inCluster = isInClusterDestination(app.destination_server);
+  const appPreflightTarget = useMemo(
+    () => ({
+      kind: "argocd-application",
+      namespace: app.namespace,
+      name: app.name,
+    }),
+    [app.name, app.namespace],
+  );
+  const syncPreflight = useMemo(() => {
+    if (!pendingSyncOptions) return null;
+    return buildActionPreflight({
+      actionType: "argocd-sync",
+      targets: [appPreflightTarget],
+      note: `${detail.data?.summary.resource_count ?? app.resource_count} managed resource${(detail.data?.summary.resource_count ?? app.resource_count) === 1 ? "" : "s"} in this Application. ${pendingSyncOptions.prune ? "Prune is enabled." : "Prune is disabled."}`,
+    });
+  }, [app.resource_count, appPreflightTarget, detail.data?.summary.resource_count, pendingSyncOptions]);
+  const terminatePreflight = useMemo(
+    () =>
+      buildActionPreflight({
+        actionType: "argocd-terminate",
+        targets: [appPreflightTarget],
+      }),
+    [appPreflightTarget],
+  );
+  const rollbackPreflight = useMemo(
+    () =>
+      buildActionPreflight({
+        actionType: "argocd-rollback",
+        targets: [appPreflightTarget],
+        note: pendingRollback
+          ? `Target revision ${pendingRollback.revision.slice(0, 7)}.`
+          : undefined,
+      }),
+    [appPreflightTarget, pendingRollback],
+  );
 
   async function performSync(options: ArgoSyncOptions) {
     setBusyAction("sync");
@@ -1065,34 +1103,51 @@ function ApplicationDetailPanel({
           onCancel={() => setSyncDialogOpen(false)}
           onSubmit={(opts) => {
             setSyncDialogOpen(false);
-            void performSync(opts);
+            setPendingSyncOptions(opts);
           }}
         />
       )}
 
-      <ConfirmActionDialog
+      <PreflightPreviewDialog
+        open={!!pendingSyncOptions}
+        title="preflight argocd sync"
+        description="This requests ArgoCD reconciliation through the Application CRD."
+        impact={syncPreflight}
+        confirmText={`${app.namespace}/${app.name}`}
+        confirmLabel="sync"
+        busy={busyAction === "sync"}
+        onCancel={() => setPendingSyncOptions(null)}
+        onConfirm={() => {
+          if (!pendingSyncOptions) return;
+          const options = pendingSyncOptions;
+          setPendingSyncOptions(null);
+          void performSync(options);
+        }}
+      />
+
+      <PreflightPreviewDialog
         open={terminateConfirm}
-        title="terminate running sync"
+        title="preflight terminate running sync"
         description={`This clears the .operation field on ${app.name} — ArgoCD treats that as a terminate signal. Resources that have already started reconciling won't be rolled back; only the in-flight orchestration stops.`}
-        target={`${app.namespace}/${app.name}`}
+        impact={terminatePreflight}
+        confirmText={`${app.namespace}/${app.name}`}
         confirmLabel="terminate"
-        intent="warning"
         busy={busyAction === "terminate"}
         onCancel={() => setTerminateConfirm(false)}
         onConfirm={performTerminate}
       />
 
-      <ConfirmActionDialog
+      <PreflightPreviewDialog
         open={!!pendingRollback}
-        title="rollback to historical revision"
+        title="preflight rollback to historical revision"
         description={
           pendingRollback
             ? `This will sync ${app.name} back to ${pendingRollback.revision.slice(0, 7)} with prune enabled. Resources added since that revision will be deleted from the cluster.`
             : ""
         }
-        target={`${app.namespace}/${app.name}`}
+        impact={rollbackPreflight}
+        confirmText={`${app.namespace}/${app.name}`}
         confirmLabel="rollback"
-        intent="warning"
         busy={busyAction === "rollback"}
         onCancel={() => setPendingRollback(null)}
         onConfirm={() => {
