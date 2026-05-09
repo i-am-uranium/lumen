@@ -42,6 +42,9 @@ const SecurityView = lazy(() =>
 const NetworkDebuggerView = lazy(() =>
   import("@/routes/cluster/NetworkDebuggerView").then(named("NetworkDebuggerView")),
 );
+const MetricsExplorerView = lazy(() =>
+  import("@/routes/cluster/MetricsExplorerView").then(named("MetricsExplorerView")),
+);
 const NodesView = lazy(() =>
   import("@/routes/cluster/NodesView").then(named("NodesView")),
 );
@@ -327,6 +330,7 @@ function Shell() {
                 <Route path="timeline" element={<RolloutTimelineView />} />
                 <Route path="map" element={<CloudMap />} />
                 <Route path="nodes" element={<NodesView />} />
+                <Route path="metrics" element={<MetricsExplorerView />} />
                 <Route path="security" element={<SecurityView />} />
                 <Route path="network-debugger" element={<NetworkDebuggerView />} />
                 <Route path="crds" element={<CrdBrowser />} />

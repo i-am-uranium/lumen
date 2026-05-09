@@ -11,6 +11,7 @@ pub mod helm_cli;
 pub mod kubeconfig;
 pub mod logs;
 pub mod metrics;
+pub mod metrics_explorer;
 pub mod portforward;
 pub mod rbac;
 pub mod rbac_admin;

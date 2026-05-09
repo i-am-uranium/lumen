@@ -237,6 +237,22 @@ pub async fn list_nodes(
     fleet::list_nodes(&client, &ctx).await
 }
 
+#[tauri::command]
+pub async fn metrics_explorer_snapshot(
+    namespace: Option<String>,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::k8s::metrics_explorer::MetricsExplorerSnapshot> {
+    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
+    let client = state.k8s.client_for(&ctx).await?;
+    crate::k8s::metrics_explorer::snapshot(
+        &client,
+        &ctx,
+        namespace.as_deref().filter(|value| !value.is_empty()),
+    )
+    .await
+}
+
 // ─── CloudMap & Security ──────────────────────────────────────────────────
 
 #[tauri::command]

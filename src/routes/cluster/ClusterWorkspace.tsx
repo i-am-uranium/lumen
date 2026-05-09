@@ -21,6 +21,7 @@ import {
   ChevronsRight,
   Clock,
   Cpu,
+  Gauge,
   Database,
   FileBox,
   Folder,
@@ -114,6 +115,7 @@ const SECTIONS: Item[] = [
     ],
   },
   { kind: "leaf", to: "nodes", label: "nodes", icon: Server },
+  { kind: "leaf", to: "metrics", label: "metrics explorer", icon: Gauge },
   { kind: "leaf", to: "namespaces", label: "namespaces", icon: Folder },
 
   { kind: "divider" },

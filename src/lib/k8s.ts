@@ -239,6 +239,36 @@ export type NodeSummary = {
   unschedulable: boolean;
 };
 
+export type MetricsExplorerNode = {
+  name: string;
+  ready: boolean;
+  cpu_allocatable_milli: number;
+  mem_allocatable_bytes: number;
+  cpu_usage_milli: number | null;
+  mem_usage_bytes: number | null;
+};
+
+export type MetricsExplorerPod = {
+  namespace: string;
+  name: string;
+  node_name: string | null;
+  workload_kind: string;
+  workload_name: string;
+  cpu_usage_milli: number | null;
+  mem_usage_bytes: number | null;
+  cpu_request_milli: number | null;
+  cpu_limit_milli: number | null;
+  mem_request_bytes: number | null;
+  mem_limit_bytes: number | null;
+};
+
+export type MetricsExplorerSnapshot = {
+  fetched_at_ms: number;
+  errors: string[];
+  nodes: MetricsExplorerNode[];
+  pods: MetricsExplorerPod[];
+};
+
 export type DrainFailure = {
   namespace: string;
   name: string;
@@ -787,6 +817,11 @@ export const k8s = {
   reconnectAll: () => invoke<void>("reconnect_all"),
   listNodes: (context?: string) =>
     invoke<NodeSummary[]>("list_nodes", { context }),
+  metricsExplorerSnapshot: (namespace?: string, context?: string) =>
+    invoke<MetricsExplorerSnapshot>("metrics_explorer_snapshot", {
+      namespace,
+      context,
+    }),
   cloudMap: (context?: string, namespace?: string) =>
     invoke<CloudMap>("cloud_map", { context, namespace }),
   networkDebugSnapshot: (namespace: string, context?: string) =>
