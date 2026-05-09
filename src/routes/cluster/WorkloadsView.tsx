@@ -51,7 +51,12 @@ import { Star } from "lucide-react";
 import { ColumnPicker } from "@/components/ColumnPicker";
 import { applyColumnLayout, useUiSettings } from "@/state/uiSettings";
 import { usePinnedResources } from "@/hooks/usePinnedResources";
-import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
+import {
+  buildActionPreflight,
+  parseReadyReplicas,
+  type PreflightTarget,
+} from "@/lib/preflight";
 
 // ─── URL slug ↔ WorkloadKind ──────────────────────────────────────────────
 
@@ -1138,6 +1143,45 @@ export function WorkloadsView() {
     [selectedItems],
   );
   const selectedSkipRestartCount = selectedItems.length - selectedRestartableItems.length;
+  const selectedTargets = useMemo<PreflightTarget[]>(
+    () =>
+      selectedItems.map((item) => ({
+        kind: item.kind,
+        namespace: item.namespace || null,
+        name: item.name,
+        replicas: parseReadyReplicas(item.ready) ?? (item.kind === "pod" ? 1 : null),
+        currentReplicas:
+          parseReadyReplicas(item.ready) ?? (item.kind === "pod" ? 1 : null),
+      })),
+    [selectedItems],
+  );
+  const selectedRestartableTargets = useMemo<PreflightTarget[]>(
+    () =>
+      selectedRestartableItems.map((item) => ({
+        kind: item.kind,
+        namespace: item.namespace || null,
+        name: item.name,
+        replicas: parseReadyReplicas(item.ready),
+        currentReplicas: parseReadyReplicas(item.ready),
+      })),
+    [selectedRestartableItems],
+  );
+  const bulkDeletePreflight = useMemo(
+    () => buildActionPreflight({ actionType: "delete", targets: selectedTargets }),
+    [selectedTargets],
+  );
+  const bulkRestartPreflight = useMemo(
+    () =>
+      buildActionPreflight({
+        actionType: "restart",
+        targets: selectedRestartableTargets,
+        note:
+          selectedSkipRestartCount > 0
+            ? `${selectedSkipRestartCount} selected resource${selectedSkipRestartCount === 1 ? "" : "s"} will be skipped.`
+            : undefined,
+      }),
+    [selectedRestartableTargets, selectedSkipRestartCount],
+  );
   const allVisibleSelected =
     visibleItems.length > 0 &&
     visibleItems.every((w) => selectedKeys.has(workloadSelectionKey(w)));
@@ -1581,28 +1625,28 @@ export function WorkloadsView() {
         resource={drawerResource}
         onClose={() => setDrawerResource(null)}
       />
-      <ConfirmActionDialog
+      <PreflightPreviewDialog
         open={pendingBulkAction === "delete"}
-        title="delete selected workloads"
+        title="preflight delete selected workloads"
         description={`This will delete ${selectedItems.length} selected workload${selectedItems.length === 1 ? "" : "s"} from ${context}. The action is sent to Kubernetes for each selected resource.`}
-        target={`${selectedItems.length} selected`}
+        impact={bulkDeletePreflight}
+        confirmText={`${selectedItems.length} selected`}
         confirmLabel="delete"
-        intent="danger"
         busy={bulkBusy}
         onCancel={() => setPendingBulkAction(null)}
         onConfirm={handleBulkDelete}
       />
-      <ConfirmActionDialog
+      <PreflightPreviewDialog
         open={pendingBulkAction === "restart"}
-        title="restart selected workloads"
+        title="preflight restart selected workloads"
         description={
           selectedSkipRestartCount > 0
             ? `This will trigger rolling restarts for ${selectedRestartableItems.length} eligible controller workload${selectedRestartableItems.length === 1 ? "" : "s"}. ${selectedSkipRestartCount} selected resource${selectedSkipRestartCount === 1 ? "" : "s"} will be skipped because only deployments, statefulsets, and daemonsets support restart.`
             : `This will trigger rolling restarts for ${selectedRestartableItems.length} selected controller workload${selectedRestartableItems.length === 1 ? "" : "s"}.`
         }
-        target={`${selectedRestartableItems.length} restartable`}
+        impact={bulkRestartPreflight}
+        confirmText={`${selectedRestartableItems.length} restartable`}
         confirmLabel="restart"
-        intent="warning"
         busy={bulkBusy}
         onCancel={() => setPendingBulkAction(null)}
         onConfirm={handleBulkRestart}

@@ -148,6 +148,10 @@ describe("ResourceDetailDrawer confirmations", () => {
       within(dialog).getByRole("textbox", { name: /confirmation text/i }),
       "default/api",
     );
+    await userEvent.type(
+      within(dialog).getByRole("textbox", { name: /high risk confirmation/i }),
+      "HIGH RISK",
+    );
     await userEvent.click(confirm);
     expect(k8s.deleteResource).toHaveBeenCalledWith(
       "default",
