@@ -4,7 +4,7 @@ import { buildCopilotResponse } from "./copilotAssistant";
 describe("buildCopilotResponse", () => {
   it("turns a latest logs request into a read-only logs CTA", () => {
     const response = buildCopilotResponse({
-      prompt: "show latest logs from customer service",
+      prompt: "fetch customer service logs",
       clusterContext: "ms-aks-stage",
       route: {
         page: "logs",

@@ -7,6 +7,10 @@ describe("classifyCopilotIntent", () => {
       kind: "logs",
       targetText: "customer service",
     });
+    expect(classifyCopilotIntent("fetch customer service logs")).toMatchObject({
+      kind: "logs",
+      targetText: "customer service",
+    });
   });
 
   it("classifies sync requests as read-only ArgoCD navigation intents", () => {

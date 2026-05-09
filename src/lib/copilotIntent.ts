@@ -14,7 +14,8 @@ export type CopilotIntent = {
 };
 
 const LOG_PATTERNS = [
-  /\b(?:show|open|get|tail|find)\s+(?:the\s+)?(?:latest|recent)?\s*logs?\s+(?:for|from|of)\s+(.+)$/i,
+  /\b(?:show|open|get|fetch|tail|find)\s+(?:the\s+)?(?:latest|recent)?\s*logs?\s+(?:for|from|of)\s+(.+)$/i,
+  /\b(?:show|open|get|fetch|tail|find)\s+(?:the\s+)?(?:latest|recent)?\s*(.+?)\s+logs?\b/i,
   /\blogs?\s+(?:for|from|of)\s+(.+)$/i,
 ];
 
