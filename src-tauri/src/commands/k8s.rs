@@ -3,9 +3,14 @@ use crate::k8s::{
     actions as act, argocd, cloudmap, crd as crd_mod, fleet, kubeconfig, metrics, rbac, rbac_admin,
     rbac_details, registry, resource_insights, resources, security, storage_details, tekton, time,
     types::{
-        CloudMap, ContainerInfo, ContextInfo, FleetCard, NodeSummary, OwnerRefLite, PodCondition,
-        PodDetails, RbacDetail, ResourceDetail, ResourceInsights, SecurityReport, StorageDetail,
-        WorkloadKind, WorkloadSummary,
+        CloudMap, ContainerInfo, ContextInfo, FleetCard, IntOrStringValue, NetworkDebugSnapshot,
+        NetworkEndpointAddress, NetworkEndpointPort, NetworkEndpointRef, NetworkEndpointSlice,
+        NetworkEndpoints, NetworkIngress, NetworkIngressBackend, NetworkIngressRule,
+        NetworkNamespace, NetworkPod, NetworkPodPort, NetworkPolicyIngressRule,
+        NetworkPolicyIpBlock, NetworkPolicyPeer, NetworkPolicyPort, NetworkPolicyResource,
+        NetworkService, NetworkServicePort, NodeSummary, OwnerRefLite, PodCondition, PodDetails,
+        RbacDetail, ResourceDetail, ResourceInsights, SecurityReport, StorageDetail, WorkloadKind,
+        WorkloadSummary,
     },
 };
 use crate::state::AppState;
@@ -15,15 +20,17 @@ use k8s_openapi::api::{
     autoscaling::v2::HorizontalPodAutoscaler,
     batch::v1::{CronJob, Job},
     core::v1::{
-        ConfigMap, LimitRange, Namespace, PersistentVolume, PersistentVolumeClaim, Pod,
+        ConfigMap, Endpoints, LimitRange, Namespace, PersistentVolume, PersistentVolumeClaim, Pod,
         ResourceQuota, Secret, Service,
     },
+    discovery::v1::EndpointSlice,
     networking::v1::{Ingress, IngressClass, NetworkPolicy},
     policy::v1::PodDisruptionBudget,
     rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding},
     scheduling::v1::PriorityClass,
     storage::v1::StorageClass,
 };
+use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::{
     api::{DynamicObject, ListParams},
     core::{ApiResource, GroupVersionKind},
@@ -243,6 +250,336 @@ pub async fn cloud_map(
     let mut m = cloudmap::build(&client, &ctx, namespace).await?;
     m.context = ctx;
     Ok(m)
+}
+
+#[tauri::command]
+pub async fn network_debug_snapshot(
+    namespace: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<NetworkDebugSnapshot> {
+    let client = client_for(&state, context.as_deref()).await?;
+    let lp = ListParams::default();
+    let ns_api: Api<Namespace> = Api::all(client.clone());
+    let pod_api: Api<Pod> = Api::namespaced(client.clone(), &namespace);
+    let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
+    let endpoints_api: Api<Endpoints> = Api::namespaced(client.clone(), &namespace);
+    let endpoint_slice_api: Api<EndpointSlice> = Api::namespaced(client.clone(), &namespace);
+    let ingress_api: Api<Ingress> = Api::namespaced(client.clone(), &namespace);
+    let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client, &namespace);
+
+    let (
+        namespaces,
+        pods,
+        services,
+        endpoints,
+        endpoint_slices,
+        ingresses,
+        network_policies,
+    ) = tokio::try_join!(
+        ns_api.list(&lp),
+        pod_api.list(&lp),
+        service_api.list(&lp),
+        endpoints_api.list(&lp),
+        endpoint_slice_api.list(&lp),
+        ingress_api.list(&lp),
+        network_policy_api.list(&lp),
+    )
+    .map_err(|e| AppError::K8s(e.to_string()))?;
+
+    Ok(NetworkDebugSnapshot {
+        namespaces: namespaces.items.iter().map(network_namespace).collect(),
+        pods: pods.items.iter().map(network_pod).collect(),
+        services: services.items.iter().map(network_service).collect(),
+        endpoints: endpoints.items.iter().map(network_endpoints).collect(),
+        endpoint_slices: endpoint_slices.items.iter().map(network_endpoint_slice).collect(),
+        ingresses: ingresses.items.iter().map(network_ingress).collect(),
+        network_policies: network_policies
+            .items
+            .iter()
+            .map(network_policy_resource)
+            .collect(),
+    })
+}
+
+fn labels_from(
+    labels: &Option<std::collections::BTreeMap<String, String>>,
+) -> std::collections::BTreeMap<String, String> {
+    labels.clone().unwrap_or_default()
+}
+
+fn network_namespace(ns: &Namespace) -> NetworkNamespace {
+    NetworkNamespace {
+        name: ns.metadata.name.clone().unwrap_or_default(),
+        labels: labels_from(&ns.metadata.labels),
+    }
+}
+
+fn network_pod(pod: &Pod) -> NetworkPod {
+    let phase = pod.status.as_ref().and_then(|s| s.phase.clone());
+    let ready = pod
+        .status
+        .as_ref()
+        .and_then(|s| s.conditions.as_ref())
+        .and_then(|conditions| conditions.iter().find(|condition| condition.type_ == "Ready"))
+        .map(|condition| condition.status == "True")
+        .unwrap_or_else(|| phase.as_deref() == Some("Running"));
+    let ports = pod
+        .spec
+        .as_ref()
+        .map(|spec| {
+            spec.containers
+                .iter()
+                .flat_map(|container| container.ports.clone().unwrap_or_default())
+                .map(|port| NetworkPodPort {
+                    name: port.name,
+                    container_port: port.container_port,
+                    protocol: port.protocol,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    NetworkPod {
+        name: pod.metadata.name.clone().unwrap_or_default(),
+        namespace: pod.metadata.namespace.clone().unwrap_or_default(),
+        labels: labels_from(&pod.metadata.labels),
+        ready,
+        phase,
+        pod_ip: pod.status.as_ref().and_then(|s| s.pod_ip.clone()),
+        ports,
+    }
+}
+
+fn int_or_string_value(value: &IntOrString) -> IntOrStringValue {
+    match value {
+        IntOrString::Int(i) => IntOrStringValue::Int(*i),
+        IntOrString::String(s) => IntOrStringValue::String(s.clone()),
+    }
+}
+
+fn network_service(service: &Service) -> NetworkService {
+    let spec = service.spec.as_ref();
+    let selector = spec
+        .and_then(|s| s.selector.clone())
+        .map(|labels| labels.into_iter().collect())
+        .unwrap_or_default();
+    let ports = spec
+        .and_then(|s| s.ports.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|port| NetworkServicePort {
+            name: port.name,
+            protocol: port.protocol,
+            port: port.port,
+            target_port: port.target_port.as_ref().map(int_or_string_value),
+        })
+        .collect();
+    NetworkService {
+        name: service.metadata.name.clone().unwrap_or_default(),
+        namespace: service.metadata.namespace.clone().unwrap_or_default(),
+        r#type: spec.and_then(|s| s.type_.clone()),
+        selector,
+        ports,
+    }
+}
+
+fn network_endpoint_ref(
+    target: &Option<k8s_openapi::api::core::v1::ObjectReference>,
+) -> Option<NetworkEndpointRef> {
+    target.as_ref().map(|target| NetworkEndpointRef {
+        kind: target.kind.clone(),
+        name: target.name.clone(),
+        namespace: target.namespace.clone(),
+    })
+}
+
+fn network_endpoints(endpoints: &Endpoints) -> NetworkEndpoints {
+    let mut addresses = Vec::new();
+    for subset in endpoints.subsets.clone().unwrap_or_default() {
+        for address in subset.addresses.unwrap_or_default() {
+            addresses.push(NetworkEndpointAddress {
+                addresses: vec![address.ip],
+                ready: true,
+                target_ref: network_endpoint_ref(&address.target_ref),
+            });
+        }
+        for address in subset.not_ready_addresses.unwrap_or_default() {
+            addresses.push(NetworkEndpointAddress {
+                addresses: vec![address.ip],
+                ready: false,
+                target_ref: network_endpoint_ref(&address.target_ref),
+            });
+        }
+    }
+    NetworkEndpoints {
+        name: endpoints.metadata.name.clone().unwrap_or_default(),
+        namespace: endpoints.metadata.namespace.clone().unwrap_or_default(),
+        addresses,
+    }
+}
+
+fn network_endpoint_slice(slice: &EndpointSlice) -> NetworkEndpointSlice {
+    let service_name = slice
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get("kubernetes.io/service-name").cloned())
+        .unwrap_or_else(|| slice.metadata.name.clone().unwrap_or_default());
+    NetworkEndpointSlice {
+        name: slice.metadata.name.clone().unwrap_or_default(),
+        namespace: slice.metadata.namespace.clone().unwrap_or_default(),
+        service_name,
+        ports: slice
+            .ports
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|port| NetworkEndpointPort {
+                name: port.name,
+                protocol: port.protocol,
+                port: port.port,
+            })
+            .collect(),
+        endpoints: slice
+            .endpoints
+            .iter()
+            .map(|endpoint| NetworkEndpointAddress {
+                addresses: endpoint.addresses.clone(),
+                ready: endpoint
+                    .conditions
+                    .as_ref()
+                    .and_then(|conditions| conditions.ready)
+                    .unwrap_or(true),
+                target_ref: network_endpoint_ref(&endpoint.target_ref),
+            })
+            .collect(),
+    }
+}
+
+fn network_ingress(ingress: &Ingress) -> NetworkIngress {
+    let spec = ingress.spec.as_ref();
+    let mut rules: Vec<NetworkIngressRule> = spec
+        .and_then(|spec| spec.rules.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rule| NetworkIngressRule {
+            host: rule.host,
+            paths: rule
+                .http
+                .map(|http| {
+                    http.paths
+                        .into_iter()
+                        .filter_map(|path| {
+                            let service = path.backend.service?;
+                            let service_port = service.port.as_ref().and_then(ingress_service_port);
+                            Some(NetworkIngressBackend {
+                                path: path.path.unwrap_or_else(|| "/".into()),
+                                path_type: Some(path.path_type),
+                                service_name: service.name,
+                                service_port,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect();
+    if let Some(default_service) = spec
+        .and_then(|spec| spec.default_backend.clone())
+        .and_then(|backend| backend.service)
+    {
+        let service_port = default_service.port.as_ref().and_then(ingress_service_port);
+        rules.push(NetworkIngressRule {
+            host: None,
+            paths: vec![NetworkIngressBackend {
+                path: "/".into(),
+                path_type: Some("ImplementationSpecific".into()),
+                service_name: default_service.name,
+                service_port,
+            }],
+        });
+    }
+    NetworkIngress {
+        name: ingress.metadata.name.clone().unwrap_or_default(),
+        namespace: ingress.metadata.namespace.clone().unwrap_or_default(),
+        class_name: spec.and_then(|spec| spec.ingress_class_name.clone()),
+        rules,
+    }
+}
+
+fn ingress_service_port(
+    port: &k8s_openapi::api::networking::v1::ServiceBackendPort,
+) -> Option<IntOrStringValue> {
+    port.name
+        .clone()
+        .map(IntOrStringValue::String)
+        .or_else(|| port.number.map(IntOrStringValue::Int))
+}
+
+fn label_selector_match_labels(
+    selector: &Option<k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector>,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    selector
+        .as_ref()
+        .and_then(|selector| selector.match_labels.clone())
+        .map(|labels| labels.into_iter().collect())
+}
+
+fn network_policy_peer(
+    peer: k8s_openapi::api::networking::v1::NetworkPolicyPeer,
+) -> NetworkPolicyPeer {
+    NetworkPolicyPeer {
+        pod_selector: label_selector_match_labels(&peer.pod_selector),
+        namespace_selector: label_selector_match_labels(&peer.namespace_selector),
+        ip_block: peer.ip_block.map(|block| NetworkPolicyIpBlock {
+            cidr: block.cidr,
+            except: block.except.unwrap_or_default(),
+        }),
+    }
+}
+
+fn network_policy_port(
+    port: k8s_openapi::api::networking::v1::NetworkPolicyPort,
+) -> NetworkPolicyPort {
+    NetworkPolicyPort {
+        protocol: port.protocol,
+        port: port.port.as_ref().map(int_or_string_value),
+    }
+}
+
+fn network_policy_resource(policy: &NetworkPolicy) -> NetworkPolicyResource {
+    let spec = policy.spec.as_ref();
+    NetworkPolicyResource {
+        name: policy.metadata.name.clone().unwrap_or_default(),
+        namespace: policy.metadata.namespace.clone().unwrap_or_default(),
+        pod_selector: spec
+            .and_then(|spec| spec.pod_selector.as_ref())
+            .and_then(|selector| selector.match_labels.clone())
+            .map(|labels| labels.into_iter().collect())
+            .unwrap_or_default(),
+        policy_types: spec
+            .and_then(|spec| spec.policy_types.clone())
+            .unwrap_or_default(),
+        ingress: spec
+            .and_then(|spec| spec.ingress.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|rule| NetworkPolicyIngressRule {
+                from: rule
+                    .from
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(network_policy_peer)
+                    .collect(),
+                ports: rule
+                    .ports
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(network_policy_port)
+                    .collect(),
+            })
+            .collect(),
+    }
 }
 
 #[tauri::command]

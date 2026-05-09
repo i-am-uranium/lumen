@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { NetworkDebugSnapshot } from "./networkDebugger";
 
 export type ContextInfo = {
   name: string;
@@ -788,6 +789,8 @@ export const k8s = {
     invoke<NodeSummary[]>("list_nodes", { context }),
   cloudMap: (context?: string, namespace?: string) =>
     invoke<CloudMap>("cloud_map", { context, namespace }),
+  networkDebugSnapshot: (namespace: string, context?: string) =>
+    invoke<NetworkDebugSnapshot>("network_debug_snapshot", { namespace, context }),
   securityScan: (context?: string) =>
     invoke<SecurityReport>("security_scan", { context }),
   checkAccess: (request: AccessReviewRequest, context?: string) =>
