@@ -7,6 +7,7 @@ import {
   Bot,
   CheckCircle2,
   ExternalLink,
+  FileDown,
   FileWarning,
   Loader2,
   RefreshCw,
@@ -16,6 +17,7 @@ import {
   Terminal,
 } from "lucide-react";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
+import { IncidentReportDialog } from "@/components/IncidentReportDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
@@ -140,6 +142,7 @@ export function TriageView() {
   const [search, setSearch] = useState("");
   const [activeGroup, setActiveGroup] = useState<TriageGroup | "all">("all");
   const [events, setEvents] = useState<EventLine[]>([]);
+  const [reportOpen, setReportOpen] = useState(false);
   const [drawerResource, setDrawerResource] = useState<{
     kind: string;
     namespace: string;
@@ -216,6 +219,13 @@ export function TriageView() {
   );
   const counts = useMemo(() => triageIssueCountsBySeverity(issues), [issues]);
   const groups = useMemo(() => groupSummary(issues), [issues]);
+  const reportIssues = useMemo(
+    () =>
+      search.trim() || activeGroup !== "all"
+        ? filteredIssues
+        : issues,
+    [activeGroup, filteredIssues, issues, search],
+  );
 
   const isLoading = workloadQueries.some((query) => query.isLoading) || nodesQuery.isLoading;
   const isFetching = workloadQueries.some((query) => query.isFetching) || nodesQuery.isFetching;
@@ -271,6 +281,15 @@ export function TriageView() {
             <Button onClick={refetchAll} disabled={isFetching}>
               <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
               refresh
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setReportOpen(true)}
+              disabled={!context}
+            >
+              <FileDown className="size-3.5" />
+              export report
             </Button>
             <Button
               type="button"
@@ -370,6 +389,20 @@ export function TriageView() {
         ctx={context}
         resource={drawerResource}
         onClose={() => setDrawerResource(null)}
+      />
+      <IncidentReportDialog
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        loading={isLoading}
+        error={firstError ?? null}
+        input={{
+          clusterContext: context,
+          namespace: null,
+          selectedResource: drawerResource,
+          triageIssues: reportIssues,
+          warningEvents: events,
+          rolloutEntries: [],
+        }}
       />
     </LumenPage>
   );
