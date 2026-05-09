@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
+import { useCopilotUi } from "@/state/copilotUi";
 import { useShortcut } from "@/lib/shortcuts";
 
 export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
@@ -75,7 +76,8 @@ export function CommandPalette() {
     .replace(/^logs\s+/i, "view logs: ")
     .replace(/^ai$/i, "go: AI assistant")
     .replace(/^ask$/i, "go: AI assistant")
-    .replace(/^assistant$/i, "go: AI assistant");
+    .replace(/^assistant$/i, "go: AI assistant")
+    .replace(/^copilot$/i, "open: Copilot");
   const shouldSearchResources = normalizedQuery.trim().length >= 2;
 
   const { data: contexts = [] } = useQuery({
@@ -194,6 +196,11 @@ export function CommandPalette() {
     close();
   }
 
+  function openCopilot() {
+    useCopilotUi.getState().openDrawer();
+    close();
+  }
+
   function pickNamespace(ns: string) {
     setNamespace(ns);
     close();
@@ -279,6 +286,7 @@ export function CommandPalette() {
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
                   <NavItem value="go: rollout timeline" icon={Clock3} onSelect={() => pickTab("timeline")} />
                   <NavItem value="go: change history" icon={History} onSelect={() => pickTab("change-history")} />
+                  <NavItem value="open: Copilot" icon={Sparkles} onSelect={openCopilot} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                   <NavItem value="go: workspaces" icon={BookOpenCheck} onSelect={() => pickTab("workspaces")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />
