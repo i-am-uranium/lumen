@@ -94,15 +94,24 @@ export function LogsTab() {
   const { data: workloads = [], isLoading: loadingWl } = useQuery({
     queryKey: ["k8s", "workloads", context, namespace, kind],
     queryFn: () => k8s.listWorkloads(namespace, kind, context || undefined),
-    enabled: !!namespace,
+    enabled: !!namespace || !!name,
     staleTime: 15_000,
   });
 
   const filteredWorkloads = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = (query.trim() || (!namespace ? name : "")).toLowerCase();
     if (!q) return workloads;
     return workloads.filter((w) => w.name.toLowerCase().includes(q));
-  }, [workloads, query]);
+  }, [workloads, query, namespace, name]);
+
+  useEffect(() => {
+    if (namespace || !name || loadingWl) return;
+    const exactMatches = workloads.filter((w) => w.name === name);
+    if (exactMatches.length === 1) {
+      setNamespace(exactMatches[0].namespace);
+      setName(exactMatches[0].name);
+    }
+  }, [namespace, name, loadingWl, workloads]);
 
   const streamId = useMemo(
     () =>
@@ -303,24 +312,33 @@ export function LogsTab() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {!namespace ? (
+          {!namespace && !name ? (
             <div className="p-3 text-[12px] text-text-secondary">
               pick a namespace to list {LOG_KINDS.find((k) => k.value === kind)?.label}.
             </div>
           ) : loadingWl ? (
-            <div className="p-3 text-[12px] text-text-secondary">loading...</div>
+            <div className="p-3 text-[12px] text-text-secondary">
+              {namespace
+                ? "loading..."
+                : `looking for ${kind}/${name} across namespaces...`}
+            </div>
           ) : filteredWorkloads.length === 0 ? (
             <div className="p-3 text-[12px] text-text-secondary">
-              no {kind}s found in {namespace}.
+              {namespace
+                ? `no ${kind}s found in ${namespace}.`
+                : `no ${kind} named ${name} found across namespaces.`}
             </div>
           ) : (
             filteredWorkloads.map((w) => (
               <button
-                key={w.name}
-                onClick={() => setName(w.name)}
+                key={`${w.namespace}-${w.name}`}
+                onClick={() => {
+                  setNamespace(w.namespace);
+                  setName(w.name);
+                }}
                 className={cn(
                   "w-full text-left px-3 py-1.5 text-[12px] flex items-center gap-2 hover:bg-hover transition-colors",
-                  name === w.name && "bg-accent-primary-soft",
+                  namespace === w.namespace && name === w.name && "bg-accent-primary-soft",
                 )}
               >
                 <span
@@ -338,12 +356,22 @@ export function LogsTab() {
                 <span
                   className={cn(
                     "text-text-primary truncate font-mono",
-                    name === w.name && "text-accent-primary",
+                    namespace === w.namespace && name === w.name && "text-accent-primary",
                   )}
                 >
                   {w.name}
                 </span>
-                <span className="ml-auto text-text-muted text-[11px] tabular-nums">
+                {!namespace && (
+                  <span className="ml-auto text-text-muted text-[11px]">
+                    {w.namespace}
+                  </span>
+                )}
+                <span
+                  className={cn(
+                    "text-text-muted text-[11px] tabular-nums",
+                    namespace && "ml-auto",
+                  )}
+                >
                   {w.ready}
                 </span>
               </button>

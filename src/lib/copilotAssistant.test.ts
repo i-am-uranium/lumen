@@ -18,9 +18,28 @@ describe("buildCopilotResponse", () => {
     expect(response.title).toBe("Open logs for customer service");
     expect(response.ctas[0]).toMatchObject({
       label: "Open logs",
-      to: "/cluster/ms-aks-stage/logs?ns=checkout&grep=customer+service",
+      to: "/cluster/ms-aks-stage/logs?ns=checkout&kind=deployment&name=customer-service&grep=customer+service",
     });
     expect(response.commands.join("\n")).toContain("--tail=200");
+  });
+
+  it("includes a likely workload target when namespace is unknown", () => {
+    const response = buildCopilotResponse({
+      prompt: "fetch customer service logs",
+      clusterContext: "ms-aks-stage",
+      route: {
+        page: "AI assistant",
+        namespace: "",
+        resource: "",
+        path: "/cluster/ms-aks-stage/ai",
+        search: "",
+      },
+    });
+
+    expect(response.ctas[0]).toMatchObject({
+      label: "Open logs",
+      to: "/cluster/ms-aks-stage/logs?kind=deployment&name=customer-service&grep=customer+service",
+    });
   });
 
   it("routes a natural-language sync request to ArgoCD without performing the sync", () => {

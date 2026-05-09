@@ -33,7 +33,7 @@ describe("CopilotDrawer", () => {
     const cta = await screen.findByRole("link", { name: /open logs/i });
     expect(cta).toHaveAttribute(
       "href",
-      "/cluster/ms-aks-stage/logs?ns=checkout&grep=customer+service",
+      "/cluster/ms-aks-stage/logs?ns=checkout&kind=deployment&name=customer-service&grep=customer+service",
     );
 
     const sessions = JSON.parse(window.localStorage.getItem(AI_SESSIONS_STORAGE_KEY) ?? "[]");

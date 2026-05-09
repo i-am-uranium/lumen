@@ -3,7 +3,7 @@ import { classifyCopilotIntent } from "./copilotIntent";
 import {
   buildArgocdAppCta,
   buildEventsCta,
-  buildLogsSearchCta,
+  buildLogsTargetCta,
   type CopilotCta,
 } from "./copilotNavigation";
 
@@ -47,7 +47,16 @@ export function buildCopilotResponse(input: CopilotResponseInput): CopilotRespon
         "No cluster action is executed from the copilot drawer.",
       ],
       commands,
-      ctas: [{ ...buildLogsSearchCta(input.clusterContext, search, namespace), label: "Open logs" }],
+      ctas: [
+        {
+          ...buildLogsTargetCta(
+            input.clusterContext,
+            { kind: "deployment", namespace, name: slug },
+            search,
+          ),
+          label: "Open logs",
+        },
+      ],
     };
   }
 

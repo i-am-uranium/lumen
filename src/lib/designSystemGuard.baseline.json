@@ -14,8 +14,8 @@
     "src/routes/cluster/FleetView.tsx:255",
     "src/routes/cluster/FleetView.tsx:402",
     "src/routes/cluster/FleetView.tsx:520",
-    "src/routes/cluster/LogsTab.tsx:481",
-    "src/routes/cluster/LogsTab.tsx:489",
+    "src/routes/cluster/LogsTab.tsx:509",
+    "src/routes/cluster/LogsTab.tsx:517",
     "src/routes/cluster/NodesView.tsx:307"
   ],
   "rawHexColors": [

@@ -17,7 +17,7 @@ export type CopilotCta = {
 
 export type CopilotResolvedTarget = {
   kind: string;
-  namespace: string;
+  namespace?: string;
   name: string;
 };
 
@@ -53,6 +53,30 @@ export function buildLogsSearchCta(
     id: "search-logs",
     label: `Search logs for ${search.trim() || "this text"}`,
     description: "Open Logs with a search filter when no exact workload match is available.",
+    to: clusterPath(context, "logs", params),
+    intent: "logs",
+    readOnly: true,
+  };
+}
+
+export function buildLogsTargetCta(
+  context: string,
+  target: CopilotResolvedTarget,
+  grep?: string,
+): CopilotCta {
+  const params = new URLSearchParams();
+  if (target.namespace) params.set("ns", target.namespace);
+  if (target.kind) params.set("kind", target.kind.toLowerCase());
+  if (target.name) params.set("name", target.name);
+  if (grep?.trim()) params.set("grep", grep.trim());
+
+  return {
+    id: "open-logs-target",
+    label: `Open logs for ${target.name}`,
+    description:
+      target.namespace
+        ? "Navigate to Logs with namespace, kind, name, and filter prefilled."
+        : "Navigate to Logs and resolve this workload across namespaces.",
     to: clusterPath(context, "logs", params),
     intent: "logs",
     readOnly: true,
