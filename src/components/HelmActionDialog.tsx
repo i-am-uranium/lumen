@@ -10,6 +10,11 @@ import {
   type HelmUpgradeRequest,
 } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { useChangeHistoryStore } from "@/state/changeHistory";
+import type {
+  ChangeHistoryAction,
+  ChangeHistoryStatus,
+} from "@/lib/changeHistory";
 
 export type HelmDialogAction =
   | { kind: "rollback"; release: string; namespace: string; revision: number; wait: boolean }
@@ -58,6 +63,7 @@ export function HelmActionDialog({
       } else if (ev.kind === "exited") {
         setRunning(false);
         setExitCode(ev.code);
+        recordHelmHistory(action, context, ev.code === 0 ? "success" : "failure", ev.code);
         if (ev.code === 0) {
           toast.success(`helm ${action.kind} succeeded`);
           qc.invalidateQueries({ queryKey: ["k8s", "helm"] });
@@ -110,6 +116,7 @@ export function HelmActionDialog({
     promise.catch((e: unknown) => {
       setRunning(false);
       setExitCode(-1);
+      recordHelmHistory(action, context, "failure", -1, e);
       setLines((ls) => [
         ...ls,
         { stream: "err", line: `lumen: ${(e as Error).message ?? e}` },
@@ -187,4 +194,54 @@ export function HelmActionDialog({
       </div>
     </div>
   );
+}
+
+function recordHelmHistory(
+  action: Action,
+  context: string,
+  status: ChangeHistoryStatus,
+  exitCode: number,
+  error?: unknown,
+) {
+  const auditAction: ChangeHistoryAction = `helm-${action.kind}` as ChangeHistoryAction;
+  const namespace =
+    action.kind === "install" || action.kind === "upgrade"
+      ? action.request.namespace
+      : action.namespace;
+  const release =
+    action.kind === "install" || action.kind === "upgrade"
+      ? action.request.release
+      : action.release;
+  const details =
+    action.kind === "install" || action.kind === "upgrade"
+      ? {
+          chart: action.request.chart,
+          version: action.request.version ?? "",
+          dryRun: action.request.dry_run ?? false,
+          exitCode,
+        }
+      : action.kind === "rollback"
+        ? {
+            revision: action.revision,
+            wait: action.wait,
+            exitCode,
+          }
+        : { keepHistory: action.keepHistory, exitCode };
+
+  useChangeHistoryStore.getState().recordEvent({
+    action: auditAction,
+    target: {
+      context,
+      namespace,
+      kind: "helmrelease",
+      name: release,
+    },
+    status,
+    summary:
+      action.kind === "rollback"
+        ? `helm rollback ${release} to revision ${action.revision}`
+        : `helm ${action.kind} ${release}`,
+    details,
+    error: error ?? (status === "failure" ? `helm exited ${exitCode}` : undefined),
+  });
 }

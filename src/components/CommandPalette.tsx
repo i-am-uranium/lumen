@@ -24,6 +24,10 @@ import {
   Boxes,
   Clock3,
   FileText,
+  Gauge,
+  GitCompareArrows,
+  History,
+  Inbox,
   Laptop,
   Lock,
   LockOpen,
@@ -263,7 +267,10 @@ export function CommandPalette() {
               {currentCtx && (
                 <>
                   <NavItem value="go: cloudmap" icon={Network} onSelect={() => pickTab("map")} />
+                  <NavItem value="go: cluster compare" icon={GitCompareArrows} onSelect={() => pickTab("compare")} />
                   <NavItem value="go: incident triage" icon={Siren} onSelect={() => pickTab("triage")} />
+                  <NavItem value="go: metrics explorer" icon={Gauge} onSelect={() => pickTab("metrics")} />
+                  <NavItem value="go: alert inbox" icon={Inbox} onSelect={() => pickTab("alerts")} />
                   <NavItem value="go: nodes" icon={Server} onSelect={() => pickTab("nodes")} />
                   <NavItem value="go: security" icon={ShieldAlert} onSelect={() => pickTab("security")} />
                   <NavItem value="go: crds" icon={Boxes} onSelect={() => pickTab("crds")} />
@@ -271,6 +278,7 @@ export function CommandPalette() {
                   <NavItem value="go: access" icon={UserPlus} onSelect={() => pickTab("access")} />
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
                   <NavItem value="go: rollout timeline" icon={Clock3} onSelect={() => pickTab("timeline")} />
+                  <NavItem value="go: change history" icon={History} onSelect={() => pickTab("change-history")} />
                   <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                   <NavItem value="go: workspaces" icon={BookOpenCheck} onSelect={() => pickTab("workspaces")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />

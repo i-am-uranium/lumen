@@ -54,6 +54,10 @@ function nextId(): number {
   return _idCounter;
 }
 
+function canUseTauriChannel(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 export const useActivityStream = create<Store>((set, get) => ({
   entries: [],
   unreadWarnings: 0,
@@ -67,6 +71,10 @@ export const useActivityStream = create<Store>((set, get) => ({
     // call start() on every render without churning the backend.
     if (current.streaming && current.context === context) return;
     if (current.streaming) await current.stop();
+    if (!canUseTauriChannel()) {
+      set({ streaming: false, streamId: "", context, entries: [], unreadWarnings: 0 });
+      return;
+    }
 
     const channel = new Channel<EventLine>();
     channel.onmessage = (line) => {

@@ -4,6 +4,7 @@ import path from "node:path";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+const isWorktreeRoot = __dirname.includes(`${path.sep}.worktrees${path.sep}`);
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -36,7 +37,11 @@ export default defineConfig(async () => ({
   test: {
     environment: "jsdom",
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.worktrees/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      ...(isWorktreeRoot ? [] : ["**/.worktrees/**"]),
+    ],
     setupFiles: ["./src/test-setup.ts"],
     globals: true,
   },

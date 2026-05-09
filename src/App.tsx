@@ -42,6 +42,9 @@ const SecurityView = lazy(() =>
 const NetworkDebuggerView = lazy(() =>
   import("@/routes/cluster/NetworkDebuggerView").then(named("NetworkDebuggerView")),
 );
+const MetricsExplorerView = lazy(() =>
+  import("@/routes/cluster/MetricsExplorerView").then(named("MetricsExplorerView")),
+);
 const NodesView = lazy(() =>
   import("@/routes/cluster/NodesView").then(named("NodesView")),
 );
@@ -63,6 +66,9 @@ const Overview = lazy(() =>
 const WorkloadsView = lazy(() =>
   import("@/routes/cluster/WorkloadsView").then(named("WorkloadsView")),
 );
+const ClusterCompareView = lazy(() =>
+  import("@/routes/cluster/ClusterCompareView").then(named("ClusterCompareView")),
+);
 const NamespacesView = lazy(() =>
   import("@/routes/cluster/NamespacesView").then(named("NamespacesView")),
 );
@@ -71,6 +77,9 @@ const EventsView = lazy(() =>
 );
 const TriageView = lazy(() =>
   import("@/routes/cluster/TriageView").then(named("TriageView")),
+);
+const AlertInboxView = lazy(() =>
+  import("@/routes/cluster/AlertInboxView").then(named("AlertInboxView")),
 );
 const RolloutTimelineView = lazy(() =>
   import("@/routes/cluster/RolloutTimelineView").then(named("RolloutTimelineView")),
@@ -89,6 +98,9 @@ const TektonView = lazy(() =>
 );
 const WorkspacesView = lazy(() =>
   import("@/routes/cluster/WorkspacesView").then(named("WorkspacesView")),
+);
+const ChangeHistoryView = lazy(() =>
+  import("@/routes/cluster/ChangeHistoryView").then(named("ChangeHistoryView")),
 );
 const NetworkPolicyWizard = lazy(() =>
   import("@/routes/cluster/wizards/NetworkPolicyWizard").then(
@@ -321,12 +333,15 @@ function Shell() {
                 <Route path="overview" element={<Overview />} />
                 <Route path="workloads" element={<WorkloadsView />} />
                 <Route path="workloads/:kind" element={<WorkloadsView />} />
+                <Route path="compare" element={<ClusterCompareView />} />
                 <Route path="namespaces" element={<NamespacesView />} />
                 <Route path="triage" element={<TriageView />} />
+                <Route path="alerts" element={<AlertInboxView />} />
                 <Route path="events" element={<EventsView />} />
                 <Route path="timeline" element={<RolloutTimelineView />} />
                 <Route path="map" element={<CloudMap />} />
                 <Route path="nodes" element={<NodesView />} />
+                <Route path="metrics" element={<MetricsExplorerView />} />
                 <Route path="security" element={<SecurityView />} />
                 <Route path="network-debugger" element={<NetworkDebuggerView />} />
                 <Route path="crds" element={<CrdBrowser />} />
@@ -337,6 +352,7 @@ function Shell() {
                 <Route path="argocd" element={<ArgocdView />} />
                 <Route path="tekton" element={<TektonView />} />
                 <Route path="workspaces" element={<WorkspacesView />} />
+                <Route path="change-history" element={<ChangeHistoryView />} />
                 <Route
                   path="wizards/network-policy"
                   element={<NetworkPolicyWizard />}

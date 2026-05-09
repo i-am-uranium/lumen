@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { NetworkDebugSnapshot } from "./networkDebugger";
+import type {
+  ChangeHistoryAction,
+  ChangeHistoryEventInput,
+  ChangeHistoryTarget,
+} from "@/lib/changeHistory";
+import { useChangeHistoryStore } from "@/state/changeHistory";
 
 export type ContextInfo = {
   name: string;
@@ -237,6 +243,36 @@ export type NodeSummary = {
   mem_usage_bytes: number | null;
   /** Mirrors `spec.unschedulable` — true when the node is cordoned. */
   unschedulable: boolean;
+};
+
+export type MetricsExplorerNode = {
+  name: string;
+  ready: boolean;
+  cpu_allocatable_milli: number;
+  mem_allocatable_bytes: number;
+  cpu_usage_milli: number | null;
+  mem_usage_bytes: number | null;
+};
+
+export type MetricsExplorerPod = {
+  namespace: string;
+  name: string;
+  node_name: string | null;
+  workload_kind: string;
+  workload_name: string;
+  cpu_usage_milli: number | null;
+  mem_usage_bytes: number | null;
+  cpu_request_milli: number | null;
+  cpu_limit_milli: number | null;
+  mem_request_bytes: number | null;
+  mem_limit_bytes: number | null;
+};
+
+export type MetricsExplorerSnapshot = {
+  fetched_at_ms: number;
+  errors: string[];
+  nodes: MetricsExplorerNode[];
+  pods: MetricsExplorerPod[];
 };
 
 export type DrainFailure = {
@@ -752,6 +788,47 @@ export type TektonPipelineRunDetail = {
 
 // ─── API ──────────────────────────────────────────────────────────────────
 
+type MutationAuditInput = Omit<ChangeHistoryEventInput, "status" | "error">;
+
+function auditTarget(
+  context: string | undefined,
+  namespace: string | undefined,
+  kind: string,
+  name: string,
+): ChangeHistoryTarget {
+  return {
+    context: context ?? "",
+    namespace: namespace ?? "",
+    kind,
+    name,
+  };
+}
+
+async function trackMutation<T>(
+  input: MutationAuditInput,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    const result = await run();
+    useChangeHistoryStore.getState().recordEvent({
+      ...input,
+      status: "success",
+    });
+    return result;
+  } catch (error) {
+    useChangeHistoryStore.getState().recordEvent({
+      ...input,
+      status: "failure",
+      error,
+    });
+    throw error;
+  }
+}
+
+function argoAction(options: ArgoSyncOptions): ChangeHistoryAction {
+  return options.revision && options.prune ? "argocd-rollback" : "argocd-sync";
+}
+
 export const k8s = {
   listContexts: () => invoke<ContextInfo[]>("list_contexts"),
   setContext: (name: string) => invoke<ContextInfo>("set_context", { name }),
@@ -787,6 +864,11 @@ export const k8s = {
   reconnectAll: () => invoke<void>("reconnect_all"),
   listNodes: (context?: string) =>
     invoke<NodeSummary[]>("list_nodes", { context }),
+  metricsExplorerSnapshot: (namespace?: string, context?: string) =>
+    invoke<MetricsExplorerSnapshot>("metrics_explorer_snapshot", {
+      namespace,
+      context,
+    }),
   cloudMap: (context?: string, namespace?: string) =>
     invoke<CloudMap>("cloud_map", { context, namespace }),
   networkDebugSnapshot: (namespace: string, context?: string) =>
@@ -899,7 +981,15 @@ export const k8s = {
     kind: WorkloadKind,
     name: string,
     context?: string,
-  ) => invoke<void>("restart_workload", { namespace, kind, name, context }),
+  ) =>
+    trackMutation(
+      {
+        action: "restart",
+        target: auditTarget(context, namespace, kind, name),
+        summary: `restart requested for ${kind}/${name}`,
+      },
+      () => invoke<void>("restart_workload", { namespace, kind, name, context }),
+    ),
   scaleWorkload: (
     namespace: string,
     kind: WorkloadKind,
@@ -907,13 +997,22 @@ export const k8s = {
     replicas: number,
     context?: string,
   ) =>
-    invoke<void>("scale_workload", {
-      namespace,
-      kind,
-      name,
-      replicas,
-      context,
-    }),
+    trackMutation(
+      {
+        action: "scale",
+        target: auditTarget(context, namespace, kind, name),
+        summary: `scaled ${kind}/${name} to ${replicas}`,
+        details: { replicas },
+      },
+      () =>
+        invoke<void>("scale_workload", {
+          namespace,
+          kind,
+          name,
+          replicas,
+          context,
+        }),
+    ),
   /** Returns true when `trivy --version` succeeds; surfaced by the UI to gate
    *  the scan button without round-tripping through scan_image. */
   detectTrivy: () => invoke<boolean>("detect_trivy"),
@@ -945,16 +1044,32 @@ export const k8s = {
     image: string,
     context?: string,
   ) =>
-    invoke<void>("set_workload_image", {
-      namespace,
-      kind,
-      name,
-      container,
-      image,
-      context,
-    }),
+    trackMutation(
+      {
+        action: "set-image",
+        target: auditTarget(context, namespace, kind, name),
+        summary: `set ${container} image on ${kind}/${name}`,
+        details: { container, image },
+      },
+      () =>
+        invoke<void>("set_workload_image", {
+          namespace,
+          kind,
+          name,
+          container,
+          image,
+          context,
+        }),
+    ),
   deletePod: (namespace: string, name: string, context?: string) =>
-    invoke<void>("delete_pod", { namespace, name, context }),
+    trackMutation(
+      {
+        action: "delete",
+        target: auditTarget(context, namespace, "pod", name),
+        summary: `deleted pod/${name}`,
+      },
+      () => invoke<void>("delete_pod", { namespace, name, context }),
+    ),
   /** Mark a node unschedulable. New pods won't be placed on it; existing pods stay. */
   cordonNode: (name: string, context?: string) =>
     invoke<void>("cordon_node", { name, context }),
@@ -973,13 +1088,28 @@ export const k8s = {
    * --from=cronjob/<name>`. Resolves to the name of the freshly-created Job.
    */
   triggerCronjob: (namespace: string, name: string, context?: string) =>
-    invoke<string>("trigger_cronjob", { namespace, name, context }),
+    trackMutation(
+      {
+        action: "trigger",
+        target: auditTarget(context, namespace, "cronjob", name),
+        summary: `triggered cronjob/${name}`,
+      },
+      () => invoke<string>("trigger_cronjob", { namespace, name, context }),
+    ),
   deleteResource: (
     namespace: string,
     kind: WorkloadKind,
     name: string,
     context?: string,
-  ) => invoke<void>("delete_resource", { namespace, kind, name, context }),
+  ) =>
+    trackMutation(
+      {
+        action: "delete",
+        target: auditTarget(context, namespace, kind, name),
+        summary: `deleted ${kind}/${name}`,
+      },
+      () => invoke<void>("delete_resource", { namespace, kind, name, context }),
+    ),
   listPodContainers: (namespace: string, pod: string, context?: string) =>
     invoke<PodContainerInfo[]>("list_pod_containers", { namespace, pod, context }),
   startPortForward: (opts: {
@@ -1008,14 +1138,31 @@ export const k8s = {
     dryRun: boolean,
     context?: string,
   ) =>
-    invoke<ApplyOutcome>("apply_resource", {
-      namespace,
-      kind,
-      name,
-      yaml,
-      dryRun,
-      context,
-    }),
+    dryRun
+      ? invoke<ApplyOutcome>("apply_resource", {
+          namespace,
+          kind,
+          name,
+          yaml,
+          dryRun,
+          context,
+        })
+      : trackMutation(
+          {
+            action: "apply",
+            target: auditTarget(context, namespace, kind, name),
+            summary: `applied ${kind}/${name}`,
+          },
+          () =>
+            invoke<ApplyOutcome>("apply_resource", {
+              namespace,
+              kind,
+              name,
+              yaml,
+              dryRun,
+              context,
+            }),
+        ),
   listHelmReleases: (context?: string) =>
     invoke<HelmReleaseSummary[]>("list_helm_releases", { context }),
   getHelmRelease: (
@@ -1116,12 +1263,29 @@ export const k8s = {
     name: string,
     options: ArgoSyncOptions,
   ) =>
-    invoke<void>("sync_argocd_application", {
-      context,
-      namespace,
-      name,
-      options,
-    }),
+    trackMutation(
+      {
+        action: argoAction(options),
+        target: auditTarget(context, namespace, "argocdapplication", name),
+        summary:
+          argoAction(options) === "argocd-rollback"
+            ? `argocd rollback ${name}`
+            : `argocd sync ${name}`,
+        details: {
+          prune: options.prune ?? false,
+          dryRun: options.dryRun ?? false,
+          revision: options.revision ?? "",
+          resources: options.resources?.length ?? 0,
+        },
+      },
+      () =>
+        invoke<void>("sync_argocd_application", {
+          context,
+          namespace,
+          name,
+          options,
+        }),
+    ),
   /** Cancel an in-flight sync operation. Patches `.operation` to null —
    *  same path as the upstream ArgoCD UI's "Terminate" button. */
   terminateArgocdOperation: (
@@ -1129,11 +1293,19 @@ export const k8s = {
     namespace: string,
     name: string,
   ) =>
-    invoke<void>("terminate_argocd_operation", {
-      context,
-      namespace,
-      name,
-    }),
+    trackMutation(
+      {
+        action: "argocd-terminate",
+        target: auditTarget(context, namespace, "argocdapplication", name),
+        summary: `argocd terminate ${name}`,
+      },
+      () =>
+        invoke<void>("terminate_argocd_operation", {
+          context,
+          namespace,
+          name,
+        }),
+    ),
   /** Annotation-based refresh. `hard=true` re-clones the repo. */
   refreshArgocdApplication: (
     context: string | undefined,

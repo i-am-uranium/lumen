@@ -57,6 +57,7 @@ pub fn run() {
             commands::k8s::disconnect_context,
             commands::k8s::reconnect_all,
             commands::k8s::list_nodes,
+            commands::k8s::metrics_explorer_snapshot,
             commands::k8s::cloud_map,
             commands::k8s::network_debug_snapshot,
             commands::k8s::security_scan,

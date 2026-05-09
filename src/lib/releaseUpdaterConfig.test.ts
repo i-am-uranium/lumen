@@ -40,9 +40,16 @@ describe("release updater configuration", () => {
     }
   });
 
-  it("lets Tauri use its CI-safe DMG bundling path", () => {
+  it("forces Tauri to use its CI-aware DMG bundling path", () => {
     const releaseWorkflow = read(".github/workflows/release.yml");
+    const macosBuildSection = releaseWorkflow.split("  build-macos:")[1]?.split("  build-linux:")[0];
 
-    expect(releaseWorkflow).not.toContain("TAURI_BUNDLER_DMG_IGNORE_CI:");
+    expect(macosBuildSection).toBeTruthy();
+    const macosBuildBlocks = macosBuildSection!.split("- name: Build Tauri app").slice(1);
+    expect(macosBuildBlocks).toHaveLength(2);
+    for (const block of macosBuildBlocks) {
+      expect(block).toContain('TAURI_BUNDLER_DMG_IGNORE_CI: "false"');
+      expect(block).not.toContain('TAURI_BUNDLER_DMG_IGNORE_CI: "true"');
+    }
   });
 });

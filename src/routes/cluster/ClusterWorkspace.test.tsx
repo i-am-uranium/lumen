@@ -36,7 +36,10 @@ function LocationProbe() {
   return <div data-testid="location">{location.pathname + location.search}</div>;
 }
 
-function renderWorkspace(contexts: ContextInfo[]) {
+function renderWorkspace(
+  contexts: ContextInfo[],
+  initialEntry = "/cluster/dev-stage/workloads/pods?ns=payments",
+) {
   vi.mocked(k8s.listContexts).mockResolvedValue(contexts);
   vi.mocked(k8s.setContext).mockImplementation(async (name: string) => {
     const next = contexts.find((item) => item.name === name);
@@ -49,11 +52,12 @@ function renderWorkspace(contexts: ContextInfo[]) {
 
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={["/cluster/dev-stage/workloads/pods?ns=payments"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/cluster/:ctx" element={<ClusterWorkspace />}>
             <Route path="workloads/pods" element={<LocationProbe />} />
             <Route path="workloads" element={<LocationProbe />} />
+            <Route path="metrics" element={<LocationProbe />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -98,5 +102,22 @@ describe("cluster switch routing", () => {
     await screen.findByRole("complementary", { name: /cluster navigation/i });
 
     expect(screen.queryByRole("button", { name: /switch cluster/i })).not.toBeInTheDocument();
+  });
+
+  it("exposes the metrics explorer as a first-level cluster route", async () => {
+    renderWorkspace(
+      [
+        context({ name: "dev-stage" }),
+        context({ name: "prod-main", is_prod: true }),
+      ],
+      "/cluster/dev-stage/metrics",
+    );
+
+    expect(await screen.findByTestId("location")).toHaveTextContent(
+      "/cluster/dev-stage/metrics",
+    );
+    expect(
+      screen.getByRole("link", { name: /metrics explorer/i }),
+    ).toHaveAttribute("href", "/cluster/dev-stage/metrics");
   });
 });
