@@ -58,6 +58,7 @@ pub fn run() {
             commands::k8s::reconnect_all,
             commands::k8s::list_nodes,
             commands::k8s::cloud_map,
+            commands::k8s::network_debug_snapshot,
             commands::k8s::security_scan,
             commands::k8s::check_access,
             commands::k8s::list_crds,

@@ -150,6 +150,7 @@ const SECTIONS: Item[] = [
       { to: "workloads/httproutes", label: "http routes" },
       { to: "workloads/grpcroutes", label: "grpc routes" },
       { to: "workloads/networkpolicies", label: "network policies" },
+      { to: "network-debugger", label: "debugger" },
     ],
   },
   {
