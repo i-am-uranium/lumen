@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clusterSwitchPath } from "@/components/ClusterSwitcher";
 import { ClusterWorkspace } from "./ClusterWorkspace";
-import { k8s, type ContextInfo } from "@/lib/k8s";
+import { k8s, type ContextInfo, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { useClusterStore } from "@/state/cluster";
 
 vi.mock("@/lib/k8s", () => ({
@@ -13,6 +13,8 @@ vi.mock("@/lib/k8s", () => ({
     setContext: vi.fn(),
     detectArgocd: vi.fn(),
     detectTekton: vi.fn(),
+    listWorkloads: vi.fn(),
+    listNodes: vi.fn(),
   },
 }));
 
@@ -36,9 +38,23 @@ function LocationProbe() {
   return <div data-testid="location">{location.pathname + location.search}</div>;
 }
 
+function workload(overrides: Partial<WorkloadSummary>): WorkloadSummary {
+  return {
+    kind: "job",
+    name: "biometric-scan",
+    namespace: "dev",
+    ready: "0/1",
+    age_seconds: 300,
+    health: "failed",
+    labels: {},
+    ...overrides,
+  };
+}
+
 function renderWorkspace(
   contexts: ContextInfo[],
   initialEntry = "/cluster/dev-stage/workloads/pods?ns=payments",
+  listWorkloads: (namespace: string, kind: WorkloadKind) => Promise<WorkloadSummary[]> = async () => [],
 ) {
   vi.mocked(k8s.listContexts).mockResolvedValue(contexts);
   vi.mocked(k8s.setContext).mockImplementation(async (name: string) => {
@@ -48,6 +64,8 @@ function renderWorkspace(
   });
   vi.mocked(k8s.detectArgocd).mockResolvedValue(false);
   vi.mocked(k8s.detectTekton).mockResolvedValue(false);
+  vi.mocked(k8s.listWorkloads).mockImplementation(listWorkloads);
+  vi.mocked(k8s.listNodes).mockResolvedValue([]);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   return render(
@@ -58,6 +76,7 @@ function renderWorkspace(
             <Route path="workloads/pods" element={<LocationProbe />} />
             <Route path="workloads" element={<LocationProbe />} />
             <Route path="metrics" element={<LocationProbe />} />
+            <Route path="alerts" element={<LocationProbe />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -122,5 +141,20 @@ describe("cluster switch routing", () => {
     expect(
       screen.queryByRole("link", { name: /AI assistant/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows active alert count on the alert inbox rail item", async () => {
+    renderWorkspace(
+      [
+        context({ name: "dev-stage" }),
+        context({ name: "prod-main", is_prod: true }),
+      ],
+      "/cluster/dev-stage/alerts",
+      async (_namespace, kind) => (kind === "job" ? [workload({})] : []),
+    );
+
+    const alertInboxLink = await screen.findByRole("link", { name: /alert inbox/i });
+    await waitFor(() => expect(alertInboxLink).toHaveTextContent("1"));
+    expect(alertInboxLink).toHaveAccessibleName(/1 active alert/i);
   });
 });

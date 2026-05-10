@@ -6,7 +6,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -55,7 +55,8 @@ import { Input } from "@/components/ui/input";
 import { PortForwardsChip } from "@/components/PortForwardsChip";
 import { CopilotDrawer } from "@/components/copilot/CopilotDrawer";
 import { CopilotLauncher } from "@/components/copilot/CopilotLauncher";
-import { k8s } from "@/lib/k8s";
+import { buildAlertInbox } from "@/lib/alertInbox";
+import { k8s, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useClusterStore } from "@/state/cluster";
 import { useUiSettings } from "@/state/uiSettings";
@@ -66,11 +67,13 @@ import {
 import { useRailState } from "@/hooks/useRailState";
 import { usePinnedResources, type PinnedRef } from "@/hooks/usePinnedResources";
 import { useRecentResources } from "@/hooks/useRecentResources";
+import { applyAlertInboxState, useAlertInboxStore } from "@/state/alertInbox";
 
 const RAIL_W = 220;
 const RAIL_W_COLLAPSED = 56;
 const COLLAPSED_ROW =
   "mx-auto flex size-10 items-center justify-center rounded-control border text-text-secondary transition-colors";
+const ALERT_BADGE_WORKLOAD_KINDS: WorkloadKind[] = ["deployment", "pod", "job"];
 
 type LeafItem = {
   kind: "leaf";
@@ -303,11 +306,36 @@ const navRow = ({ isActive }: { isActive: boolean }, collapsed: boolean) =>
 
 const childRow = ({ isActive }: { isActive: boolean }) =>
   cn(
-    "flex items-center h-6 rounded-md text-[12px] pl-9 pr-2 mx-1.5 transition-colors border",
+    "flex items-center gap-2 h-6 rounded-md text-[12px] pl-9 pr-2 mx-1.5 transition-colors border",
     isActive
       ? "bg-accent-primary-soft text-accent-primary border-accent-primary/40"
       : "text-text-secondary hover:text-text-primary hover:bg-hover border-transparent",
   );
+
+function childBadgeCount(to: string, alertBadgeCount: number): number {
+  return to === "alerts" ? alertBadgeCount : 0;
+}
+
+function childAriaLabel(label: string, badgeCount: number): string {
+  if (badgeCount <= 0) return label;
+  return `${label} ${formatBadgeCount(badgeCount)} active alert${badgeCount === 1 ? "" : "s"}`;
+}
+
+function formatBadgeCount(count: number): string {
+  return count > 99 ? "99+" : String(count);
+}
+
+function ChildBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      aria-hidden="true"
+      className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-warning px-1 font-mono text-[9px] leading-none text-[var(--term-btn-primary-fg)]"
+    >
+      {formatBadgeCount(count)}
+    </span>
+  );
+}
 
 function inferIcon(kind: string): LucideIcon {
   const k = kind.toLowerCase();
@@ -757,6 +785,10 @@ export function ClusterWorkspace() {
     (s) => s.selectedNamespaces[context] ?? "",
   );
   const addWorkspace = useWorkspacesStore((s) => s.addWorkspace);
+  const alertAcknowledged = useAlertInboxStore((s) => s.acknowledged);
+  const alertSnoozedUntil = useAlertInboxStore((s) => s.snoozedUntil);
+  const alertRead = useAlertInboxStore((s) => s.read);
+  const alertRestartCounts = useAlertInboxStore((s) => s.restartCounts);
   const [saveOpen, setSaveOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspaceNotes, setWorkspaceNotes] = useState("");
@@ -792,6 +824,20 @@ export function ClusterWorkspace() {
     staleTime: 60 * 60 * 1000,
     enabled: !!context,
   });
+  const alertWorkloadQueries = useQueries({
+    queries: ALERT_BADGE_WORKLOAD_KINDS.map((kind) => ({
+      queryKey: ["k8s", "alert-inbox-badge-workloads", context, "", kind] as const,
+      queryFn: () => k8s.listWorkloads("", kind, context || undefined),
+      enabled: !!context,
+      staleTime: 5_000,
+    })),
+  });
+  const alertNodesQuery = useQuery({
+    queryKey: ["k8s", "alert-inbox-badge-nodes", context],
+    queryFn: () => k8s.listNodes(context || undefined),
+    enabled: !!context,
+    staleTime: 5_000,
+  });
   // Mirror non-404 probe errors to DevTools so the cause is visible
   // without having to dig through the network tab. The pill in the
   // sidebar (CapabilityStatus) carries the same message for end users.
@@ -813,6 +859,35 @@ export function ClusterWorkspace() {
       }),
     [argocdAvailable.data, tektonAvailable.data],
   );
+  const alertBadgeCount = useMemo(() => {
+    if (!context) return 0;
+    const nowMs = Date.now();
+    const rawAlerts = buildAlertInbox({
+      context,
+      workloads: alertWorkloadQueries.flatMap((query) => query.data ?? []),
+      nodes: alertNodesQuery.data ?? [],
+      previousRestartCounts: alertRestartCounts,
+      nowMs,
+    });
+    return applyAlertInboxState(
+      rawAlerts,
+      {
+        acknowledged: alertAcknowledged,
+        snoozedUntil: alertSnoozedUntil,
+        read: alertRead,
+        restartCounts: alertRestartCounts,
+      },
+      nowMs,
+    ).filter((alert) => !alert.acknowledged && !alert.snoozed).length;
+  }, [
+    alertAcknowledged,
+    alertNodesQuery.data,
+    alertRead,
+    alertRestartCounts,
+    alertSnoozedUntil,
+    alertWorkloadQueries,
+    context,
+  ]);
 
   // Re-probe every cluster capability we know about. Adding a probe later
   // is one entry in this list — the 1h cache invalidates, the next render
@@ -954,8 +1029,10 @@ export function ClusterWorkspace() {
                         to={c.to}
                         end={c.end}
                         className={childRow}
+                        aria-label={childAriaLabel(c.label, childBadgeCount(c.to, alertBadgeCount))}
                       >
-                        <span className="truncate">{c.label}</span>
+                        <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                        <ChildBadge count={childBadgeCount(c.to, alertBadgeCount)} />
                       </NavLink>
                     ))}
                   </div>
