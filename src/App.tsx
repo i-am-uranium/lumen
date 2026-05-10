@@ -16,7 +16,7 @@ import { useUiSettings } from "@/state/uiSettings";
 import { ShellDock } from "@/components/shell/ShellDock";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
-import { Bell, Lock, Network, Sparkles } from "lucide-react";
+import { Bell, Lock, Network } from "lucide-react";
 import { useClusterStore } from "@/state/cluster";
 import { useShortcut } from "@/lib/shortcuts";
 import { dispatchFocusSearch } from "@/lib/focusSearch";
@@ -184,7 +184,6 @@ function NavBar() {
   const { pathname, search } = useLocation();
   const queryClient = useQueryClient();
   const { contextName, setContext } = useClusterStore();
-  const aiActive = pathname.endsWith("/ai");
   const { data: contexts = [] } = useQuery(useClusterContexts(pathname.startsWith("/cluster")));
   const activeContext = contexts.find((item) => item.name === contextName);
   const activeClusterPath = contextName
@@ -269,22 +268,6 @@ function NavBar() {
               {unreadWarnings > 9 ? "9+" : unreadWarnings}
             </span>
           )}
-        </button>
-        <button
-          type="button"
-          disabled={!contextName}
-          title={contextName ? "Open AI assistant (Cmd K, type ai)" : "Select a cluster context first"}
-          onClick={() => contextName && navigate(`/cluster/${encodeURIComponent(contextName)}/ai`)}
-          className={cn(
-            "inline-flex h-8 items-center gap-2 rounded-[6px] border px-3 text-[12px] font-medium transition-colors",
-            aiActive
-              ? "border-accent-primary/50 bg-accent-primary-soft text-accent-primary"
-              : "border-term-border-soft bg-term-bg/70 text-term-muted hover:border-accent-primary/35 hover:text-term-fg",
-            !contextName && "cursor-not-allowed opacity-45 hover:border-term-border-soft hover:text-term-muted",
-          )}
-        >
-          <Sparkles className="size-3.5" aria-hidden="true" />
-          <span>AI</span>
         </button>
       </nav>
       <ActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} />

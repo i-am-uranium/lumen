@@ -86,6 +86,7 @@ describe("top cluster switcher", () => {
     const switcher = await screen.findByRole("button", { name: /switch cluster/i });
     expect(switcher).toHaveTextContent("dev-stage");
     expect(screen.queryByText("cluster", { selector: "span" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^AI$/i })).not.toBeInTheDocument();
 
     await userEvent.click(switcher);
     await userEvent.type(screen.getByPlaceholderText(/switch cluster/i), "prod");

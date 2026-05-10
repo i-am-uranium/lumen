@@ -116,7 +116,6 @@ const SECTIONS: Item[] = [
       { to: "events", label: "events" },
       { to: "timeline", label: "timeline" },
       { to: "logs", label: "logs" },
-      { to: "ai", label: "AI assistant" },
     ],
   },
   { kind: "leaf", to: "nodes", label: "nodes", icon: Server },

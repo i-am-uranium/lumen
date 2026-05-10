@@ -119,5 +119,8 @@ describe("cluster switch routing", () => {
     expect(
       screen.getByRole("link", { name: /metrics explorer/i }),
     ).toHaveAttribute("href", "/cluster/dev-stage/metrics");
+    expect(
+      screen.queryByRole("link", { name: /AI assistant/i }),
+    ).not.toBeInTheDocument();
   });
 });
