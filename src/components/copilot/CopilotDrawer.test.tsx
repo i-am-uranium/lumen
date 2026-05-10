@@ -1,11 +1,41 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AI_SESSIONS_STORAGE_KEY } from "@/lib/aiSessions";
+import { ai } from "@/lib/ai";
 import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { useCopilotUi } from "@/state/copilotUi";
 import { CopilotDrawer } from "./CopilotDrawer";
+
+vi.mock("@/lib/ai", () => ({
+  ai: {
+    detectProviders: vi.fn(async () => [
+      {
+        id: "codex",
+        label: "Codex",
+        command: "codex",
+        available: false,
+        path: null,
+        command_preview: "codex exec",
+        models: ["gpt-5.2"],
+        default_model: "gpt-5.2",
+      },
+      {
+        id: "claude",
+        label: "Claude Code",
+        command: "claude",
+        available: false,
+        path: null,
+        command_preview: "claude -p",
+        models: ["sonnet"],
+        default_model: "sonnet",
+      },
+    ]),
+    runPrompt: vi.fn(),
+  },
+}));
 
 vi.mock("@/lib/k8s", async () => {
   const actual = await vi.importActual<typeof import("@/lib/k8s")>("@/lib/k8s");
@@ -65,10 +95,17 @@ function workload(
 }
 
 function renderDrawer(route = "/cluster/ms-aks-stage/logs?ns=checkout") {
+  const qc = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
   useCopilotUi.getState().openDrawer();
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <CopilotDrawer clusterContext="ms-aks-stage" />
+      <QueryClientProvider client={qc}>
+        <CopilotDrawer clusterContext="ms-aks-stage" />
+      </QueryClientProvider>
     </MemoryRouter>,
   );
 }
@@ -170,6 +207,71 @@ describe("CopilotDrawer", () => {
     expect(await screen.findByRole("link", { name: /open argocd app/i })).toHaveAttribute(
       "href",
       "/cluster/ms-aks-stage/argocd?app=argocd%2Fdoctor-dashboard",
+    );
+  });
+
+  it("shows compact provider, model, and instruction settings in the drawer", async () => {
+    renderDrawer();
+
+    await userEvent.click(screen.getByRole("button", { name: /copilot settings/i }));
+
+    expect(screen.getByLabelText(/use model to understand requests/i)).toBeChecked();
+    expect(screen.getByRole("combobox", { name: /^provider$/i })).toHaveValue("codex");
+    expect(screen.getByRole("combobox", { name: /^model$/i })).toHaveValue("gpt-5.2");
+    expect(screen.getByLabelText(/instructions/i)).toHaveValue(
+      "You are a Kubernetes operator assistant inside Lumen. Understand the user's intent, preserve exact workload names, prefer read-only navigation, and never invent destructive actions.",
+    );
+  });
+
+  it("uses the configured model to understand the request when the provider is available", async () => {
+    vi.mocked(ai.detectProviders).mockResolvedValue([
+      {
+        id: "codex",
+        label: "Codex",
+        command: "codex",
+        available: true,
+        path: "/opt/homebrew/bin/codex",
+        command_preview: "codex exec",
+        models: ["gpt-5.2"],
+        default_model: "gpt-5.2",
+      },
+      {
+        id: "claude",
+        label: "Claude Code",
+        command: "claude",
+        available: false,
+        path: null,
+        command_preview: "claude -p",
+        models: ["sonnet"],
+        default_model: "sonnet",
+      },
+    ]);
+    vi.mocked(ai.runPrompt).mockResolvedValue({
+      provider: "codex",
+      stdout: JSON.stringify({
+        kind: "logs",
+        targetText: "customer service",
+        requestedAction: "open",
+      }),
+      stderr: "",
+      exit_code: 0,
+      timed_out: false,
+    });
+
+    renderDrawer();
+    await waitFor(() => expect(ai.detectProviders).toHaveBeenCalled());
+
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /ask copilot/i }),
+      "can you pull what I need for checkout customer traffic",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await screen.findByRole("link", { name: /open logs/i });
+    expect(ai.runPrompt).toHaveBeenCalledWith(
+      "codex",
+      expect.stringContaining("can you pull what I need for checkout customer traffic"),
+      "gpt-5.2",
     );
   });
 });

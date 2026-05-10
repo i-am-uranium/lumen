@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EventSummary, WorkloadKind, WorkloadSummary } from "@/lib/k8s";
 import { buildCopilotResponse, buildNativeCopilotResponse } from "./copilotAssistant";
+import type { CopilotIntent } from "./copilotIntent";
 
 function workload(
   name: string,
@@ -168,6 +169,65 @@ describe("buildNativeCopilotResponse", () => {
     });
     expect(response.ctas[0]).toMatchObject({
       to: "/cluster/ms-aks-stage/logs?ns=identity&kind=deployment&name=oaut-service&grep=oaut-service",
+    });
+  });
+
+  it("uses model-classified intent before the local fallback classifier", async () => {
+    const response = await buildNativeCopilotResponse(
+      {
+        prompt: "can you get what I need from that auth thing",
+        clusterContext: "ms-aks-stage",
+        route,
+      },
+      {
+        intent: vi.fn(async (): Promise<CopilotIntent> => ({
+          kind: "logs",
+          targetText: "oaut-service",
+          requestedAction: "open",
+          prompt: "can you get what I need from that auth thing",
+        })),
+        resolver: resolverClient([workload("oaut-service", "identity")]),
+        evidence: {
+          listPodsFor: vi.fn(async () => [workload("oaut-service-7f9d", "identity", "pod")]),
+          listEventsFor: vi.fn(async () => []),
+        },
+      },
+    );
+
+    expect(response).toMatchObject({
+      mode: "resolved",
+      title: "Found deployment/oaut-service",
+      target: {
+        namespace: "identity",
+        name: "oaut-service",
+      },
+    });
+  });
+
+  it("uses model-classified route intent when building navigation CTAs", async () => {
+    const response = await buildNativeCopilotResponse(
+      {
+        prompt: "the deploy finished for patient intake, get it current",
+        clusterContext: "ms-aks-stage",
+        route,
+      },
+      {
+        intent: vi.fn(async (): Promise<CopilotIntent> => ({
+          kind: "argocd-app",
+          targetText: "patient intake",
+          requestedAction: "sync",
+          prompt: "the deploy finished for patient intake, get it current",
+        })),
+      },
+    );
+
+    expect(response).toMatchObject({
+      mode: "route",
+      title: "Review patient intake in ArgoCD",
+    });
+    expect(response.ctas[0]).toMatchObject({
+      label: "Open ArgoCD app",
+      to: "/cluster/ms-aks-stage/argocd?app=argocd%2Fpatient-intake",
     });
   });
 

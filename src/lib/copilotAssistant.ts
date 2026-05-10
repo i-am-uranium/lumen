@@ -1,5 +1,5 @@
 import type { CopilotRouteContext } from "./copilotContext";
-import { classifyCopilotIntent } from "./copilotIntent";
+import { classifyCopilotIntent, type CopilotIntent } from "./copilotIntent";
 import {
   collectCopilotEvidence,
   type CopilotEvidenceBundle,
@@ -46,6 +46,7 @@ export type NativeCopilotResponse = CopilotResponse & {
 };
 
 export type NativeCopilotDependencies = {
+  intent?: (input: CopilotResponseInput) => CopilotIntent | Promise<CopilotIntent>;
   resolver?: CopilotResolverClient;
   evidence?: CopilotEvidenceClient;
 };
@@ -54,9 +55,11 @@ export async function buildNativeCopilotResponse(
   input: CopilotResponseInput,
   dependencies: NativeCopilotDependencies = {},
 ): Promise<NativeCopilotResponse> {
-  const intent = classifyCopilotIntent(input.prompt);
+  const intent = dependencies.intent
+    ? await dependencies.intent(input)
+    : classifyCopilotIntent(input.prompt);
   if (intent.kind === "argocd-app" || intent.kind === "incident-update") {
-    return { ...buildCopilotResponse(input), mode: "route" };
+    return { ...buildCopilotResponse(input, intent), mode: "route" };
   }
 
   const query = intent.targetText || input.route.resource || input.prompt;
@@ -95,7 +98,7 @@ export async function buildNativeCopilotResponse(
         "Try a namespace, exact workload name, or open Workloads search.",
       ],
       commands: [],
-      ctas: buildCopilotResponse(input).ctas,
+      ctas: buildCopilotResponse(input, intent).ctas,
       candidates: [],
     };
   }
@@ -124,8 +127,10 @@ export async function buildNativeCopilotResponse(
   };
 }
 
-export function buildCopilotResponse(input: CopilotResponseInput): CopilotResponse {
-  const intent = classifyCopilotIntent(input.prompt);
+export function buildCopilotResponse(
+  input: CopilotResponseInput,
+  intent: CopilotIntent = classifyCopilotIntent(input.prompt),
+): CopilotResponse {
   const namespace = input.route.namespace || undefined;
 
   if (intent.kind === "logs") {

@@ -1,7 +1,24 @@
-import { FormEvent, useMemo, useState } from "react";
-import { Bot, ClipboardList, LockKeyhole, Plus, SendHorizontal, X } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Bot,
+  ClipboardList,
+  LockKeyhole,
+  Plus,
+  SendHorizontal,
+  Settings2,
+  X,
+} from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { ai } from "@/lib/ai";
+import {
+  DEFAULT_COPILOT_INSTRUCTIONS,
+  readAiAssistantSettings,
+  writeAiAssistantSettings,
+  type AiAssistantSettings,
+  type AiProviderId,
+} from "@/lib/aiSettings";
 import {
   DrawerBackdrop,
   DrawerHeader,
@@ -17,6 +34,7 @@ import {
   buildCopilotPromptContext,
   buildCopilotRouteContext,
 } from "@/lib/copilotContext";
+import { classifyCopilotIntentWithModel } from "@/lib/copilotLlmIntent";
 import {
   createSessionId,
   listAiSessions,
@@ -44,6 +62,16 @@ export function CopilotDrawer({ clusterContext }: Props) {
   const [liveResponse, setLiveResponse] = useState<NativeCopilotResponse | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aiSettings, setAiSettings] = useState<AiAssistantSettings>(() =>
+    readAiAssistantSettings(),
+  );
+
+  const providers = useQuery({
+    queryKey: ["ai", "providers"],
+    queryFn: ai.detectProviders,
+    staleTime: 30_000,
+  });
 
   const route = useMemo(
     () => buildCopilotRouteContext(location.pathname, location.search),
@@ -67,6 +95,20 @@ export function CopilotDrawer({ clusterContext }: Props) {
   const response = liveResponse ?? sessionResponse;
   const nativeResponse: NativeCopilotResponse | null =
     response && "mode" in response ? (response as NativeCopilotResponse) : null;
+  const selectedProvider = providers.data?.find((provider) => provider.id === aiSettings.provider);
+  const selectedModel = selectedProvider?.models.includes(aiSettings.model)
+    ? aiSettings.model
+    : (selectedProvider?.default_model ?? selectedProvider?.models[0] ?? aiSettings.model);
+
+  useEffect(() => {
+    if (!selectedProvider) return;
+    const nextModel = selectedProvider.models.includes(aiSettings.model)
+      ? aiSettings.model
+      : (selectedProvider.default_model || selectedProvider.models[0] || "");
+    if (nextModel && nextModel !== aiSettings.model) {
+      updateAiSettings({ model: nextModel });
+    }
+  }, [aiSettings.model, selectedProvider]);
 
   if (!isOpen) return null;
 
@@ -82,6 +124,17 @@ export function CopilotDrawer({ clusterContext }: Props) {
         prompt: question,
         clusterContext,
         route,
+      }, {
+        intent:
+          aiSettings.copilotModelIntent && selectedProvider?.available
+            ? (request) =>
+                classifyCopilotIntentWithModel({
+                  ...request,
+                  provider: aiSettings.provider,
+                  model: selectedModel,
+                  instructions: aiSettings.copilotInstructions,
+                })
+            : undefined,
       });
       const session = createCopilotSession({
         clusterContext,
@@ -104,6 +157,14 @@ export function CopilotDrawer({ clusterContext }: Props) {
     setLiveResponse(null);
     setError(null);
     startNewInvestigation();
+  }
+
+  function updateAiSettings(patch: Partial<AiAssistantSettings>) {
+    setAiSettings((current) => {
+      const next = { ...current, ...patch };
+      writeAiAssistantSettings(next);
+      return next;
+    });
   }
 
   const title = response?.title ?? activeSession?.title ?? "Ask about this cluster";
@@ -137,6 +198,16 @@ export function CopilotDrawer({ clusterContext }: Props) {
               type="button"
               variant="ghost"
               size="icon"
+              onClick={() => setSettingsOpen((open) => !open)}
+              aria-label="Copilot settings"
+              title="Copilot settings"
+            >
+              <Settings2 className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
               onClick={newInvestigation}
               aria-label="new investigation"
               title="new investigation"
@@ -158,6 +229,15 @@ export function CopilotDrawer({ clusterContext }: Props) {
 
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+            {settingsOpen && (
+              <CopilotSettingsPanel
+                settings={aiSettings}
+                providers={providers.data ?? []}
+                selectedModel={selectedModel}
+                onChange={updateAiSettings}
+              />
+            )}
+
             <section className="rounded-control border border-border-default bg-elevated p-3">
               <div className="flex items-start gap-2">
                 <ClipboardList className="mt-0.5 size-4 shrink-0 text-accent-primary" aria-hidden="true" />
@@ -317,6 +397,125 @@ export function CopilotDrawer({ clusterContext }: Props) {
         </div>
       </DrawerPanel>
     </>
+  );
+}
+
+function CopilotSettingsPanel({
+  settings,
+  providers,
+  selectedModel,
+  onChange,
+}: {
+  settings: AiAssistantSettings;
+  providers: Array<{
+    id: AiProviderId;
+    label: string;
+    available: boolean;
+    models: string[];
+    default_model: string;
+  }>;
+  selectedModel: string;
+  onChange: (patch: Partial<AiAssistantSettings>) => void;
+}) {
+  const selectedProvider = providers.find((provider) => provider.id === settings.provider);
+  const modelOptions = selectedProvider?.models.length
+    ? selectedProvider.models
+    : [selectedModel || settings.model || ""];
+
+  return (
+    <section
+      className="space-y-3 rounded-control border border-border-default bg-elevated p-3"
+      aria-label="Copilot settings"
+    >
+      <div>
+        <h2 className="text-[13px] font-semibold text-text-primary">Copilot settings</h2>
+        <p className="mt-1 text-[11px] leading-4 text-text-secondary">
+          Natural-language understanding uses your configured local assistant and only returns a read-only route plan.
+        </p>
+      </div>
+
+      <label className="flex items-start gap-2 rounded-control border border-border-subtle bg-surface px-3 py-2 text-[12px] text-text-primary">
+        <input
+          type="checkbox"
+          checked={settings.copilotModelIntent}
+          onChange={(event) => onChange({ copilotModelIntent: event.target.checked })}
+          className="mt-0.5 size-4 accent-primary"
+        />
+        <span>
+          <span className="block font-medium">Use model to understand requests</span>
+          <span className="mt-0.5 block text-[11px] leading-4 text-text-secondary">
+            Falls back locally only when the provider is unavailable or returns invalid JSON.
+          </span>
+        </span>
+      </label>
+
+      <div className="grid gap-3">
+        <label className="block" htmlFor="copilot-provider">
+          <span className="mb-1.5 block text-[10px] uppercase tracking-wide text-text-muted">
+            Provider
+          </span>
+          <select
+            id="copilot-provider"
+            value={settings.provider}
+            onChange={(event) =>
+              onChange({ provider: event.target.value === "claude" ? "claude" : "codex" })
+            }
+            className="h-9 w-full rounded-control border border-border-default bg-surface px-3 text-[12px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
+          >
+            <option value="codex">Codex</option>
+            <option value="claude">Claude Code</option>
+          </select>
+        </label>
+
+        <div>
+          <label
+            className="mb-1.5 block text-[10px] uppercase tracking-wide text-text-muted"
+            htmlFor="copilot-model"
+          >
+            Model
+          </label>
+          <select
+            id="copilot-model"
+            value={selectedModel}
+            disabled={!modelOptions[0]}
+            onChange={(event) => onChange({ model: event.target.value })}
+            className="h-9 w-full rounded-control border border-border-default bg-surface px-3 text-[12px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {modelOptions.map((model) => (
+              <option key={model || "none"} value={model}>
+                {model || "No models detected"}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block text-[11px] text-text-muted">
+            {selectedProvider?.available ? "Provider available." : "Provider not detected."}
+          </span>
+        </div>
+
+        <label className="block" htmlFor="copilot-instructions">
+          <span className="mb-1.5 block text-[10px] uppercase tracking-wide text-text-muted">
+            Instructions
+          </span>
+          <textarea
+            id="copilot-instructions"
+            value={settings.copilotInstructions}
+            onChange={(event) => onChange({ copilotInstructions: event.target.value })}
+            rows={4}
+            className="w-full resize-none rounded-control border border-border-default bg-surface px-3 py-2 text-[12px] leading-5 text-text-primary outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-primary/45"
+          />
+        </label>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => onChange({ copilotInstructions: DEFAULT_COPILOT_INSTRUCTIONS })}
+          className="justify-self-start"
+        >
+          Reset instructions
+        </Button>
+      </div>
+    </section>
   );
 }
 
