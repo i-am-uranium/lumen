@@ -51,6 +51,12 @@ vi.mock("@/lib/k8s", async () => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  window.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+  HTMLElement.prototype.scrollTo = vi.fn();
   window.localStorage.clear();
   useCopilotUi.getState().reset();
   vi.mocked(k8s.listWorkloads).mockImplementation(async (_namespace, kind) =>
@@ -114,12 +120,17 @@ describe("CopilotDrawer", () => {
   it("persists a latest logs investigation and renders a navigation CTA", async () => {
     renderDrawer();
 
+    const composer = screen.getByRole("textbox", { name: /ask copilot/i });
     await userEvent.type(
-      screen.getByRole("textbox", { name: /ask copilot/i }),
+      composer,
       "show latest logs from customer service",
     );
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
 
+    expect(composer).toHaveValue("");
+    expect(screen.getByText("You")).toBeInTheDocument();
+    expect(screen.getByText("show latest logs from customer service")).toBeInTheDocument();
+    expect(await screen.findByText("Copilot")).toBeInTheDocument();
     const cta = await screen.findByRole("link", { name: /open logs/i });
     expect(cta).toHaveAttribute(
       "href",
@@ -144,7 +155,7 @@ describe("CopilotDrawer", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
 
-    expect(await screen.findByText("Found deployment/customer-service")).toBeInTheDocument();
+    expect(await screen.findByText(/Found deployment\/customer-service/)).toBeInTheDocument();
     expect(screen.getAllByText("deployment/checkout/customer-service").length).toBeGreaterThan(0);
     expect(screen.getByText("BackOff")).toBeInTheDocument();
     expect(screen.getByText("customer-service-7f9d: 4")).toBeInTheDocument();
@@ -166,7 +177,7 @@ describe("CopilotDrawer", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
 
-    expect(await screen.findByText("Choose a matching resource")).toBeInTheDocument();
+    expect(await screen.findByText(/Choose a matching resource/)).toBeInTheDocument();
     expect(screen.getByText("deployment/checkout/customer-service (100)")).toBeInTheDocument();
     expect(screen.getByText("deployment/payments/customer-service (100)")).toBeInTheDocument();
   });

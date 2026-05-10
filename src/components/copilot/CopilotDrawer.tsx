@@ -1,8 +1,17 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  AssistantRuntimeProvider,
+  ComposerPrimitive,
+  MessagePrimitive,
+  ThreadPrimitive,
+  useLocalRuntime,
+  useMessage,
+  type ChatModelAdapter,
+  type ThreadMessage,
+} from "@assistant-ui/react";
+import {
   Bot,
-  ClipboardList,
   LockKeyhole,
   Plus,
   SendHorizontal,
@@ -25,7 +34,6 @@ import {
   DrawerPanel,
 } from "@/components/lumen/drawer";
 import {
-  buildCopilotResponse,
   buildNativeCopilotResponse,
   type CopilotResponse,
   type NativeCopilotResponse,
@@ -37,7 +45,6 @@ import {
 import { classifyCopilotIntentWithModel } from "@/lib/copilotLlmIntent";
 import {
   createSessionId,
-  listAiSessions,
   saveAiSession,
   type AiAssistantSession,
 } from "@/lib/aiSessions";
@@ -52,15 +59,11 @@ type Props = {
 export function CopilotDrawer({ clusterContext }: Props) {
   const location = useLocation();
   const isOpen = useCopilotUi((s) => s.isOpen);
-  const activeSessionId = useCopilotUi((s) => s.activeSessionId);
   const draft = useCopilotUi((s) => s.draft);
   const closeDrawer = useCopilotUi((s) => s.closeDrawer);
   const setDraft = useCopilotUi((s) => s.setDraft);
   const setActiveSession = useCopilotUi((s) => s.setActiveSession);
   const startNewInvestigation = useCopilotUi((s) => s.startNewInvestigation);
-  const [sessionVersion, setSessionVersion] = useState(0);
-  const [liveResponse, setLiveResponse] = useState<NativeCopilotResponse | null>(null);
-  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aiSettings, setAiSettings] = useState<AiAssistantSettings>(() =>
@@ -77,28 +80,86 @@ export function CopilotDrawer({ clusterContext }: Props) {
     () => buildCopilotRouteContext(location.pathname, location.search),
     [location.pathname, location.search],
   );
-  const activeSession = useMemo(
-    () => listAiSessions().find((session) => session.id === activeSessionId) ?? null,
-    [activeSessionId, sessionVersion],
-  );
-  const sessionResponse = useMemo(
-    () =>
-      activeSession
-        ? buildCopilotResponse({
-            prompt: activeSession.question || activeSession.prompt,
-            clusterContext,
-            route,
-          })
-        : null,
-    [activeSession, clusterContext, route],
-  );
-  const response = liveResponse ?? sessionResponse;
-  const nativeResponse: NativeCopilotResponse | null =
-    response && "mode" in response ? (response as NativeCopilotResponse) : null;
   const selectedProvider = providers.data?.find((provider) => provider.id === aiSettings.provider);
   const selectedModel = selectedProvider?.models.includes(aiSettings.model)
     ? aiSettings.model
     : (selectedProvider?.default_model ?? selectedProvider?.models[0] ?? aiSettings.model);
+
+  const chatModel = useMemo<ChatModelAdapter>(
+    () => ({
+      run: async ({ messages }) => {
+        const question = getLatestUserText(messages).trim();
+        if (!question) {
+          return {
+            content: [{ type: "text", text: "Ask me what to inspect next." }],
+            status: { type: "complete", reason: "stop" },
+          };
+        }
+
+        setError(null);
+        try {
+          const nextResponse = await buildNativeCopilotResponse(
+            {
+              prompt: question,
+              clusterContext,
+              route,
+            },
+            {
+              intent:
+                aiSettings.copilotModelIntent && selectedProvider?.available
+                  ? (request) =>
+                      classifyCopilotIntentWithModel({
+                        ...request,
+                        provider: aiSettings.provider,
+                        model: selectedModel,
+                        instructions: aiSettings.copilotInstructions,
+                      })
+                  : undefined,
+            },
+          );
+          const session = createCopilotSession({
+            clusterContext,
+            question,
+            route,
+            response: nextResponse,
+          });
+          saveAiSession(session);
+          setActiveSession(session.id);
+
+          return {
+            content: [{ type: "text", text: renderAssistantText(nextResponse) }],
+            status: { type: "complete", reason: "stop" },
+            metadata: {
+              custom: {
+                copilotResponse: nextResponse,
+              },
+            },
+          };
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : String(caught);
+          setError(message);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `I could not finish that request.\n\n${message}`,
+              },
+            ],
+            status: { type: "incomplete", reason: "error", error: message },
+          };
+        }
+      },
+    }),
+    [aiSettings, clusterContext, route, selectedModel, selectedProvider, setActiveSession],
+  );
+  const runtime = useLocalRuntime(chatModel);
+
+  useEffect(() => {
+    if (!draft.trim()) return;
+    if (runtime.thread.composer.getState().text) return;
+    runtime.thread.composer.setText(draft);
+    setDraft("");
+  }, [draft, runtime, setDraft]);
 
   useEffect(() => {
     if (!selectedProvider) return;
@@ -112,49 +173,8 @@ export function CopilotDrawer({ clusterContext }: Props) {
 
   if (!isOpen) return null;
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const question = draft.trim();
-    if (!question || running) return;
-
-    setRunning(true);
-    setError(null);
-    try {
-      const nextResponse = await buildNativeCopilotResponse({
-        prompt: question,
-        clusterContext,
-        route,
-      }, {
-        intent:
-          aiSettings.copilotModelIntent && selectedProvider?.available
-            ? (request) =>
-                classifyCopilotIntentWithModel({
-                  ...request,
-                  provider: aiSettings.provider,
-                  model: selectedModel,
-                  instructions: aiSettings.copilotInstructions,
-                })
-            : undefined,
-      });
-      const session = createCopilotSession({
-        clusterContext,
-        question,
-        route,
-        response: nextResponse,
-      });
-      saveAiSession(session);
-      setLiveResponse(nextResponse);
-      setActiveSession(session.id);
-      setSessionVersion((value) => value + 1);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setRunning(false);
-    }
-  }
-
   function newInvestigation() {
-    setLiveResponse(null);
+    runtime.thread.reset();
     setError(null);
     startNewInvestigation();
   }
@@ -166,8 +186,6 @@ export function CopilotDrawer({ clusterContext }: Props) {
       return next;
     });
   }
-
-  const title = response?.title ?? activeSession?.title ?? "Ask about this cluster";
 
   return (
     <>
@@ -227,176 +245,245 @@ export function CopilotDrawer({ clusterContext }: Props) {
           </div>
         </DrawerHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
-            {settingsOpen && (
-              <CopilotSettingsPanel
-                settings={aiSettings}
-                providers={providers.data ?? []}
-                selectedModel={selectedModel}
-                onChange={updateAiSettings}
-              />
-            )}
-
-            <section className="rounded-control border border-border-default bg-elevated p-3">
-              <div className="flex items-start gap-2">
-                <ClipboardList className="mt-0.5 size-4 shrink-0 text-accent-primary" aria-hidden="true" />
-                <div className="min-w-0">
-                  <h2 className="text-[13px] font-semibold text-text-primary">{title}</h2>
-                  <p className="mt-1 text-[12px] leading-5 text-text-secondary">
-                    {response?.summary ??
-                      "Ask for logs, events, rollout context, incident updates, or where to continue a task. Copilot will keep navigation explicit and avoid mutating cluster state."}
-                  </p>
+        <AssistantRuntimeProvider runtime={runtime}>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {settingsOpen && (
+                <div className="border-b border-border-default px-4 py-4">
+                  <CopilotSettingsPanel
+                    settings={aiSettings}
+                    providers={providers.data ?? []}
+                    selectedModel={selectedModel}
+                    onChange={updateAiSettings}
+                  />
                 </div>
-              </div>
-            </section>
+              )}
+              <CopilotThread onNavigate={closeDrawer} />
+            </div>
 
-            {response && (
-              <section className="space-y-3" aria-label="Copilot response">
-                {nativeResponse?.target && (
-                  <div className="space-y-2">
-                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-                      target
-                    </h3>
-                    <div className="rounded-control border border-border-default bg-elevated px-3 py-2">
-                      <div className="text-[12px] font-medium text-text-primary">
-                        {nativeResponse.target.displayName}
-                      </div>
-                      <div className="mt-1 text-[11px] text-text-muted">
-                        {nativeResponse.target.source} / score {nativeResponse.target.score}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {nativeResponse?.candidates && nativeResponse.candidates.length > 0 && (
-                  <div className="space-y-2">
-                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-                      candidates
-                    </h3>
-                    <div className="space-y-2">
-                      {nativeResponse.candidates.map((candidate) => (
-                        <div
-                          key={candidate.id}
-                          className="rounded-control border border-border-default bg-elevated px-3 py-2 text-[12px] text-text-primary"
-                        >
-                          {candidate.displayName} ({candidate.score})
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {response.ctas.length > 0 && (
-                  <div className="space-y-2">
-                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-                      next step
-                    </h3>
-                    {response.ctas.map((cta) => (
-                      <CopilotCtaCard key={cta.id} cta={cta} onNavigate={closeDrawer} />
-                    ))}
-                  </div>
-                )}
-
-                {response.details.length > 0 && nativeResponse?.mode !== "ambiguous" && (
-                  <div className="space-y-2">
-                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-                      notes
-                    </h3>
-                    <ul className="space-y-1.5 text-[12px] leading-5 text-text-secondary">
-                      {response.details.map((detail) => (
-                        <li
-                          key={detail}
-                          className="rounded-control border border-border-default bg-elevated px-3 py-2"
-                        >
-                          {detail}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {nativeResponse?.evidence && (
-                  <div className="space-y-2">
-                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-                      evidence
-                    </h3>
-                    <div className="space-y-2">
-                      {[
-                        ...nativeResponse.evidence.facts,
-                        ...nativeResponse.evidence.warnings,
-                      ].map((fact) => (
-                        <div
-                          key={fact.id}
-                          className="rounded-control border border-border-default bg-elevated px-3 py-2"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[12px] font-medium text-text-primary">
-                              {fact.label}
-                            </span>
-                            <span className="text-right text-[12px] text-text-secondary">
-                              {fact.value}
-                            </span>
-                          </div>
-                          {fact.detail && (
-                            <p className="mt-1 text-[11px] leading-4 text-text-muted">
-                              {fact.detail}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {response.commands.length > 0 && (
-                  <div className="space-y-2">
-                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-                      safe checks
-                    </h3>
-                    <div className="space-y-2">
-                      {response.commands.map((command) => (
-                        <code
-                          key={command}
-                          className={cn(
-                            "block overflow-x-auto rounded-control border border-border-default bg-[var(--terminal-bg)] px-3 py-2",
-                            "font-mono text-[11px] leading-5 text-[var(--terminal-fg)]",
-                          )}
-                        >
-                          {command}
-                        </code>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </section>
-            )}
-          </div>
-
-          <form onSubmit={submit} className="shrink-0 border-t border-border-default bg-shell p-3">
-            <label className="block text-[11px] font-medium uppercase tracking-wide text-text-muted">
-              Ask Copilot
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
+            <ComposerPrimitive.Root className="shrink-0 border-t border-border-default bg-shell p-3">
+              <label
+                className="block text-[11px] font-medium uppercase tracking-wide text-text-muted"
+                htmlFor="copilot-composer"
+              >
+                Ask Copilot
+              </label>
+              <ComposerPrimitive.Input
+                id="copilot-composer"
+                aria-label="Ask Copilot"
                 rows={3}
-                className="mt-2 w-full resize-none rounded-control border border-border-default bg-elevated px-3 py-2 text-[13px] leading-5 text-text-primary outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-primary/45"
+                submitMode="enter"
+                className="mt-2 max-h-36 min-h-20 w-full resize-none rounded-control border border-border-default bg-elevated px-3 py-2 text-[13px] leading-5 text-text-primary outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-primary/45"
                 placeholder="show latest logs from customer service"
               />
-            </label>
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <p className={cn("text-[11px]", error ? "text-danger" : "text-text-muted")}>
-                {error ?? "CTAs navigate; actions stay on their owning pages."}
-              </p>
-              <Button type="submit" size="sm" disabled={!draft.trim() || running} aria-label="send">
-                <SendHorizontal className="size-3.5" />
-                {running ? "Thinking" : "Send"}
-              </Button>
-            </div>
-          </form>
-        </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className={cn("text-[11px]", error ? "text-danger" : "text-text-muted")}>
+                  {error ?? "CTAs navigate; actions stay on their owning pages."}
+                </p>
+                <ComposerPrimitive.Send asChild>
+                  <Button type="submit" size="sm" aria-label="send">
+                    <SendHorizontal className="size-3.5" />
+                    Send
+                  </Button>
+                </ComposerPrimitive.Send>
+              </div>
+            </ComposerPrimitive.Root>
+          </div>
+        </AssistantRuntimeProvider>
       </DrawerPanel>
     </>
+  );
+}
+
+function CopilotThread({ onNavigate }: { onNavigate: () => void }) {
+  return (
+    <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
+      <ThreadPrimitive.Viewport className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+        <ThreadPrimitive.Empty>
+          <div className="rounded-control border border-border-default bg-elevated p-3">
+            <h2 className="text-[13px] font-semibold text-text-primary">
+              Ask about this cluster
+            </h2>
+            <p className="mt-1 text-[12px] leading-5 text-text-secondary">
+              Ask for logs, events, rollout context, incident updates, or where to continue a task. Copilot keeps navigation explicit and avoids mutating cluster state.
+            </p>
+          </div>
+        </ThreadPrimitive.Empty>
+        <ThreadPrimitive.Messages
+          components={{
+            Message: () => <CopilotMessage onNavigate={onNavigate} />,
+          }}
+        />
+      </ThreadPrimitive.Viewport>
+    </ThreadPrimitive.Root>
+  );
+}
+
+function CopilotMessage({ onNavigate }: { onNavigate: () => void }) {
+  const role = useMessage((message) => message.role);
+  const text = useMessage((message) =>
+    message.content
+      .filter((part) => part.type === "text")
+      .map((part) => ("text" in part ? part.text : ""))
+      .join("\n\n"),
+  );
+  const isRunning = useMessage((message) => message.status?.type === "running");
+  const response = useMessage(
+    (message) =>
+      (message.metadata?.custom as { copilotResponse?: NativeCopilotResponse } | undefined)
+        ?.copilotResponse,
+  );
+  const isUser = role === "user";
+
+  return (
+    <MessagePrimitive.Root
+      className={cn("flex w-full flex-col gap-1", isUser ? "items-end" : "items-start")}
+    >
+      <div className="text-[10px] font-medium uppercase tracking-wide text-text-muted">
+        {isUser ? "You" : "Copilot"}
+      </div>
+      <div
+        className={cn(
+          "max-w-[92%] whitespace-pre-wrap rounded-control border px-3 py-2 text-[12px] leading-5 shadow-sm",
+          isUser
+            ? "border-primary/35 bg-primary/15 text-text-primary"
+            : "border-border-default bg-elevated text-text-secondary",
+        )}
+      >
+        {text || (isRunning ? "Thinking..." : "")}
+      </div>
+      {!isUser && response && (
+        <div className="w-full space-y-3 pt-1">
+          <CopilotResponseDetails response={response} onNavigate={onNavigate} />
+        </div>
+      )}
+    </MessagePrimitive.Root>
+  );
+}
+
+function CopilotResponseDetails({
+  response,
+  onNavigate,
+}: {
+  response: NativeCopilotResponse;
+  onNavigate: () => void;
+}) {
+  return (
+    <section className="space-y-3" aria-label="Copilot response details">
+      {response.target && (
+        <div className="space-y-2">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            target
+          </h3>
+          <div className="rounded-control border border-border-default bg-elevated px-3 py-2">
+            <div className="text-[12px] font-medium text-text-primary">
+              {response.target.displayName}
+            </div>
+            <div className="mt-1 text-[11px] text-text-muted">
+              {response.target.source} / score {response.target.score}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {response.candidates && response.candidates.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            candidates
+          </h3>
+          <div className="space-y-2">
+            {response.candidates.map((candidate) => (
+              <div
+                key={candidate.id}
+                className="rounded-control border border-border-default bg-elevated px-3 py-2 text-[12px] text-text-primary"
+              >
+                {candidate.displayName} ({candidate.score})
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {response.ctas.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            next step
+          </h3>
+          {response.ctas.map((cta) => (
+            <CopilotCtaCard key={cta.id} cta={cta} onNavigate={onNavigate} />
+          ))}
+        </div>
+      )}
+
+      {response.details.length > 0 && response.mode !== "ambiguous" && (
+        <div className="space-y-2">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            notes
+          </h3>
+          <ul className="space-y-1.5 text-[12px] leading-5 text-text-secondary">
+            {response.details.map((detail) => (
+              <li
+                key={detail}
+                className="rounded-control border border-border-default bg-elevated px-3 py-2"
+              >
+                {detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {response.evidence && (
+        <div className="space-y-2">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            evidence
+          </h3>
+          <div className="space-y-2">
+            {[...response.evidence.facts, ...response.evidence.warnings].map((fact) => (
+              <div
+                key={fact.id}
+                className="rounded-control border border-border-default bg-elevated px-3 py-2"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[12px] font-medium text-text-primary">
+                    {fact.label}
+                  </span>
+                  <span className="text-right text-[12px] text-text-secondary">
+                    {fact.value}
+                  </span>
+                </div>
+                {fact.detail && (
+                  <p className="mt-1 text-[11px] leading-4 text-text-muted">
+                    {fact.detail}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {response.commands.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            safe checks
+          </h3>
+          <div className="space-y-2">
+            {response.commands.map((command) => (
+              <code
+                key={command}
+                className={cn(
+                  "block overflow-x-auto rounded-control border border-border-default bg-[var(--terminal-bg)] px-3 py-2",
+                  "font-mono text-[11px] leading-5 text-[var(--terminal-fg)]",
+                )}
+              >
+                {command}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -517,6 +604,19 @@ function CopilotSettingsPanel({
       </div>
     </section>
   );
+}
+
+function getLatestUserText(messages: readonly ThreadMessage[]): string {
+  const message = [...messages].reverse().find((item) => item.role === "user");
+  if (!message) return "";
+  return message.content
+    .filter((part) => part.type === "text")
+    .map((part) => ("text" in part ? part.text : ""))
+    .join("\n\n");
+}
+
+function renderAssistantText(response: NativeCopilotResponse): string {
+  return `${response.title}\n\n${response.summary}`;
 }
 
 function createCopilotSession({
