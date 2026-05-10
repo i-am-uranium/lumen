@@ -142,6 +142,35 @@ describe("buildNativeCopilotResponse", () => {
     });
   });
 
+  it("resolves polite latest-log requests without treating filler words as the target", async () => {
+    const response = await buildNativeCopilotResponse(
+      {
+        prompt: "fetch me the latest logs of oaut-service",
+        clusterContext: "ms-aks-stage",
+        route,
+      },
+      {
+        resolver: resolverClient([workload("oaut-service", "identity")]),
+        evidence: {
+          listPodsFor: vi.fn(async () => [workload("oaut-service-7f9d", "identity", "pod")]),
+          listEventsFor: vi.fn(async () => []),
+        },
+      },
+    );
+
+    expect(response).toMatchObject({
+      mode: "resolved",
+      title: "Found deployment/oaut-service",
+      target: {
+        namespace: "identity",
+        name: "oaut-service",
+      },
+    });
+    expect(response.ctas[0]).toMatchObject({
+      to: "/cluster/ms-aks-stage/logs?ns=identity&kind=deployment&name=oaut-service&grep=oaut-service",
+    });
+  });
+
   it("returns evidence-backed investigation responses", async () => {
     const response = await buildNativeCopilotResponse(
       {
