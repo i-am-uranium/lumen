@@ -204,6 +204,16 @@ describe("CopilotDrawer", () => {
     });
   });
 
+  it("clears a persisted draft without pre-filling the assistant-ui composer", async () => {
+    useCopilotUi.getState().setDraft("fetch stale saved logs");
+
+    renderDrawer();
+
+    expect(screen.getByRole("complementary", { name: /operator copilot/i })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /ask copilot/i })).toHaveValue("");
+    await waitFor(() => expect(useCopilotUi.getState().draft).toBe(""));
+  });
+
   it("routes sync intent to ArgoCD instead of running a mutation", async () => {
     renderDrawer("/cluster/ms-aks-stage/argocd");
 

@@ -56,6 +56,14 @@ type Props = {
   clusterContext: string;
 };
 
+type CopilotProviderOption = {
+  id: AiProviderId;
+  label: string;
+  available: boolean;
+  models: string[];
+  default_model: string;
+};
+
 export function CopilotDrawer({ clusterContext }: Props) {
   const location = useLocation();
   const isOpen = useCopilotUi((s) => s.isOpen);
@@ -66,6 +74,7 @@ export function CopilotDrawer({ clusterContext }: Props) {
   const startNewInvestigation = useCopilotUi((s) => s.startNewInvestigation);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [threadKey, setThreadKey] = useState(0);
   const [aiSettings, setAiSettings] = useState<AiAssistantSettings>(() =>
     readAiAssistantSettings(),
   );
@@ -152,14 +161,10 @@ export function CopilotDrawer({ clusterContext }: Props) {
     }),
     [aiSettings, clusterContext, route, selectedModel, selectedProvider, setActiveSession],
   );
-  const runtime = useLocalRuntime(chatModel);
 
   useEffect(() => {
-    if (!draft.trim()) return;
-    if (runtime.thread.composer.getState().text) return;
-    runtime.thread.composer.setText(draft);
-    setDraft("");
-  }, [draft, runtime, setDraft]);
+    if (draft) setDraft("");
+  }, [draft, setDraft]);
 
   useEffect(() => {
     if (!selectedProvider) return;
@@ -174,7 +179,7 @@ export function CopilotDrawer({ clusterContext }: Props) {
   if (!isOpen) return null;
 
   function newInvestigation() {
-    runtime.thread.reset();
+    setThreadKey((current) => current + 1);
     setError(null);
     startNewInvestigation();
   }
@@ -245,53 +250,89 @@ export function CopilotDrawer({ clusterContext }: Props) {
           </div>
         </DrawerHeader>
 
-        <AssistantRuntimeProvider runtime={runtime}>
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {settingsOpen && (
-                <div className="border-b border-border-default px-4 py-4">
-                  <CopilotSettingsPanel
-                    settings={aiSettings}
-                    providers={providers.data ?? []}
-                    selectedModel={selectedModel}
-                    onChange={updateAiSettings}
-                  />
-                </div>
-              )}
-              <CopilotThread onNavigate={closeDrawer} />
-            </div>
-
-            <ComposerPrimitive.Root className="shrink-0 border-t border-border-default bg-shell p-3">
-              <label
-                className="block text-[11px] font-medium uppercase tracking-wide text-text-muted"
-                htmlFor="copilot-composer"
-              >
-                Ask Copilot
-              </label>
-              <ComposerPrimitive.Input
-                id="copilot-composer"
-                aria-label="Ask Copilot"
-                rows={3}
-                submitMode="enter"
-                className="mt-2 max-h-36 min-h-20 w-full resize-none rounded-control border border-border-default bg-elevated px-3 py-2 text-[13px] leading-5 text-text-primary outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-primary/45"
-                placeholder="show latest logs from customer service"
-              />
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <p className={cn("text-[11px]", error ? "text-danger" : "text-text-muted")}>
-                  {error ?? "CTAs navigate; actions stay on their owning pages."}
-                </p>
-                <ComposerPrimitive.Send asChild>
-                  <Button type="submit" size="sm" aria-label="send">
-                    <SendHorizontal className="size-3.5" />
-                    Send
-                  </Button>
-                </ComposerPrimitive.Send>
-              </div>
-            </ComposerPrimitive.Root>
-          </div>
-        </AssistantRuntimeProvider>
+        <CopilotRuntimePanel
+          key={threadKey}
+          chatModel={chatModel}
+          settingsOpen={settingsOpen}
+          settings={aiSettings}
+          providers={providers.data ?? []}
+          selectedModel={selectedModel}
+          onSettingsChange={updateAiSettings}
+          onNavigate={closeDrawer}
+          error={error}
+        />
       </DrawerPanel>
     </>
+  );
+}
+
+function CopilotRuntimePanel({
+  chatModel,
+  settingsOpen,
+  settings,
+  providers,
+  selectedModel,
+  onSettingsChange,
+  onNavigate,
+  error,
+}: {
+  chatModel: ChatModelAdapter;
+  settingsOpen: boolean;
+  settings: AiAssistantSettings;
+  providers: CopilotProviderOption[];
+  selectedModel: string;
+  onSettingsChange: (patch: Partial<AiAssistantSettings>) => void;
+  onNavigate: () => void;
+  error: string | null;
+}) {
+  const runtime = useLocalRuntime(chatModel);
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {settingsOpen && (
+            <div className="border-b border-border-default px-4 py-4">
+              <CopilotSettingsPanel
+                settings={settings}
+                providers={providers}
+                selectedModel={selectedModel}
+                onChange={onSettingsChange}
+              />
+            </div>
+          )}
+          <CopilotThread onNavigate={onNavigate} />
+        </div>
+
+        <ComposerPrimitive.Root className="shrink-0 border-t border-border-default bg-shell p-3">
+          <label
+            className="block text-[11px] font-medium uppercase tracking-wide text-text-muted"
+            htmlFor="copilot-composer"
+          >
+            Ask Copilot
+          </label>
+          <ComposerPrimitive.Input
+            id="copilot-composer"
+            aria-label="Ask Copilot"
+            rows={3}
+            submitMode="enter"
+            className="mt-2 max-h-36 min-h-20 w-full resize-none rounded-control border border-border-default bg-elevated px-3 py-2 text-[13px] leading-5 text-text-primary outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-primary/45"
+            placeholder="show latest logs from customer service"
+          />
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p className={cn("text-[11px]", error ? "text-danger" : "text-text-muted")}>
+              {error ?? "CTAs navigate; actions stay on their owning pages."}
+            </p>
+            <ComposerPrimitive.Send asChild>
+              <Button type="submit" size="sm" aria-label="send">
+                <SendHorizontal className="size-3.5" />
+                Send
+              </Button>
+            </ComposerPrimitive.Send>
+          </div>
+        </ComposerPrimitive.Root>
+      </div>
+    </AssistantRuntimeProvider>
   );
 }
 
@@ -494,13 +535,7 @@ function CopilotSettingsPanel({
   onChange,
 }: {
   settings: AiAssistantSettings;
-  providers: Array<{
-    id: AiProviderId;
-    label: string;
-    available: boolean;
-    models: string[];
-    default_model: string;
-  }>;
+  providers: CopilotProviderOption[];
   selectedModel: string;
   onChange: (patch: Partial<AiAssistantSettings>) => void;
 }) {
