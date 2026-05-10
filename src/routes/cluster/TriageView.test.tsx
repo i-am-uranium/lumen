@@ -119,6 +119,12 @@ describe("TriageView", () => {
       "href",
       "/cluster/prod/logs?ns=checkout&kind=pod&name=api-7b9",
     );
+    expect(screen.getByRole("link", { name: /events/i })).toHaveAttribute(
+      "href",
+      "/cluster/prod/events?ns=checkout",
+    );
+    expect(screen.queryByRole("button", { name: /ask AI/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^AI$/i })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /open pod\/api-7b9/i }));
 
