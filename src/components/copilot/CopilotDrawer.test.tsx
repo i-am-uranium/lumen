@@ -45,6 +45,7 @@ vi.mock("@/lib/k8s", async () => {
       listWorkloads: vi.fn(),
       listPodsFor: vi.fn(),
       listEventsFor: vi.fn(),
+      fetchLatestLogs: vi.fn(),
     },
   };
 });
@@ -80,6 +81,27 @@ beforeEach(() => {
       count: 1,
     },
   ]);
+  vi.mocked(k8s.fetchLatestLogs).mockResolvedValue({
+    namespace: "checkout",
+    kind: "deployment",
+    name: "customer-service",
+    pods: ["customer-service-7f9d"],
+    lines: [
+      {
+        pod: "customer-service-7f9d",
+        container: "api",
+        text: "GET /health 500 upstream timeout",
+      },
+      {
+        pod: "customer-service-7f9d",
+        container: "api",
+        text: "retrying database connection",
+      },
+    ],
+    tailLines: 120,
+    sinceSeconds: 1800,
+    fetchedAt: "2026-05-10T00:00:00.000Z",
+  });
 });
 
 function workload(
@@ -159,6 +181,34 @@ describe("CopilotDrawer", () => {
     expect(screen.getAllByText("deployment/checkout/customer-service").length).toBeGreaterThan(0);
     expect(screen.getByText("BackOff")).toBeInTheDocument();
     expect(screen.getByText("customer-service-7f9d: 4")).toBeInTheDocument();
+  });
+
+  it("runs a latest logs action inside the chat for a resolved logs request", async () => {
+    renderDrawer();
+
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /ask copilot/i }),
+      "show latest logs from customer service",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await userEvent.click(await screen.findByRole("button", { name: /fetch latest logs/i }));
+
+    expect(k8s.fetchLatestLogs).toHaveBeenCalledWith({
+      context: "ms-aks-stage",
+      target: expect.objectContaining({
+        kind: "deployment",
+        namespace: "checkout",
+        name: "customer-service",
+      }),
+      tailLines: 120,
+      sinceSeconds: 1800,
+    });
+    expect(await screen.findByText("Latest logs")).toBeInTheDocument();
+    expect(screen.getByText(/checkout \/ deployment\/customer-service/)).toBeInTheDocument();
+    expect(screen.getAllByText(/customer-service-7f9d/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/GET \/health 500 upstream timeout/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open logs/i })).toBeInTheDocument();
   });
 
   it("renders ambiguous resource candidates instead of guessing", async () => {

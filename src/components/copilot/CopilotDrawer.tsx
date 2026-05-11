@@ -12,10 +12,12 @@ import {
 } from "@assistant-ui/react";
 import {
   Bot,
+  Loader2,
   LockKeyhole,
   Plus,
   SendHorizontal,
   Settings2,
+  Terminal,
   X,
 } from "lucide-react";
 import { useLocation } from "react-router-dom";
@@ -48,6 +50,7 @@ import {
   saveAiSession,
   type AiAssistantSession,
 } from "@/lib/aiSessions";
+import { k8s, type LatestLogsResult } from "@/lib/k8s";
 import { useCopilotUi } from "@/state/copilotUi";
 import { cn } from "@/lib/utils";
 import { CopilotCtaCard } from "./CopilotCtaCard";
@@ -252,6 +255,7 @@ export function CopilotDrawer({ clusterContext }: Props) {
 
         <CopilotRuntimePanel
           key={threadKey}
+          clusterContext={clusterContext}
           chatModel={chatModel}
           settingsOpen={settingsOpen}
           settings={aiSettings}
@@ -267,6 +271,7 @@ export function CopilotDrawer({ clusterContext }: Props) {
 }
 
 function CopilotRuntimePanel({
+  clusterContext,
   chatModel,
   settingsOpen,
   settings,
@@ -276,6 +281,7 @@ function CopilotRuntimePanel({
   onNavigate,
   error,
 }: {
+  clusterContext: string;
   chatModel: ChatModelAdapter;
   settingsOpen: boolean;
   settings: AiAssistantSettings;
@@ -301,7 +307,7 @@ function CopilotRuntimePanel({
               />
             </div>
           )}
-          <CopilotThread onNavigate={onNavigate} />
+          <CopilotThread clusterContext={clusterContext} onNavigate={onNavigate} />
         </div>
 
         <ComposerPrimitive.Root className="shrink-0 border-t border-border-default bg-shell p-3">
@@ -336,7 +342,13 @@ function CopilotRuntimePanel({
   );
 }
 
-function CopilotThread({ onNavigate }: { onNavigate: () => void }) {
+function CopilotThread({
+  clusterContext,
+  onNavigate,
+}: {
+  clusterContext: string;
+  onNavigate: () => void;
+}) {
   return (
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
       <ThreadPrimitive.Viewport className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
@@ -352,7 +364,9 @@ function CopilotThread({ onNavigate }: { onNavigate: () => void }) {
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages
           components={{
-            Message: () => <CopilotMessage onNavigate={onNavigate} />,
+            Message: () => (
+              <CopilotMessage clusterContext={clusterContext} onNavigate={onNavigate} />
+            ),
           }}
         />
       </ThreadPrimitive.Viewport>
@@ -360,7 +374,13 @@ function CopilotThread({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
-function CopilotMessage({ onNavigate }: { onNavigate: () => void }) {
+function CopilotMessage({
+  clusterContext,
+  onNavigate,
+}: {
+  clusterContext: string;
+  onNavigate: () => void;
+}) {
   const role = useMessage((message) => message.role);
   const text = useMessage((message) =>
     message.content
@@ -395,7 +415,11 @@ function CopilotMessage({ onNavigate }: { onNavigate: () => void }) {
       </div>
       {!isUser && response && (
         <div className="w-full space-y-3 pt-1">
-          <CopilotResponseDetails response={response} onNavigate={onNavigate} />
+          <CopilotResponseDetails
+            clusterContext={clusterContext}
+            response={response}
+            onNavigate={onNavigate}
+          />
         </div>
       )}
     </MessagePrimitive.Root>
@@ -403,12 +427,18 @@ function CopilotMessage({ onNavigate }: { onNavigate: () => void }) {
 }
 
 function CopilotResponseDetails({
+  clusterContext,
   response,
   onNavigate,
 }: {
+  clusterContext: string;
   response: NativeCopilotResponse;
   onNavigate: () => void;
 }) {
+  const canFetchLogs =
+    response.target?.source === "kubernetes" &&
+    response.ctas.some((cta) => cta.intent === "logs");
+
   return (
     <section className="space-y-3" aria-label="Copilot response details">
       {response.target && (
@@ -443,6 +473,10 @@ function CopilotResponseDetails({
             ))}
           </div>
         </div>
+      )}
+
+      {canFetchLogs && response.target && (
+        <CopilotInlineLogs clusterContext={clusterContext} response={response} />
       )}
 
       {response.ctas.length > 0 && (
@@ -526,6 +560,118 @@ function CopilotResponseDetails({
       )}
     </section>
   );
+}
+
+function CopilotInlineLogs({
+  clusterContext,
+  response,
+}: {
+  clusterContext: string;
+  response: NativeCopilotResponse;
+}) {
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [result, setResult] = useState<LatestLogsResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const target = response.target;
+  if (!target) return null;
+
+  async function fetchLogs() {
+    if (!target || status === "loading") return;
+    setStatus("loading");
+    setError(null);
+    try {
+      const next = await k8s.fetchLatestLogs({
+        context: clusterContext,
+        target,
+        tailLines: 120,
+        sinceSeconds: 1_800,
+      });
+      setResult(next);
+      setStatus("ready");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("error");
+    }
+  }
+
+  return (
+    <div className="space-y-2" aria-label="Executable read-only checks">
+      <h3 className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+        actions
+      </h3>
+      <div className="rounded-control border border-border-default bg-elevated p-3">
+        <div className="flex items-start gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-control border border-border-default bg-surface text-accent-primary">
+            <Terminal className="size-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium text-text-primary">Fetch latest logs</div>
+            <p className="mt-0.5 text-[11px] leading-4 text-text-secondary">
+              Runs a read-only log tail for {target.kind}/{target.namespace}/{target.name}.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={fetchLogs}
+            disabled={status === "loading"}
+            aria-label="Fetch latest logs"
+            className="shrink-0"
+          >
+            {status === "loading" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Terminal className="size-3.5" />
+            )}
+            {status === "loading" ? "Fetching" : "Run"}
+          </Button>
+        </div>
+
+        {status === "error" && (
+          <p className="mt-3 rounded-control border border-danger/35 bg-danger/10 px-3 py-2 text-[12px] leading-5 text-danger">
+            {error}
+          </p>
+        )}
+
+        {status === "ready" && result && (
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[12px] font-semibold text-text-primary">Latest logs</div>
+                <div className="mt-0.5 text-[11px] text-text-muted">
+                  {result.namespace} / {result.kind}/{result.name} · {result.pods.length}{" "}
+                  {result.pods.length === 1 ? "pod" : "pods"} · {result.lines.length}{" "}
+                  {result.lines.length === 1 ? "line" : "lines"} · last{" "}
+                  {formatSince(result.sinceSeconds)}
+                </div>
+              </div>
+            </div>
+            {result.lines.length === 0 ? (
+              <p className="rounded-control border border-border-default bg-surface px-3 py-2 text-[12px] text-text-secondary">
+                No log lines returned for this target in the selected window.
+              </p>
+            ) : (
+              <pre className="max-h-64 overflow-auto rounded-control border border-border-default bg-[var(--terminal-bg)] p-3 font-mono text-[11px] leading-5 text-[var(--terminal-fg)]">
+                {result.lines.map(formatLogLine).join("\n")}
+              </pre>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatLogLine(line: LatestLogsResult["lines"][number]): string {
+  const prefix = [line.pod, line.container].filter(Boolean).join(" ");
+  return prefix ? `${prefix} | ${line.text}` : line.text;
+}
+
+function formatSince(seconds: number): string {
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }
 
 function CopilotSettingsPanel({
