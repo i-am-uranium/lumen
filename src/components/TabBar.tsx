@@ -57,8 +57,10 @@ export function TabBar({ paneId }: { paneId: string }) {
   };
 
   const onClose = (id: string) => {
-    const nextId = useTabsStore.getState().closeTab(paneId, id);
-    if (nextId && nextId !== activeId) navigateToTab(nextId);
+    startTransition(() => {
+      const nextId = useTabsStore.getState().closeTab(paneId, id);
+      if (nextId && nextId !== activeId) navigateToTab(nextId);
+    });
   };
 
   const onMiddleClick = (id: string, e: React.MouseEvent) => {
@@ -123,6 +125,7 @@ export function TabBar({ paneId }: { paneId: string }) {
           {ordered.map((tab, index) => {
             const active = tab.id === activeId;
             const dragTarget = dragOverIndex === index && dragFromIndex !== null;
+            const onlyTab = ordered.length === 1;
             return (
               <div
                 key={tab.id}
@@ -174,7 +177,7 @@ export function TabBar({ paneId }: { paneId: string }) {
                   )
                 )}
                 <span className="truncate font-mono">{tab.title}</span>
-                {!tab.pinned && (
+                {!tab.pinned && !onlyTab && (
                   <button
                     type="button"
                     aria-label={`Close tab ${tab.title}`}
@@ -330,10 +333,18 @@ export function TabsSyncer({ paneId }: { paneId: string }) {
   const { pathname, search } = useLocation();
   const ensureSeeded = useTabsStore((s) => s.ensureSeeded);
   const syncActiveUrl = useTabsStore((s) => s.syncActiveUrl);
+  const lastSyncedRef = useRef<{ paneId: string; url: string } | null>(null);
 
   useEffect(() => {
     const url = pathname + search;
     ensureSeeded(paneId, url);
+    const prev = lastSyncedRef.current;
+    if (!prev || prev.paneId !== paneId) {
+      lastSyncedRef.current = { paneId, url };
+      return;
+    }
+    if (prev.url === url) return;
+    lastSyncedRef.current = { paneId, url };
     syncActiveUrl(paneId, url);
   }, [paneId, pathname, search, ensureSeeded, syncActiveUrl]);
 

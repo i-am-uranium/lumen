@@ -64,7 +64,13 @@ export function useK8sWatch<T>({
   useEffect(() => {
     if (!enabled) return;
     const streamId = nextId(command);
-    const ch = new Channel<WatchEvent<T>>();
+    let ch: Channel<WatchEvent<T>>;
+    try {
+      ch = new Channel<WatchEvent<T>>();
+    } catch (err) {
+      console.warn(`watch ${command} unavailable`, err);
+      return;
+    }
 
     let cancelled = false;
     // Coalesce bursts of Apply/Delete events into a single invalidation pass.

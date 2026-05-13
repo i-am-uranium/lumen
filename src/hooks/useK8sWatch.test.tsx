@@ -5,12 +5,18 @@ import { useK8sWatch } from "./useK8sWatch";
 
 // Hold the latest registered onmessage so tests can inject events.
 let lastChannelHandler: ((e: unknown) => void) | null = null;
+let shouldThrowChannel = false;
 
 vi.mock("@tauri-apps/api/core", () => {
   return {
     invoke: vi.fn(() => Promise.resolve()),
     Channel: class FakeChannel {
       _h: ((e: unknown) => void) | null = null;
+      constructor() {
+        if (shouldThrowChannel) {
+          throw new TypeError("Cannot read properties of undefined (reading 'transformCallback')");
+        }
+      }
       get onmessage() {
         return this._h ?? (() => {});
       }
@@ -36,6 +42,7 @@ describe("useK8sWatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     lastChannelHandler = null;
+    shouldThrowChannel = false;
   });
 
   it("invokes the watch command with the merged args + auto streamId on mount", () => {
@@ -129,6 +136,31 @@ describe("useK8sWatch", () => {
       lastChannelHandler!({ kind: "error", message: "stream hiccup" });
     });
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("does not crash the pane when the Tauri channel bridge is unavailable", () => {
+    shouldThrowChannel = true;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { wrapper } = wrap();
+      expect(() =>
+        renderHook(
+          () =>
+            useK8sWatch({
+              queryKeys: [["k8s", "nodes"]],
+              command: "watch_nodes",
+            }),
+          { wrapper },
+        ),
+      ).not.toThrow();
+      expect(invoke).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "watch watch_nodes unavailable",
+        expect.any(TypeError),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("calls stop_stream on unmount", () => {

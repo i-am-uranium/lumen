@@ -128,4 +128,54 @@ describe("multi-pane navigation isolation", () => {
       "/cluster/staging/workloads",
     ]);
   });
+
+  // Regression: PaneLocationBridge used to write MemoryRouter's
+  // initial-entries URL back to the store on mount, clobbering any
+  // concurrent store-side update (deep-link adoption, the +-button
+  // flow). The fix tracks the last-synced inner URL and skips the
+  // initial effect run when no real navigation has happened yet.
+  it("a setPaneUrl that fires right after mount is preserved (no clobber)", async () => {
+    // Mount with the persisted pane URL pointing at a workload route.
+    usePanesStore.setState({
+      panes: [{ id: "only", url: "/cluster/prod/workloads" }],
+      focusedId: "only",
+      sizes: [100],
+      orientation: "horizontal",
+    });
+    useTabsStore.getState().reset();
+    render(<SplitView />);
+    await screen.findAllByTestId("cluster-workspace");
+
+    // Simulate the +-button flow: chrome navigates the focused pane
+    // to the fleet URL. Pre-fix, PaneLocationBridge's inner→store
+    // effect would race this and rewrite `/cluster/prod/workloads`
+    // back into the store, snapping the pane (and the URL bar) back.
+    act(() => {
+      usePanesStore.getState().setPaneUrl("only", "/cluster");
+    });
+
+    expect(usePanesStore.getState().panes[0].url).toBe("/cluster");
+  });
+
+  it("clicking the pane tab + keeps the previous tab and stays on fleet", async () => {
+    usePanesStore.setState({
+      panes: [{ id: "only", url: "/cluster/prod/workloads" }],
+      focusedId: "only",
+      sizes: [100],
+      orientation: "horizontal",
+    });
+    useTabsStore.getState().reset();
+
+    render(<SplitView />);
+    await screen.findByTestId("cluster-workspace");
+    expect(await screen.findByText("prod · Workloads")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /new tab/i }));
+
+    expect(await screen.findByTestId("fleet")).toBeInTheDocument();
+    expect(usePanesStore.getState().panes[0].url).toBe("/cluster");
+    expect(useTabsStore.getState().byPane.only?.tabs).toHaveLength(2);
+    expect(screen.getByText("prod · Workloads")).toBeInTheDocument();
+    expect(screen.getByText("Fleet")).toBeInTheDocument();
+  });
 });

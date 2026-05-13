@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import {
   MemoryRouter,
   Navigate,
@@ -9,8 +9,10 @@ import {
 } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { PaneProvider } from "@/components/PaneContext";
+import { PaneErrorBoundary } from "@/components/PaneErrorBoundary";
 import { TabBar, TabsSyncer } from "@/components/TabBar";
 import { usePanesStore } from "@/state/panes";
+import { useTabsStore } from "@/state/tabs";
 
 // Lazy route components — same imports as App.tsx used pre-split,
 // duplicated here so PaneShell owns its own routes tree. Each pane
@@ -115,6 +117,31 @@ const HelmUpgradeWizard = lazy(() =>
   ),
 );
 
+/**
+ * Wraps the route tree in an error boundary so any uncaught render
+ * error (e.g. a transient Tauri API failure) blanks only the route
+ * area, not the whole app. The boundary's reset key is the inner
+ * pane URL — switching tabs or routes clears the error automatically.
+ */
+function PaneRouteSurface({ paneId }: { paneId: string }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const url = location.pathname + location.search;
+  return (
+    <PaneErrorBoundary
+      resetKey={url}
+      onReset={() => {
+        // Send the user back to fleet — both in this pane's router and
+        // its active tab — so they're never stuck on a crashing URL.
+        useTabsStore.getState().syncActiveUrl(paneId, "/cluster");
+        navigate("/cluster");
+      }}
+    >
+      <PaneRoutes />
+    </PaneErrorBoundary>
+  );
+}
+
 function PaneRoutes() {
   return (
     <Suspense
@@ -183,9 +210,21 @@ function PaneLocationBridge({ paneId }: { paneId: string }) {
     (s) => s.panes.find((p) => p.id === paneId)?.url ?? "/",
   );
 
-  // inner → store
   const innerUrl = location.pathname + location.search;
+  // Track the innerUrl value the last time we synced. Initial value is
+  // the mount-time inner location — so the very first effect run sees
+  // "innerUrl hasn't changed since seed" and skips writing to the
+  // store, which avoids clobbering any concurrent store-side update
+  // (deep-link adoption, chrome navigation, the +-button's openTab
+  // flow). This invariant survives StrictMode's double-invocation:
+  // the ref persists across the dev-time setup→cleanup→setup cycle,
+  // so the second effect run also short-circuits.
+  const lastSyncedInnerRef = useRef(innerUrl);
+
+  // inner → store
   useEffect(() => {
+    if (lastSyncedInnerRef.current === innerUrl) return;
+    lastSyncedInnerRef.current = innerUrl;
     const current = usePanesStore
       .getState()
       .panes.find((p) => p.id === paneId)?.url;
@@ -196,13 +235,13 @@ function PaneLocationBridge({ paneId }: { paneId: string }) {
 
   // store → inner (chrome-driven navigation)
   useEffect(() => {
-    if (storeUrl !== innerUrl) {
-      navigate(storeUrl);
+    const latestStoreUrl =
+      usePanesStore.getState().panes.find((p) => p.id === paneId)?.url ?? "/";
+    if (latestStoreUrl !== innerUrl) {
+      navigate(latestStoreUrl);
     }
-    // intentionally not depending on innerUrl: that would cause this
-    // effect to fire every navigation and undo the inner→store write.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeUrl, navigate]);
+  }, [paneId, storeUrl, innerUrl, navigate]);
 
   return null;
 }
@@ -252,7 +291,7 @@ export function PaneShell({
           )}
           <TabBar paneId={paneId} />
           <div className="flex-1 overflow-hidden">
-            <PaneRoutes />
+            <PaneRouteSurface paneId={paneId} />
           </div>
         </PaneProvider>
       </MemoryRouter>
