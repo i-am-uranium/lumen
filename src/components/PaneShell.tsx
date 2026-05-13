@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import {
   MemoryRouter,
   Navigate,
@@ -183,9 +183,21 @@ function PaneLocationBridge({ paneId }: { paneId: string }) {
     (s) => s.panes.find((p) => p.id === paneId)?.url ?? "/",
   );
 
-  // inner → store
   const innerUrl = location.pathname + location.search;
+  // Track the innerUrl value the last time we synced. Initial value is
+  // the mount-time inner location — so the very first effect run sees
+  // "innerUrl hasn't changed since seed" and skips writing to the
+  // store, which avoids clobbering any concurrent store-side update
+  // (deep-link adoption, chrome navigation, the +-button's openTab
+  // flow). This invariant survives StrictMode's double-invocation:
+  // the ref persists across the dev-time setup→cleanup→setup cycle,
+  // so the second effect run also short-circuits.
+  const lastSyncedInnerRef = useRef(innerUrl);
+
+  // inner → store
   useEffect(() => {
+    if (lastSyncedInnerRef.current === innerUrl) return;
+    lastSyncedInnerRef.current = innerUrl;
     const current = usePanesStore
       .getState()
       .panes.find((p) => p.id === paneId)?.url;
@@ -199,8 +211,6 @@ function PaneLocationBridge({ paneId }: { paneId: string }) {
     if (storeUrl !== innerUrl) {
       navigate(storeUrl);
     }
-    // intentionally not depending on innerUrl: that would cause this
-    // effect to fire every navigation and undo the inner→store write.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeUrl, navigate]);
 

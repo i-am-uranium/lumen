@@ -224,43 +224,57 @@ function NavBar() {
  *   - On `popstate` (browser back/forward): push the URL into the
  *     focused pane so the user's intent flows to the right place.
  *
+ * Subscribes to the store directly via `usePanesStore.subscribe` rather
+ * than through a render-effect on `focusedUrl`. Using a render-effect
+ * closes over the *previous* render's url, and when mount-adoption and
+ * mirror-to-history fire in the same render the mirror sees the stale
+ * value and writes it back to `window.location`, undoing the
+ * adoption — that was the root cause of the new-tab flicker and of
+ * deep links bouncing back to /cluster on reload.
+ *
  * The non-focused panes are deliberately *not* mirrored — their state
  * stays parked in `panesStore` until the user focuses them again.
  */
 function FocusedPaneBrowserUrlBridge() {
-  const focusedUrl = useFocusedPaneUrl();
-
   useEffect(() => {
-    // Initial adoption: if the persisted focused pane URL is the
-    // default and the URL bar carries something more specific (deep
-    // link, refresh), use the URL bar as the source of truth.
     if (typeof window === "undefined") return;
+
+    const readFocusedUrl = () => {
+      const { panes, focusedId } = usePanesStore.getState();
+      return panes.find((p) => p.id === focusedId)?.url ?? "/";
+    };
+
     const winUrl = window.location.pathname + window.location.search;
+    const focusedUrl = readFocusedUrl();
     if (winUrl && winUrl !== "/" && winUrl !== focusedUrl) {
-      usePanesStore.getState().setPaneUrl(usePanesStore.getState().focusedId, winUrl);
-    }
-    // Empty deps — runs once at mount only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const winUrl = window.location.pathname + window.location.search;
-    if (winUrl !== focusedUrl) {
+      usePanesStore.getState().setPaneUrl(
+        usePanesStore.getState().focusedId,
+        winUrl,
+      );
+    } else if (winUrl !== focusedUrl) {
       window.history.replaceState({}, "", focusedUrl);
     }
-  }, [focusedUrl]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+    const unsubscribe = usePanesStore.subscribe(() => {
+      const nextUrl = readFocusedUrl();
+      const cur = window.location.pathname + window.location.search;
+      if (cur !== nextUrl) {
+        window.history.replaceState({}, "", nextUrl);
+      }
+    });
+
     const onPop = () => {
-      const winUrl = window.location.pathname + window.location.search;
+      const cur = window.location.pathname + window.location.search;
       usePanesStore
         .getState()
-        .setPaneUrl(usePanesStore.getState().focusedId, winUrl);
+        .setPaneUrl(usePanesStore.getState().focusedId, cur);
     };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("popstate", onPop);
+    };
   }, []);
 
   return null;
