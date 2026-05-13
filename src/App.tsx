@@ -1,12 +1,11 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ActivityDrawer } from "@/components/ActivityDrawer";
-import { TabBar, TabsSyncer } from "@/components/TabBar";
+import { SplitView } from "@/components/SplitView";
 import { TABS_NEW_URL, useTabsStore } from "@/state/tabs";
 import {
   ClusterSwitcher,
@@ -18,119 +17,32 @@ import { useUiSettings } from "@/state/uiSettings";
 import { ShellDock } from "@/components/shell/ShellDock";
 import { k8s } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
-import { Bell, Lock, Network } from "lucide-react";
+import { Bell, Columns2, Lock, Network } from "lucide-react";
 import { useClusterStore } from "@/state/cluster";
+import {
+  navigateFocused,
+  useFocusedPaneUrl,
+  usePanesStore,
+} from "@/state/panes";
 import { useShortcut } from "@/lib/shortcuts";
 import { dispatchFocusSearch } from "@/lib/focusSearch";
 import { checkForAppUpdate } from "@/lib/autoUpdater";
 import { APP_VERSION } from "@/lib/appInfo";
 
-const named =
-  <T extends Record<string, unknown>>(key: keyof T) =>
-  (m: T) => ({ default: m[key] as unknown as React.ComponentType<any> });
-
-const FleetView = lazy(() =>
-  import("@/routes/cluster/FleetView").then(named("FleetView")),
-);
-const ClusterWorkspace = lazy(() =>
-  import("@/routes/cluster/ClusterWorkspace").then(named("ClusterWorkspace")),
-);
-const CloudMap = lazy(() =>
-  import("@/routes/cluster/CloudMap").then(named("CloudMap")),
-);
-const SecurityView = lazy(() =>
-  import("@/routes/cluster/SecurityView").then(named("SecurityView")),
-);
-const NetworkDebuggerView = lazy(() =>
-  import("@/routes/cluster/NetworkDebuggerView").then(named("NetworkDebuggerView")),
-);
-const MetricsExplorerView = lazy(() =>
-  import("@/routes/cluster/MetricsExplorerView").then(named("MetricsExplorerView")),
-);
-const NodesView = lazy(() =>
-  import("@/routes/cluster/NodesView").then(named("NodesView")),
-);
-const CrdBrowser = lazy(() =>
-  import("@/routes/cluster/CrdBrowser").then(named("CrdBrowser")),
-);
-const TeamAccess = lazy(() =>
-  import("@/routes/cluster/TeamAccess").then(named("TeamAccess")),
-);
-const LogsTab = lazy(() =>
-  import("@/routes/cluster/LogsTab").then(named("LogsTab")),
-);
-const HelmBrowser = lazy(() =>
-  import("@/routes/cluster/HelmBrowser").then(named("HelmBrowser")),
-);
-const Overview = lazy(() =>
-  import("@/routes/cluster/Overview").then(named("Overview")),
-);
-const WorkloadsView = lazy(() =>
-  import("@/routes/cluster/WorkloadsView").then(named("WorkloadsView")),
-);
-const ClusterCompareView = lazy(() =>
-  import("@/routes/cluster/ClusterCompareView").then(named("ClusterCompareView")),
-);
-const NamespacesView = lazy(() =>
-  import("@/routes/cluster/NamespacesView").then(named("NamespacesView")),
-);
-const EventsView = lazy(() =>
-  import("@/routes/cluster/EventsView").then(named("EventsView")),
-);
-const TriageView = lazy(() =>
-  import("@/routes/cluster/TriageView").then(named("TriageView")),
-);
-const AlertInboxView = lazy(() =>
-  import("@/routes/cluster/AlertInboxView").then(named("AlertInboxView")),
-);
-const RolloutTimelineView = lazy(() =>
-  import("@/routes/cluster/RolloutTimelineView").then(named("RolloutTimelineView")),
-);
-const AiAssistant = lazy(() =>
-  import("@/routes/cluster/AiAssistant").then(named("AiAssistant")),
-);
-const Settings = lazy(() =>
-  import("@/routes/Settings").then(named("Settings")),
-);
-const ArgocdView = lazy(() =>
-  import("@/routes/cluster/ArgocdView").then(named("ArgocdView")),
-);
-const TektonView = lazy(() =>
-  import("@/routes/cluster/TektonView").then(named("TektonView")),
-);
-const WorkspacesView = lazy(() =>
-  import("@/routes/cluster/WorkspacesView").then(named("WorkspacesView")),
-);
-const ChangeHistoryView = lazy(() =>
-  import("@/routes/cluster/ChangeHistoryView").then(named("ChangeHistoryView")),
-);
-const NetworkPolicyWizard = lazy(() =>
-  import("@/routes/cluster/wizards/NetworkPolicyWizard").then(
-    named("NetworkPolicyWizard"),
-  ),
-);
-const RbacBindingWizard = lazy(() =>
-  import("@/routes/cluster/wizards/RbacBindingWizard").then(
-    named("RbacBindingWizard"),
-  ),
-);
-const HelmInstallWizard = lazy(() =>
-  import("@/routes/cluster/wizards/HelmInstallWizard").then(
-    named("HelmInstallWizard"),
-  ),
-);
-const HelmUpgradeWizard = lazy(() =>
-  import("@/routes/cluster/wizards/HelmInstallWizard").then(
-    named("HelmUpgradeWizard"),
-  ),
-);
-
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
 });
 
+/** Split a "/path?query" string into its components, matching useLocation. */
+function splitUrl(url: string): { pathname: string; search: string } {
+  const qIdx = url.indexOf("?");
+  if (qIdx === -1) return { pathname: url, search: "" };
+  return { pathname: url.slice(0, qIdx), search: url.slice(qIdx) };
+}
+
 function StatusBar() {
-  const { pathname } = useLocation();
+  const focusedUrl = useFocusedPaneUrl();
+  const { pathname } = splitUrl(focusedUrl);
   const { contextName, namespace } = useClusterStore();
   const { data: ctxs = [] } = useQuery(useClusterContexts(pathname.startsWith("/cluster")));
   const activeCtx = ctxs.find((c) => c.name === contextName);
@@ -154,16 +66,12 @@ function StatusBar() {
         <span><kbd className="text-term-fg">Cmd K</kbd> palette</span>
         <span><kbd className="text-term-fg">Cmd /</kbd> filter</span>
         <span><kbd className="text-term-fg">Cmd L</kbd> logs</span>
+        <span><kbd className="text-term-fg">Cmd \</kbd> split</span>
       </div>
     </div>
   );
 }
 
-/**
- * Tiny topbar chip that appears only when read-only mode is active, so
- * it never adds visual weight in normal use. Click toggles the setting —
- * faster than going through Cmd-K for users who flip it often.
- */
 function ReadOnlyChip() {
   const readOnly = useUiSettings((s) => s.readOnly);
   const toggle = useUiSettings((s) => s.toggleReadOnly);
@@ -182,9 +90,12 @@ function ReadOnlyChip() {
 }
 
 function NavBar() {
-  const navigate = useNavigate();
-  const { pathname, search } = useLocation();
   const queryClient = useQueryClient();
+  const focusedId = usePanesStore((s) => s.focusedId);
+  const focusedUrl = useFocusedPaneUrl();
+  const splitPane = usePanesStore((s) => s.splitPane);
+  const paneCount = usePanesStore((s) => s.panes.length);
+  const { pathname, search } = splitUrl(focusedUrl);
   const { contextName, setContext } = useClusterStore();
   const { data: contexts = [] } = useQuery(useClusterContexts(pathname.startsWith("/cluster")));
   const activeContext = contexts.find((item) => item.name === contextName);
@@ -198,10 +109,6 @@ function NavBar() {
   const activeStreamCtx = useActivityStream((s) => s.context);
   const [activityOpen, setActivityOpen] = useState(false);
 
-  // Keep the cluster activity stream in sync with the active context.
-  // Idempotent: store.start() short-circuits when already streaming the same
-  // context. Tearing down on unmount keeps the channel from leaking when the
-  // app navigates away from a cluster.
   useEffect(() => {
     if (contextName) {
       void startActivity(contextName);
@@ -223,12 +130,10 @@ function NavBar() {
           nextContext,
         );
         if (opts.inNewTab) {
-          // Preserve the current view in its tab, then pop the new
-          // context onto a fresh tab — same as Cmd-click on a row.
-          useTabsStore.getState().syncActiveUrl(pathname + search);
-          useTabsStore.getState().openTab(targetUrl);
+          useTabsStore.getState().syncActiveUrl(focusedId, focusedUrl);
+          useTabsStore.getState().openTab(focusedId, targetUrl);
         }
-        navigate(targetUrl);
+        navigateFocused(targetUrl);
         await queryClient.invalidateQueries({ queryKey: ["k8s", "contexts"] });
         await queryClient.invalidateQueries({ queryKey: ["k8s", "namespaces"] });
       } catch (error) {
@@ -236,7 +141,7 @@ function NavBar() {
         throw error;
       }
     },
-    [contextName, navigate, pathname, queryClient, search, setContext],
+    [contextName, focusedId, focusedUrl, pathname, queryClient, search, setContext],
   );
 
   return (
@@ -259,6 +164,25 @@ function NavBar() {
         )}
         <ReadOnlyChip />
         <div className="flex-1" />
+        <button
+          type="button"
+          onClick={() => splitPane()}
+          title={
+            paneCount > 1
+              ? `Split into another pane (Cmd+\\) · ${paneCount} open`
+              : "Split into another pane (Cmd+\\)"
+          }
+          aria-label="Split pane"
+          className={cn(
+            "inline-flex h-8 items-center justify-center rounded-[6px] border border-term-border-soft bg-term-bg/70 px-2 text-term-muted transition-colors",
+            "hover:border-accent-primary/35 hover:text-term-fg",
+          )}
+        >
+          <Columns2 className="size-3.5" aria-hidden="true" />
+          {paneCount > 1 && (
+            <span className="ml-1 font-mono text-[10px]">{paneCount}</span>
+          )}
+        </button>
         <ThemeSwitcher />
         <button
           type="button"
@@ -290,75 +214,168 @@ function NavBar() {
 }
 
 /**
- * Registers global app-level keybindings that need router context.
- * Mounted once inside <BrowserRouter>. Drawer / per-view chords are
- * registered closer to where they fire — this component only owns
- * shortcuts that should work from anywhere.
+ * Two-way bridge between the focused pane's URL and `window.location`.
+ *
+ *   - On mount: if `window.location` already points somewhere
+ *     interesting (deep link, refresh on a child route), adopt it into
+ *     the focused pane so the user lands where they expect.
+ *   - On focused-pane URL change: mirror via `history.replaceState` so
+ *     the URL bar reflects the active view (deep links, bookmarks).
+ *   - On `popstate` (browser back/forward): push the URL into the
+ *     focused pane so the user's intent flows to the right place.
+ *
+ * The non-focused panes are deliberately *not* mirrored — their state
+ * stays parked in `panesStore` until the user focuses them again.
  */
+function FocusedPaneBrowserUrlBridge() {
+  const focusedUrl = useFocusedPaneUrl();
+
+  useEffect(() => {
+    // Initial adoption: if the persisted focused pane URL is the
+    // default and the URL bar carries something more specific (deep
+    // link, refresh), use the URL bar as the source of truth.
+    if (typeof window === "undefined") return;
+    const winUrl = window.location.pathname + window.location.search;
+    if (winUrl && winUrl !== "/" && winUrl !== focusedUrl) {
+      usePanesStore.getState().setPaneUrl(usePanesStore.getState().focusedId, winUrl);
+    }
+    // Empty deps — runs once at mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const winUrl = window.location.pathname + window.location.search;
+    if (winUrl !== focusedUrl) {
+      window.history.replaceState({}, "", focusedUrl);
+    }
+  }, [focusedUrl]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPop = () => {
+      const winUrl = window.location.pathname + window.location.search;
+      usePanesStore
+        .getState()
+        .setPaneUrl(usePanesStore.getState().focusedId, winUrl);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  return null;
+}
+
+/**
+ * Mirrors the focused pane's URL into the global `useClusterStore`
+ * and the underlying kubeconfig context. Previously this lived inside
+ * `ClusterWorkspace`, but with split panes that route can mount in
+ * multiple places at once — racing the singleton. Centralising it
+ * here means whichever pane the user is focused on drives the global
+ * context, and non-focused panes don't touch it.
+ */
+function FocusedPaneClusterSyncer() {
+  const focusedUrl = useFocusedPaneUrl();
+  const setContext = useClusterStore((s) => s.setContext);
+
+  useEffect(() => {
+    const { pathname } = splitUrl(focusedUrl);
+    const parts = pathname.split("/").filter(Boolean);
+    if (parts[0] !== "cluster" || !parts[1]) return;
+    const ctx = decodeURIComponent(parts[1]);
+    setContext(ctx);
+    k8s.setContext(ctx).catch(() => {
+      /* non-fatal */
+    });
+  }, [focusedUrl, setContext]);
+
+  return null;
+}
+
+/** Global keybindings — split / close pane / cycle focus / tab nav. */
 function GlobalShortcuts() {
-  const navigate = useNavigate();
-  const { pathname, search } = useLocation();
+  const focusedUrl = useFocusedPaneUrl();
+  const focusedId = usePanesStore((s) => s.focusedId);
   const { contextName } = useClusterStore();
+
   const goLogs = useCallback(() => {
     if (!contextName) return;
-    navigate(`/cluster/${encodeURIComponent(contextName)}/logs`);
-  }, [contextName, navigate]);
+    navigateFocused(`/cluster/${encodeURIComponent(contextName)}/logs`);
+  }, [contextName]);
   useShortcut("openLogs", goLogs);
   useShortcut("focusSearch", () => dispatchFocusSearch());
 
   const openNewTab = useCallback(() => {
-    // Persist the current URL into the active tab so the user's
-    // in-progress view isn't lost when they pop a fresh tab.
-    useTabsStore.getState().syncActiveUrl(pathname + search);
-    useTabsStore.getState().openTab(TABS_NEW_URL);
-    navigate(TABS_NEW_URL);
-  }, [navigate, pathname, search]);
+    useTabsStore.getState().syncActiveUrl(focusedId, focusedUrl);
+    useTabsStore.getState().openTab(focusedId, TABS_NEW_URL);
+    navigateFocused(TABS_NEW_URL);
+  }, [focusedId, focusedUrl]);
   useShortcut("newTab", openNewTab);
 
   const closeActiveTab = useCallback(() => {
-    const { activeId } = useTabsStore.getState();
-    if (!activeId) return;
-    const nextId = useTabsStore.getState().closeTab(activeId);
+    const pane = useTabsStore.getState().byPane[focusedId];
+    if (!pane?.activeId) return;
+    const nextId = useTabsStore.getState().closeTab(focusedId, pane.activeId);
     if (!nextId) return;
-    const tab = useTabsStore.getState().tabs.find((t) => t.id === nextId);
-    if (tab) navigate(tab.url);
-  }, [navigate]);
+    const tab = useTabsStore.getState().byPane[focusedId]?.tabs.find(
+      (t) => t.id === nextId,
+    );
+    if (tab) navigateFocused(tab.url);
+  }, [focusedId]);
   useShortcut("closeTab", closeActiveTab);
 
   const jumpNext = useCallback(() => {
-    useTabsStore.getState().next();
-    const { tabs, activeId } = useTabsStore.getState();
-    const tab = tabs.find((t) => t.id === activeId);
-    if (tab) navigate(tab.url);
-  }, [navigate]);
+    useTabsStore.getState().next(focusedId);
+    const pane = useTabsStore.getState().byPane[focusedId];
+    const tab = pane?.tabs.find((t) => t.id === pane?.activeId);
+    if (tab) navigateFocused(tab.url);
+  }, [focusedId]);
   useShortcut("nextTab", jumpNext);
 
   const jumpPrev = useCallback(() => {
-    useTabsStore.getState().prev();
-    const { tabs, activeId } = useTabsStore.getState();
-    const tab = tabs.find((t) => t.id === activeId);
-    if (tab) navigate(tab.url);
-  }, [navigate]);
+    useTabsStore.getState().prev(focusedId);
+    const pane = useTabsStore.getState().byPane[focusedId];
+    const tab = pane?.tabs.find((t) => t.id === pane?.activeId);
+    if (tab) navigateFocused(tab.url);
+  }, [focusedId]);
   useShortcut("prevTab", jumpPrev);
 
-  return <JumpTabShortcuts />;
+  const splitPane = useCallback(() => {
+    usePanesStore.getState().splitPane();
+  }, []);
+  useShortcut("splitPane", splitPane);
+
+  const closePane = useCallback(() => {
+    const { focusedId: fid, panes } = usePanesStore.getState();
+    if (panes.length <= 1) return;
+    usePanesStore.getState().closePane(fid);
+    useTabsStore.getState().removePane(fid);
+  }, []);
+  useShortcut("closePane", closePane);
+
+  const focusNextPane = useCallback(() => {
+    usePanesStore.getState().focusNext();
+  }, []);
+  useShortcut("focusNextPane", focusNextPane);
+
+  const focusPrevPane = useCallback(() => {
+    usePanesStore.getState().focusPrev();
+  }, []);
+  useShortcut("focusPrevPane", focusPrevPane);
+
+  return <JumpTabShortcuts focusedId={focusedId} />;
 }
 
-/**
- * Cmd+1..Cmd+9 → jump to the Nth tab in visible order (pinned first).
- * Extracted from GlobalShortcuts so the hook calls have a stable shape;
- * useShortcut needs to be called from a fixed list at render time.
- */
-function JumpTabShortcuts() {
-  const navigate = useNavigate();
+/** Cmd+1..Cmd+9 → jump to the Nth tab in the focused pane. */
+function JumpTabShortcuts({ focusedId }: { focusedId: string }) {
   const jumpToN = useCallback(
     (n: number) => () => {
-      useTabsStore.getState().jumpToIndex(n - 1);
-      const { tabs, activeId } = useTabsStore.getState();
-      const tab = tabs.find((t) => t.id === activeId);
-      if (tab) navigate(tab.url);
+      useTabsStore.getState().jumpToIndex(focusedId, n - 1);
+      const pane = useTabsStore.getState().byPane[focusedId];
+      const tab = pane?.tabs.find((t) => t.id === pane?.activeId);
+      if (tab) navigateFocused(tab.url);
     },
-    [navigate],
+    [focusedId],
   );
   useShortcut("jumpTab1", jumpToN(1));
   useShortcut("jumpTab2", jumpToN(2));
@@ -374,76 +391,21 @@ function JumpTabShortcuts() {
 
 function Shell() {
   return (
-    <BrowserRouter>
+    <>
       <Toaster richColors position="bottom-right" />
       <GlobalShortcuts />
-      <TabsSyncer />
+      <FocusedPaneBrowserUrlBridge />
+      <FocusedPaneClusterSyncer />
       <div className="flex h-screen flex-col bg-term-bg text-term-fg">
         <NavBar />
-        <TabBar />
         <div className="flex-1 overflow-hidden">
-          <Suspense
-            fallback={
-              <div className="flex h-full items-center justify-center text-[12px] text-term-muted">
-                <span className="animate-pulse">loading...</span>
-              </div>
-            }
-          >
-            <Routes>
-              <Route path="/" element={<Navigate to="/cluster" replace />} />
-              <Route path="/cluster" element={<FleetView />} />
-              <Route path="/cluster/:ctx" element={<ClusterWorkspace />}>
-                <Route index element={<Navigate to="workloads" replace />} />
-                <Route path="overview" element={<Overview />} />
-                <Route path="workloads" element={<WorkloadsView />} />
-                <Route path="workloads/:kind" element={<WorkloadsView />} />
-                <Route path="compare" element={<ClusterCompareView />} />
-                <Route path="namespaces" element={<NamespacesView />} />
-                <Route path="triage" element={<TriageView />} />
-                <Route path="alerts" element={<AlertInboxView />} />
-                <Route path="events" element={<EventsView />} />
-                <Route path="timeline" element={<RolloutTimelineView />} />
-                <Route path="map" element={<CloudMap />} />
-                <Route path="nodes" element={<NodesView />} />
-                <Route path="metrics" element={<MetricsExplorerView />} />
-                <Route path="security" element={<SecurityView />} />
-                <Route path="network-debugger" element={<NetworkDebuggerView />} />
-                <Route path="crds" element={<CrdBrowser />} />
-                <Route path="helm" element={<HelmBrowser />} />
-                <Route path="access" element={<TeamAccess />} />
-                <Route path="logs" element={<LogsTab />} />
-                <Route path="ai" element={<AiAssistant />} />
-                <Route path="argocd" element={<ArgocdView />} />
-                <Route path="tekton" element={<TektonView />} />
-                <Route path="workspaces" element={<WorkspacesView />} />
-                <Route path="change-history" element={<ChangeHistoryView />} />
-                <Route
-                  path="wizards/network-policy"
-                  element={<NetworkPolicyWizard />}
-                />
-                <Route
-                  path="wizards/rbac-binding"
-                  element={<RbacBindingWizard />}
-                />
-                <Route
-                  path="helm/install"
-                  element={<HelmInstallWizard />}
-                />
-                <Route
-                  path="helm/upgrade/:release"
-                  element={<HelmUpgradeWizard />}
-                />
-              </Route>
-              <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<Navigate to="/cluster" replace />} />
-            </Routes>
-          </Suspense>
+          <SplitView />
         </div>
         <StatusBar />
         <ShellDock />
         <CommandPalette />
       </div>
-    </BrowserRouter>
+    </>
   );
 }
 

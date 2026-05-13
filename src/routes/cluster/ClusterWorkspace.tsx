@@ -58,7 +58,6 @@ import { CopilotLauncher } from "@/components/copilot/CopilotLauncher";
 import { buildAlertInbox } from "@/lib/alertInbox";
 import { k8s, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
-import { useClusterStore } from "@/state/cluster";
 import { useUiSettings } from "@/state/uiSettings";
 import {
   useWorkspacesStore,
@@ -780,7 +779,6 @@ export function ClusterWorkspace() {
   const context = decodeURIComponent(ctx);
   const nav = useNavigate();
   const location = useLocation();
-  const { setContext } = useClusterStore();
   const selectedNamespace = useUiSettings(
     (s) => s.selectedNamespaces[context] ?? "",
   );
@@ -793,13 +791,10 @@ export function ClusterWorkspace() {
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspaceNotes, setWorkspaceNotes] = useState("");
   const rail = useRailState(context);
-  useEffect(() => {
-    if (!context) return;
-    setContext(context);
-    k8s.setContext(context).catch(() => {
-      /* non-fatal */
-    });
-  }, [context, setContext]);
+  // Singleton cluster context is now driven by <FocusedPaneClusterSyncer/>
+  // in App.tsx — it reflects the focused pane's URL. Calling setContext
+  // from inside ClusterWorkspace would race that syncer when two panes
+  // each mount this route at different contexts.
 
   const collapsed = rail.collapsed;
   const railWidth = collapsed ? RAIL_W_COLLAPSED : RAIL_W;

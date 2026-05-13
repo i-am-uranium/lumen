@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { k8s, type ContextInfo } from "@/lib/k8s";
 import { useClusterStore } from "@/state/cluster";
+import { usePanesStore } from "@/state/panes";
+import { useTabsStore } from "@/state/tabs";
 
 const activityStream = vi.hoisted(() => ({
   start: vi.fn(),
@@ -65,6 +67,18 @@ describe("top cluster switcher", () => {
       namespace: null,
       lastNamespaceByContext: {},
     });
+    // Seed the panes store from window.location so the focused pane
+    // matches the URL the test pre-pushed. (Module load fires before
+    // beforeEach, so the persisted default seed is `/cluster` —
+    // without this reset the NavBar would render the static badge.)
+    const paneId = "test-pane";
+    usePanesStore.setState({
+      panes: [{ id: paneId, url: window.location.pathname + window.location.search }],
+      focusedId: paneId,
+      sizes: [100],
+      orientation: "horizontal",
+    });
+    useTabsStore.getState().reset();
   });
 
   it("replaces the static CLUSTER badge and preserves the route when switching", async () => {

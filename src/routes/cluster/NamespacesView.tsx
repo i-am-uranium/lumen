@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { openInNewTab, shouldOpenInNewTab } from "@/state/tabs";
+import { usePaneId } from "@/components/PaneContext";
 import { useQuery } from "@tanstack/react-query";
 import { Folders, RefreshCw, Search } from "lucide-react";
 import { k8s } from "@/lib/k8s";
@@ -27,12 +28,13 @@ export function NamespacesView() {
   const context = decodeURIComponent(ctx);
   const nav = useNavigate();
   const location = useLocation();
+  const paneId = usePaneId();
   const [query, setQuery] = useState("");
 
   const goToNamespace = (ns: string, event: React.MouseEvent) => {
     const target = `/cluster/${encodeURIComponent(context)}/workloads?ns=${encodeURIComponent(ns)}`;
     if (shouldOpenInNewTab(event)) {
-      openInNewTab(target, nav, location.pathname + location.search);
+      openInNewTab(paneId, target, nav, location.pathname + location.search);
       return;
     }
     nav(target);

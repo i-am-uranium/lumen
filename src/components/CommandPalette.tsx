@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ComponentType } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { navigateFocused } from "@/state/panes";
 import {
   Command,
   CommandEmpty,
@@ -62,7 +62,6 @@ function present<T>(value: T | undefined): value is T {
 export function CommandPalette() {
   const { paletteOpen, setPaletteOpen } = useUi();
   const [q, setQ] = useState("");
-  const navigate = useNavigate();
   const qc = useQueryClient();
   const {
     contextName: currentCtx,
@@ -168,7 +167,7 @@ export function CommandPalette() {
       await k8s.setContext(name);
       setContext(name);
       qc.invalidateQueries({ queryKey: ["k8s", "namespaces"] });
-      navigate(`/cluster/${encodeURIComponent(name)}/map`);
+      navigateFocused(`/cluster/${encodeURIComponent(name)}/map`);
     } finally {
       close();
     }
@@ -177,12 +176,12 @@ export function CommandPalette() {
   function pickTab(tab: string) {
     const ctx = useClusterStore.getState().contextName;
     if (!ctx) return close();
-    navigate(`/cluster/${encodeURIComponent(ctx)}/${tab}`);
+    navigateFocused(`/cluster/${encodeURIComponent(ctx)}/${tab}`);
     close();
   }
 
   function pickFleet() {
-    navigate("/cluster");
+    navigateFocused("/cluster");
     close();
   }
 
@@ -214,7 +213,7 @@ export function CommandPalette() {
       q: resource.name,
       ns: resource.namespace,
     });
-    navigate(
+    navigateFocused(
       `/cluster/${encodeURIComponent(ctx)}/workloads/${slug}?${params.toString()}`,
     );
     close();
@@ -229,7 +228,7 @@ export function CommandPalette() {
       kind: "deployment",
       name: deploymentName,
     });
-    navigate(`/cluster/${encodeURIComponent(ctx)}/logs?${params.toString()}`);
+    navigateFocused(`/cluster/${encodeURIComponent(ctx)}/logs?${params.toString()}`);
     close();
   }
 
@@ -298,7 +297,7 @@ export function CommandPalette() {
                       const ctxName =
                         useClusterStore.getState().contextName;
                       if (!ctxName) return;
-                      navigate(
+                      navigateFocused(
                         `/cluster/${encodeURIComponent(ctxName)}/wizards/network-policy`,
                       );
                       close();
@@ -311,7 +310,7 @@ export function CommandPalette() {
                       const ctxName =
                         useClusterStore.getState().contextName;
                       if (!ctxName) return;
-                      navigate(
+                      navigateFocused(
                         `/cluster/${encodeURIComponent(ctxName)}/wizards/rbac-binding`,
                       );
                       close();
@@ -324,7 +323,7 @@ export function CommandPalette() {
                       const ctxName =
                         useClusterStore.getState().contextName;
                       if (!ctxName) return;
-                      navigate(
+                      navigateFocused(
                         `/cluster/${encodeURIComponent(ctxName)}/helm/install`,
                       );
                       close();
@@ -341,7 +340,7 @@ export function CommandPalette() {
                 value="go: settings"
                 icon={SettingsIcon}
                 onSelect={() => {
-                  navigate("/settings");
+                  navigateFocused("/settings");
                   close();
                 }}
               />
