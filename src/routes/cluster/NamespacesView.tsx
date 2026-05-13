@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { openInNewTab, shouldOpenInNewTab } from "@/state/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { Folders, RefreshCw, Search } from "lucide-react";
 import { k8s } from "@/lib/k8s";
@@ -25,7 +26,17 @@ export function NamespacesView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
   const nav = useNavigate();
+  const location = useLocation();
   const [query, setQuery] = useState("");
+
+  const goToNamespace = (ns: string, event: React.MouseEvent) => {
+    const target = `/cluster/${encodeURIComponent(context)}/workloads?ns=${encodeURIComponent(ns)}`;
+    if (shouldOpenInNewTab(event)) {
+      openInNewTab(target, nav, location.pathname + location.search);
+      return;
+    }
+    nav(target);
+  };
 
   const queryKey = ["k8s", "namespaces-view", context];
   const { data, isLoading, isFetching, refetch, error } = useQuery({
@@ -102,11 +113,14 @@ export function NamespacesView() {
                 {filtered.map((ns) => (
                   <DataTableRow
                     key={ns}
-                    onClick={() =>
-                      nav(
-                        `/cluster/${encodeURIComponent(context)}/workloads?ns=${encodeURIComponent(ns)}`,
-                      )
-                    }
+                    onClick={(e) => goToNamespace(ns, e)}
+                    onAuxClick={(e) => {
+                      if (e.button === 1) {
+                        e.preventDefault();
+                        goToNamespace(ns, e);
+                      }
+                    }}
+                    title="Click to open · Cmd/Middle-click for new tab"
                     className="cursor-pointer"
                   >
                     <DataTableCell>

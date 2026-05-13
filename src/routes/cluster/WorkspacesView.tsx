@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { openInNewTab, shouldOpenInNewTab } from "@/state/tabs";
 import {
   ArrowRight,
   BookOpenCheck,
@@ -263,7 +264,28 @@ export function WorkspacesView() {
                     <div className="flex shrink-0 items-center gap-1">
                       <IconButton
                         label="restore workspace"
-                        onClick={() => navigate(buildWorkspaceRestoreUrl(workspace))}
+                        title="restore workspace · Cmd/Middle-click for new tab"
+                        onClick={(event) => {
+                          const target = buildWorkspaceRestoreUrl(workspace);
+                          if (shouldOpenInNewTab(event)) {
+                            openInNewTab(
+                              target,
+                              navigate,
+                              location.pathname + location.search,
+                            );
+                            return;
+                          }
+                          navigate(target);
+                        }}
+                        onAuxClick={(event) => {
+                          if (event.button !== 1) return;
+                          event.preventDefault();
+                          openInNewTab(
+                            buildWorkspaceRestoreUrl(workspace),
+                            navigate,
+                            location.pathname + location.search,
+                          );
+                        }}
                         icon={<ArrowRight className="size-3.5" />}
                       />
                       <IconButton
@@ -775,19 +797,24 @@ function TextAreaField({
 function IconButton({
   label,
   onClick,
+  onAuxClick,
   icon,
   danger = false,
+  title,
 }: {
   label: string;
-  onClick: () => void;
+  onClick: (event: React.MouseEvent) => void;
+  onAuxClick?: (event: React.MouseEvent) => void;
   icon: ReactNode;
   danger?: boolean;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      title={label}
+      onAuxClick={onAuxClick}
+      title={title ?? label}
       aria-label={label}
       className={cn(
         "inline-flex size-8 items-center justify-center rounded-control border border-border-default bg-surface text-text-muted hover:bg-hover hover:text-text-primary",

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Network, Search } from "lucide-react";
 import { k8s, type ContextInfo } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
+import { shouldOpenInNewTab } from "@/state/tabs";
 
 export function clusterSwitchPath(
   pathname: string,
@@ -38,7 +39,10 @@ export function ClusterSwitcher({
   isProd: boolean;
   cluster?: string | null;
   contexts: ContextInfo[];
-  onSwitchContext: (context: string) => Promise<void>;
+  onSwitchContext: (
+    context: string,
+    opts?: { inNewTab?: boolean },
+  ) => Promise<void>;
   variant?: "rail" | "top";
 }) {
   const [open, setOpen] = useState(false);
@@ -66,15 +70,18 @@ export function ClusterSwitcher({
     return () => window.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
 
-  async function chooseContext(nextContext: string) {
-    if (nextContext === context) {
+  async function chooseContext(
+    nextContext: string,
+    opts: { inNewTab?: boolean } = {},
+  ) {
+    if (nextContext === context && !opts.inNewTab) {
       setOpen(false);
       setQuery("");
       return;
     }
     setSwitching(nextContext);
     try {
-      await onSwitchContext(nextContext);
+      await onSwitchContext(nextContext, opts);
       setOpen(false);
       setQuery("");
     } finally {
@@ -183,7 +190,18 @@ export function ClusterSwitcher({
                     role="option"
                     aria-selected={active}
                     disabled={!!switching}
-                    onClick={() => void chooseContext(item.name)}
+                    title="Click to switch · Cmd/Middle-click for new tab"
+                    onClick={(event) =>
+                      void chooseContext(item.name, {
+                        inNewTab: shouldOpenInNewTab(event),
+                      })
+                    }
+                    onAuxClick={(event) => {
+                      // Middle-click on the row opens in a new tab.
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      void chooseContext(item.name, { inNewTab: true });
+                    }}
                     className={cn(
                       "flex w-full min-w-0 items-start gap-2 rounded-control px-2 py-2 text-left transition-colors",
                       active

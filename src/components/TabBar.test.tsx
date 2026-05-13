@@ -134,4 +134,60 @@ describe("<TabBar />", () => {
     // The original "prod · Workloads" tab is still there with its preserved URL.
     expect(screen.getByText("prod · Workloads")).toBeInTheDocument();
   });
+
+  it("hides the close X on pinned tabs but still allows close via context menu", async () => {
+    harness("/cluster/prod/workloads");
+    const tabLabel = await screen.findByText("prod · Workloads");
+    const tab = tabLabel.closest("[role='tab']") as HTMLElement;
+    // Pin the only tab via the store.
+    act(() => {
+      const { tabs } = useTabsStore.getState();
+      useTabsStore.getState().pinTab(tabs[0].id);
+    });
+    expect(
+      within(tab).queryByRole("button", { name: /close tab/i }),
+    ).not.toBeInTheDocument();
+
+    // Open context menu via right-click → "Close" should appear.
+    await userEvent.pointer({
+      target: tab,
+      keys: "[MouseRight]",
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByText("Unpin")).toBeInTheDocument();
+    expect(within(menu).getByText("Close")).toBeInTheDocument();
+  });
+
+  it("right-click menu duplicates the tab and activates the copy", async () => {
+    harness("/cluster/prod/workloads?ns=ops");
+    const tabLabel = await screen.findByText("prod · Workloads · ops");
+    const tab = tabLabel.closest("[role='tab']") as HTMLElement;
+    await userEvent.pointer({ target: tab, keys: "[MouseRight]" });
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByText("Duplicate"));
+    // Two tabs with the same title now visible — the duplicate is active.
+    const matches = screen.getAllByText("prod · Workloads · ops");
+    expect(matches.length).toBe(2);
+    expect(useTabsStore.getState().tabs).toHaveLength(2);
+  });
+
+  it("pinning via context menu reorders the tab to the leftmost slot", async () => {
+    harness("/cluster/a/workloads");
+    await screen.findByText("a · Workloads");
+    act(() => {
+      useTabsStore.getState().openTab("/cluster/b/workloads");
+    });
+    await screen.findByText("b · Workloads");
+
+    // Right-click "b · Workloads" → Pin.
+    const bTab = screen.getByText("b · Workloads").closest("[role='tab']") as HTMLElement;
+    await userEvent.pointer({ target: bTab, keys: "[MouseRight]" });
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByText("Pin"));
+
+    // Pinned tabs render first → first tab in the strip is "b".
+    const tabs = screen.getAllByRole("tab");
+    expect(within(tabs[0]).getByText("b · Workloads")).toBeInTheDocument();
+    expect(within(tabs[1]).getByText("a · Workloads")).toBeInTheDocument();
+  });
 });

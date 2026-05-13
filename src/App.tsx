@@ -211,12 +211,24 @@ function NavBar() {
   }, [contextName, activeStreamCtx, startActivity, stopActivity]);
 
   const switchContext = useCallback(
-    async (nextContext: string) => {
+    async (nextContext: string, opts: { inNewTab?: boolean } = {}) => {
       if (!contextName) return;
       try {
         await k8s.setContext(nextContext);
         setContext(nextContext);
-        navigate(clusterSwitchPath(pathname, search, contextName, nextContext));
+        const targetUrl = clusterSwitchPath(
+          pathname,
+          search,
+          contextName,
+          nextContext,
+        );
+        if (opts.inNewTab) {
+          // Preserve the current view in its tab, then pop the new
+          // context onto a fresh tab — same as Cmd-click on a row.
+          useTabsStore.getState().syncActiveUrl(pathname + search);
+          useTabsStore.getState().openTab(targetUrl);
+        }
+        navigate(targetUrl);
         await queryClient.invalidateQueries({ queryKey: ["k8s", "contexts"] });
         await queryClient.invalidateQueries({ queryKey: ["k8s", "namespaces"] });
       } catch (error) {
@@ -329,6 +341,34 @@ function GlobalShortcuts() {
   }, [navigate]);
   useShortcut("prevTab", jumpPrev);
 
+  return <JumpTabShortcuts />;
+}
+
+/**
+ * Cmd+1..Cmd+9 → jump to the Nth tab in visible order (pinned first).
+ * Extracted from GlobalShortcuts so the hook calls have a stable shape;
+ * useShortcut needs to be called from a fixed list at render time.
+ */
+function JumpTabShortcuts() {
+  const navigate = useNavigate();
+  const jumpToN = useCallback(
+    (n: number) => () => {
+      useTabsStore.getState().jumpToIndex(n - 1);
+      const { tabs, activeId } = useTabsStore.getState();
+      const tab = tabs.find((t) => t.id === activeId);
+      if (tab) navigate(tab.url);
+    },
+    [navigate],
+  );
+  useShortcut("jumpTab1", jumpToN(1));
+  useShortcut("jumpTab2", jumpToN(2));
+  useShortcut("jumpTab3", jumpToN(3));
+  useShortcut("jumpTab4", jumpToN(4));
+  useShortcut("jumpTab5", jumpToN(5));
+  useShortcut("jumpTab6", jumpToN(6));
+  useShortcut("jumpTab7", jumpToN(7));
+  useShortcut("jumpTab8", jumpToN(8));
+  useShortcut("jumpTab9", jumpToN(9));
   return null;
 }
 
