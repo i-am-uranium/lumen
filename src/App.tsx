@@ -6,6 +6,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ActivityDrawer } from "@/components/ActivityDrawer";
+import { TabBar, TabsSyncer } from "@/components/TabBar";
+import { TABS_NEW_URL, useTabsStore } from "@/state/tabs";
 import {
   ClusterSwitcher,
   clusterSwitchPath,
@@ -209,12 +211,24 @@ function NavBar() {
   }, [contextName, activeStreamCtx, startActivity, stopActivity]);
 
   const switchContext = useCallback(
-    async (nextContext: string) => {
+    async (nextContext: string, opts: { inNewTab?: boolean } = {}) => {
       if (!contextName) return;
       try {
         await k8s.setContext(nextContext);
         setContext(nextContext);
-        navigate(clusterSwitchPath(pathname, search, contextName, nextContext));
+        const targetUrl = clusterSwitchPath(
+          pathname,
+          search,
+          contextName,
+          nextContext,
+        );
+        if (opts.inNewTab) {
+          // Preserve the current view in its tab, then pop the new
+          // context onto a fresh tab — same as Cmd-click on a row.
+          useTabsStore.getState().syncActiveUrl(pathname + search);
+          useTabsStore.getState().openTab(targetUrl);
+        }
+        navigate(targetUrl);
         await queryClient.invalidateQueries({ queryKey: ["k8s", "contexts"] });
         await queryClient.invalidateQueries({ queryKey: ["k8s", "namespaces"] });
       } catch (error) {
@@ -283,6 +297,7 @@ function NavBar() {
  */
 function GlobalShortcuts() {
   const navigate = useNavigate();
+  const { pathname, search } = useLocation();
   const { contextName } = useClusterStore();
   const goLogs = useCallback(() => {
     if (!contextName) return;
@@ -290,6 +305,70 @@ function GlobalShortcuts() {
   }, [contextName, navigate]);
   useShortcut("openLogs", goLogs);
   useShortcut("focusSearch", () => dispatchFocusSearch());
+
+  const openNewTab = useCallback(() => {
+    // Persist the current URL into the active tab so the user's
+    // in-progress view isn't lost when they pop a fresh tab.
+    useTabsStore.getState().syncActiveUrl(pathname + search);
+    useTabsStore.getState().openTab(TABS_NEW_URL);
+    navigate(TABS_NEW_URL);
+  }, [navigate, pathname, search]);
+  useShortcut("newTab", openNewTab);
+
+  const closeActiveTab = useCallback(() => {
+    const { activeId } = useTabsStore.getState();
+    if (!activeId) return;
+    const nextId = useTabsStore.getState().closeTab(activeId);
+    if (!nextId) return;
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === nextId);
+    if (tab) navigate(tab.url);
+  }, [navigate]);
+  useShortcut("closeTab", closeActiveTab);
+
+  const jumpNext = useCallback(() => {
+    useTabsStore.getState().next();
+    const { tabs, activeId } = useTabsStore.getState();
+    const tab = tabs.find((t) => t.id === activeId);
+    if (tab) navigate(tab.url);
+  }, [navigate]);
+  useShortcut("nextTab", jumpNext);
+
+  const jumpPrev = useCallback(() => {
+    useTabsStore.getState().prev();
+    const { tabs, activeId } = useTabsStore.getState();
+    const tab = tabs.find((t) => t.id === activeId);
+    if (tab) navigate(tab.url);
+  }, [navigate]);
+  useShortcut("prevTab", jumpPrev);
+
+  return <JumpTabShortcuts />;
+}
+
+/**
+ * Cmd+1..Cmd+9 → jump to the Nth tab in visible order (pinned first).
+ * Extracted from GlobalShortcuts so the hook calls have a stable shape;
+ * useShortcut needs to be called from a fixed list at render time.
+ */
+function JumpTabShortcuts() {
+  const navigate = useNavigate();
+  const jumpToN = useCallback(
+    (n: number) => () => {
+      useTabsStore.getState().jumpToIndex(n - 1);
+      const { tabs, activeId } = useTabsStore.getState();
+      const tab = tabs.find((t) => t.id === activeId);
+      if (tab) navigate(tab.url);
+    },
+    [navigate],
+  );
+  useShortcut("jumpTab1", jumpToN(1));
+  useShortcut("jumpTab2", jumpToN(2));
+  useShortcut("jumpTab3", jumpToN(3));
+  useShortcut("jumpTab4", jumpToN(4));
+  useShortcut("jumpTab5", jumpToN(5));
+  useShortcut("jumpTab6", jumpToN(6));
+  useShortcut("jumpTab7", jumpToN(7));
+  useShortcut("jumpTab8", jumpToN(8));
+  useShortcut("jumpTab9", jumpToN(9));
   return null;
 }
 
@@ -298,8 +377,10 @@ function Shell() {
     <BrowserRouter>
       <Toaster richColors position="bottom-right" />
       <GlobalShortcuts />
+      <TabsSyncer />
       <div className="flex h-screen flex-col bg-term-bg text-term-fg">
         <NavBar />
+        <TabBar />
         <div className="flex-1 overflow-hidden">
           <Suspense
             fallback={

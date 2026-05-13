@@ -70,6 +70,43 @@ export const REGISTRY: ShortcutAction[] = [
     defaultChord: "Cmd+/",
   },
   {
+    id: "newTab",
+    label: "Open new tab",
+    description:
+      "Opens a fresh tab on the fleet view. Use to keep multiple clusters or resources open side-by-side.",
+    defaultChord: "Cmd+T",
+  },
+  {
+    id: "closeTab",
+    label: "Close current tab",
+    description:
+      "Closes the active tab. Closing the last tab resets it to the fleet view.",
+    defaultChord: "Cmd+W",
+  },
+  {
+    id: "nextTab",
+    label: "Next tab",
+    description: "Cycles forward through open tabs, wrapping at the end.",
+    defaultChord: "Cmd+Shift+]",
+  },
+  {
+    id: "prevTab",
+    label: "Previous tab",
+    description: "Cycles backward through open tabs, wrapping at the start.",
+    defaultChord: "Cmd+Shift+[",
+  },
+  ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
+    (n): ShortcutAction => ({
+      id: `jumpTab${n}`,
+      label: `Jump to tab ${n}`,
+      description:
+        n === 9
+          ? "Jumps to the rightmost tab in the strip."
+          : `Activates the ${ordinal(n)} tab in the strip (pinned tabs count first).`,
+      defaultChord: `Cmd+${n}`,
+    }),
+  ),
+  {
     id: "drawerLogs",
     label: "Drawer: open logs tab",
     description: "Opens the logs tab inside the resource detail drawer.",
@@ -259,4 +296,9 @@ export function captureChord(
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function ordinal(n: number): string {
+  const suffix = ["th", "st", "nd", "rd"][n % 10 < 4 && (n % 100 < 11 || n % 100 > 13) ? n % 10 : 0];
+  return `${n}${suffix}`;
 }
