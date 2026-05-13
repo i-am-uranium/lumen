@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Pin, PinOff, Plus, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,14 @@ import {
   visibleOrder,
   type Tab,
 } from "@/state/tabs";
+
+/**
+ * Stable empty-array reference for selectors below. Using `?? []`
+ * inline would allocate a fresh array each render, breaking zustand's
+ * Object.is equality check and causing a render-loop until the pane
+ * finishes initialising (visible as a tab-strip flicker on tab open).
+ */
+const EMPTY_TABS: readonly Tab[] = [];
 
 /**
  * Horizontal tab strip — one strip per pane. Each tab is a frozen URL;
@@ -25,7 +33,7 @@ import {
 export function TabBar({ paneId }: { paneId: string }) {
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
-  const tabs = useTabsStore((s) => s.byPane[paneId]?.tabs ?? []);
+  const tabs = useTabsStore((s) => s.byPane[paneId]?.tabs ?? EMPTY_TABS);
   const activeId = useTabsStore((s) => s.byPane[paneId]?.activeId ?? null);
   const ordered = visibleOrder(tabs);
 
@@ -60,9 +68,17 @@ export function TabBar({ paneId }: { paneId: string }) {
   };
 
   const onAdd = () => {
-    if (activeId) useTabsStore.getState().syncActiveUrl(paneId, pathname + search);
-    useTabsStore.getState().openTab(paneId, TABS_NEW_URL);
-    navigate(TABS_NEW_URL);
+    // Wrap the three state writes in startTransition so React batches
+    // them into a single render commit — without this the user sees an
+    // intermediate frame between the tab-strip swap and the route
+    // navigation, which reads as flicker.
+    startTransition(() => {
+      if (activeId) {
+        useTabsStore.getState().syncActiveUrl(paneId, pathname + search);
+      }
+      useTabsStore.getState().openTab(paneId, TABS_NEW_URL);
+      navigate(TABS_NEW_URL);
+    });
   };
 
   const onContextMenu = (e: React.MouseEvent, tab: Tab) => {
