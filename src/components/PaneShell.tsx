@@ -9,8 +9,10 @@ import {
 } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { PaneProvider } from "@/components/PaneContext";
+import { PaneErrorBoundary } from "@/components/PaneErrorBoundary";
 import { TabBar, TabsSyncer } from "@/components/TabBar";
 import { usePanesStore } from "@/state/panes";
+import { useTabsStore } from "@/state/tabs";
 
 // Lazy route components — same imports as App.tsx used pre-split,
 // duplicated here so PaneShell owns its own routes tree. Each pane
@@ -114,6 +116,31 @@ const HelmUpgradeWizard = lazy(() =>
     named("HelmUpgradeWizard"),
   ),
 );
+
+/**
+ * Wraps the route tree in an error boundary so any uncaught render
+ * error (e.g. a transient Tauri API failure) blanks only the route
+ * area, not the whole app. The boundary's reset key is the inner
+ * pane URL — switching tabs or routes clears the error automatically.
+ */
+function PaneRouteSurface({ paneId }: { paneId: string }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const url = location.pathname + location.search;
+  return (
+    <PaneErrorBoundary
+      resetKey={url}
+      onReset={() => {
+        // Send the user back to fleet — both in this pane's router and
+        // its active tab — so they're never stuck on a crashing URL.
+        useTabsStore.getState().syncActiveUrl(paneId, "/cluster");
+        navigate("/cluster");
+      }}
+    >
+      <PaneRoutes />
+    </PaneErrorBoundary>
+  );
+}
 
 function PaneRoutes() {
   return (
@@ -262,7 +289,7 @@ export function PaneShell({
           )}
           <TabBar paneId={paneId} />
           <div className="flex-1 overflow-hidden">
-            <PaneRoutes />
+            <PaneRouteSurface paneId={paneId} />
           </div>
         </PaneProvider>
       </MemoryRouter>
