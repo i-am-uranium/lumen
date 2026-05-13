@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   BellRing,
-  Bot,
   CheckCheck,
   Clock3,
   ExternalLink,
@@ -87,27 +86,6 @@ function eventsPath(ctx: string, resource: AlertResourceRef): string {
   return `/cluster/${encodeURIComponent(ctx)}/events${params.size ? `?${params.toString()}` : ""}`;
 }
 
-function alertAiContext(ctx: string, alerts: AlertInboxItem[]): string {
-  return [
-    "alert_inbox:",
-    `cluster=${ctx || "unknown"}`,
-    alerts.length
-      ? alerts
-          .map((alert) =>
-            [
-              `- severity=${alert.severity}`,
-              `rule=${alert.ruleId}`,
-              `resource=${alert.resource.kind}/${alert.resource.namespace ?? "-"}/${alert.resource.name}`,
-              `title=${alert.title}`,
-              `evidence=${alert.evidence.join("; ")}`,
-              `next=${alert.nextChecks.join("; ")}`,
-            ].join(" "),
-          )
-          .join("\n")
-      : "none",
-  ].join("\n");
-}
-
 function relTime(ms: number | null, nowMs: number): string {
   if (ms === null) return "unknown";
   const sec = Math.max(0, Math.floor((nowMs - ms) / 1_000));
@@ -145,7 +123,6 @@ function matchesSearch(alert: StatefulAlertInboxItem, search: string): boolean {
 export function AlertInboxView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
-  const navigate = useNavigate();
   const selectedNamespace = useUiSettings(
     (s) => s.selectedNamespaces[context] ?? "",
   );
@@ -314,15 +291,6 @@ export function AlertInboxView() {
     if (selectedNamespace) void networkQuery.refetch();
   }, [networkQuery, nodesQuery, selectedNamespace, workloadQueries]);
 
-  const askAi = useCallback(
-    (selectedAlerts: AlertInboxItem[]) => {
-      const key = `lumen-ai-context-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      window.sessionStorage.setItem(key, alertAiContext(context, selectedAlerts));
-      navigate(`/cluster/${encodeURIComponent(context)}/ai?task=alert-inbox&aiContext=${encodeURIComponent(key)}`);
-    },
-    [context, navigate],
-  );
-
   function openResource(resource: AlertResourceRef) {
     setDrawerResource({
       kind: resource.kind,
@@ -362,10 +330,6 @@ export function AlertInboxView() {
             <Button onClick={refetchAll} disabled={isFetching}>
               <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
               refresh
-            </Button>
-            <Button type="button" onClick={() => askAi(visibleAlerts.length ? visibleAlerts : alerts)} disabled={alerts.length === 0}>
-              <Bot className="size-3.5" />
-              ask AI
             </Button>
           </div>
         }
@@ -455,7 +419,6 @@ export function AlertInboxView() {
                 alert={alert}
                 nowMs={nowMs}
                 onOpenResource={openResource}
-                onAskAi={() => askAi([alert])}
                 onAcknowledge={() => acknowledge(alert.fingerprint)}
                 onUnacknowledge={() => unacknowledge(alert.fingerprint)}
                 onSnooze={() => snooze(alert.fingerprint, Date.now() + 30 * 60_000)}
@@ -531,7 +494,6 @@ function AlertCard({
   alert,
   nowMs,
   onOpenResource,
-  onAskAi,
   onAcknowledge,
   onUnacknowledge,
   onSnooze,
@@ -541,7 +503,6 @@ function AlertCard({
   alert: StatefulAlertInboxItem;
   nowMs: number;
   onOpenResource: (resource: AlertResourceRef) => void;
-  onAskAi: () => void;
   onAcknowledge: () => void;
   onUnacknowledge: () => void;
   onSnooze: () => void;
@@ -616,10 +577,6 @@ function AlertCard({
               <FileWarning className="size-3.5" />
               events
             </Link>
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={onAskAi}>
-            <Bot className="size-3.5" />
-            AI
           </Button>
           {alert.acknowledged ? (
             <Button type="button" variant="ghost" size="sm" onClick={onUnacknowledge}>

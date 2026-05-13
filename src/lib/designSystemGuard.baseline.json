@@ -8,14 +8,14 @@
     "src/routes/cluster/CloudMap.tsx:1213",
     "src/routes/cluster/CloudMap.tsx:1228",
     "src/routes/cluster/CloudMap.tsx:1314",
-    "src/routes/cluster/ClusterWorkspace.tsx:887",
+    "src/routes/cluster/ClusterWorkspace.tsx:963",
     "src/routes/cluster/EventsView.tsx:324",
     "src/routes/cluster/EventsView.tsx:336",
     "src/routes/cluster/FleetView.tsx:255",
     "src/routes/cluster/FleetView.tsx:402",
     "src/routes/cluster/FleetView.tsx:520",
-    "src/routes/cluster/LogsTab.tsx:481",
-    "src/routes/cluster/LogsTab.tsx:489",
+    "src/routes/cluster/LogsTab.tsx:509",
+    "src/routes/cluster/LogsTab.tsx:517",
     "src/routes/cluster/NodesView.tsx:307"
   ],
   "rawHexColors": [

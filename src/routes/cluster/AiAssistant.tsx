@@ -24,6 +24,11 @@ import { toast } from "sonner";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ai, type AiCommandRunResult, type AiProviderStatus, type AiRunResult } from "@/lib/ai";
 import {
+  readAiAssistantSettings,
+  writeAiAssistantSettings,
+  type AiProviderId,
+} from "@/lib/aiSettings";
+import {
   createSessionId,
   listAiSessions,
   saveAiSession,
@@ -99,52 +104,6 @@ const TASKS: Array<{
 ];
 
 const CONTEXT_KINDS: WorkloadKind[] = ["pod", "deployment", "statefulset", "daemonset", "job"];
-const AI_SETTINGS_STORAGE_KEY = "lumen:ai-assistant:settings";
-
-type AiAssistantSettings = {
-  provider: "codex" | "claude";
-  model: string;
-  detailsOpen: boolean;
-  includeHealth: boolean;
-  includeMetrics: boolean;
-  includeNotes: boolean;
-};
-
-function readAiAssistantSettings(): AiAssistantSettings {
-  const defaults = {
-    provider: "codex" as const,
-    model: "",
-    detailsOpen: false,
-    includeHealth: true,
-    includeMetrics: true,
-    includeNotes: true,
-  };
-  if (typeof window === "undefined") {
-    return defaults;
-  }
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(AI_SETTINGS_STORAGE_KEY) ?? "{}") as Partial<AiAssistantSettings>;
-    return {
-      provider: parsed.provider === "claude" ? "claude" : "codex",
-      model: typeof parsed.model === "string" ? parsed.model : "",
-      detailsOpen: parsed.detailsOpen === true,
-      includeHealth: parsed.includeHealth !== false,
-      includeMetrics: parsed.includeMetrics !== false,
-      includeNotes: parsed.includeNotes !== false,
-    };
-  } catch {
-    return defaults;
-  }
-}
-
-function writeAiAssistantSettings(settings: AiAssistantSettings) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  } catch {
-    // Local persistence is best-effort; the assistant remains usable without it.
-  }
-}
 
 export function AiAssistant() {
   const params = useParams();
@@ -193,7 +152,7 @@ export function AiAssistant() {
     // route and re-run the effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [provider, setProvider] = useState<"codex" | "claude">(
+  const [provider, setProvider] = useState<AiProviderId>(
     () => readAiAssistantSettings().provider,
   );
   const [model, setModel] = useState(() => readAiAssistantSettings().model);
@@ -284,7 +243,9 @@ export function AiAssistant() {
   }, [model, selectedProvider]);
 
   useEffect(() => {
+    const previous = readAiAssistantSettings();
     writeAiAssistantSettings({
+      ...previous,
       provider,
       model,
       detailsOpen,

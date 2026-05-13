@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  Bot,
   CheckCircle2,
   ExternalLink,
   FileDown,
@@ -86,27 +85,6 @@ function eventsPath(ctx: string, resource: TriageResourceRef): string {
   return `/cluster/${encodeURIComponent(ctx)}/events${params.size ? `?${params.toString()}` : ""}`;
 }
 
-function issueAiContext(ctx: string, issues: TriageIssue[]): string {
-  return [
-    "incident_triage_issues:",
-    `cluster=${ctx || "unknown"}`,
-    issues.length
-      ? issues
-          .map((issue) =>
-            [
-              `- severity=${issue.severity}`,
-              `group=${issue.group}`,
-              `resource=${issue.resource.kind}/${issue.resource.namespace ?? "-"}/${issue.resource.name}`,
-              `title=${issue.title}`,
-              `evidence=${issue.evidence.join("; ")}`,
-              `next=${issue.nextActions.join("; ")}`,
-            ].join(" "),
-          )
-          .join("\n")
-      : "none",
-  ].join("\n");
-}
-
 function groupSummary(issues: TriageIssue[]): Array<[TriageGroup, number]> {
   const counts = new Map<TriageGroup, number>();
   for (const issue of issues) {
@@ -138,7 +116,6 @@ function matchesSearch(issue: TriageIssue, search: string): boolean {
 export function TriageView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
-  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [activeGroup, setActiveGroup] = useState<TriageGroup | "all">("all");
   const [events, setEvents] = useState<EventLine[]>([]);
@@ -238,15 +215,6 @@ export function TriageView() {
     void nodesQuery.refetch();
   }, [nodesQuery, workloadQueries]);
 
-  const askAi = useCallback(
-    (selectedIssues: TriageIssue[]) => {
-      const key = `lumen-ai-context-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      window.sessionStorage.setItem(key, issueAiContext(context, selectedIssues));
-      navigate(`/cluster/${encodeURIComponent(context)}/ai?task=incident-triage&aiContext=${encodeURIComponent(key)}`);
-    },
-    [context, navigate],
-  );
-
   function openResource(resource: TriageResourceRef) {
     setDrawerResource({
       kind: resource.kind,
@@ -290,14 +258,6 @@ export function TriageView() {
             >
               <FileDown className="size-3.5" />
               export report
-            </Button>
-            <Button
-              type="button"
-              onClick={() => askAi(filteredIssues.length ? filteredIssues : issues)}
-              disabled={issues.length === 0}
-            >
-              <Bot className="size-3.5" />
-              ask AI
             </Button>
           </div>
         }
@@ -378,7 +338,6 @@ export function TriageView() {
                 ctx={context}
                 issue={issue}
                 onOpenResource={openResource}
-                onAskAi={() => askAi([issue])}
               />
             ))}
           </div>
@@ -463,12 +422,10 @@ function IssueCard({
   ctx,
   issue,
   onOpenResource,
-  onAskAi,
 }: {
   ctx: string;
   issue: TriageIssue;
   onOpenResource: (resource: TriageResourceRef) => void;
-  onAskAi: () => void;
 }) {
   const logs = logsPath(ctx, issue.resource);
   const resourceLabel = `${issue.resource.kind}/${issue.resource.name}`;
@@ -526,10 +483,6 @@ function IssueCard({
               <FileWarning className="size-3.5" />
               events
             </Link>
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={onAskAi}>
-            <Bot className="size-3.5" />
-            AI
           </Button>
         </div>
       </div>
