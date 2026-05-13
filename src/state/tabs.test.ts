@@ -107,15 +107,28 @@ describe("useTabsStore.closeTab", () => {
     expect(getPaneTabs(PANE).activeId).toBe(a);
   });
 
-  it("never empties the strip — closing the last tab resets it to fleet", () => {
+  it("does not close the last tab", () => {
     useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
     const only = getPaneTabs(PANE).tabs[0].id;
-    const newId = useTabsStore.getState().closeTab(PANE, only);
+    const nextId = useTabsStore.getState().closeTab(PANE, only);
     const pane = getPaneTabs(PANE);
     expect(pane.tabs).toHaveLength(1);
-    expect(pane.tabs[0].url).toBe("/cluster");
-    expect(pane.activeId).toBe(newId);
+    expect(pane.tabs[0].id).toBe(only);
+    expect(pane.tabs[0].url).toBe("/cluster/a/workloads");
+    expect(nextId).toBe(only);
     expect(pane.activeId).toBe(pane.tabs[0].id);
+  });
+
+  it("does not replace the tab when the only tab is already fleet", () => {
+    useTabsStore.getState().openTab(PANE, "/cluster");
+    const only = getPaneTabs(PANE).tabs[0].id;
+    const nextId = useTabsStore.getState().closeTab(PANE, only);
+    const pane = getPaneTabs(PANE);
+    expect(nextId).toBe(only);
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0].id).toBe(only);
+    expect(pane.tabs[0].url).toBe("/cluster");
+    expect(pane.activeId).toBe(only);
   });
 });
 
@@ -172,6 +185,37 @@ describe("useTabsStore.ensureSeeded", () => {
     useTabsStore.getState().ensureSeeded(PANE, "/cluster/b/workloads");
     expect(getPaneTabs(PANE).tabs).toHaveLength(1);
     expect(getPaneTabs(PANE).activeId).toBe(a);
+  });
+
+  it("repairs duplicate persisted tabs for the same url", () => {
+    useTabsStore.setState({
+      byPane: {
+        [PANE]: {
+          activeId: "dup-2",
+          tabs: [
+            {
+              id: "dup-1",
+              url: "/cluster/prod/workloads",
+              title: "prod · Workloads",
+              context: "prod",
+            },
+            {
+              id: "dup-2",
+              url: "/cluster/prod/workloads",
+              title: "prod · Workloads",
+              context: "prod",
+            },
+          ],
+        },
+      },
+    });
+
+    useTabsStore.getState().ensureSeeded(PANE, "/cluster/prod/workloads");
+
+    const pane = getPaneTabs(PANE);
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0].url).toBe("/cluster/prod/workloads");
+    expect(pane.activeId).toBe(pane.tabs[0].id);
   });
 });
 

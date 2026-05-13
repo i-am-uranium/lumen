@@ -40,6 +40,14 @@ describe("<TabBar />", () => {
     expect(pane.activeId).toBe(pane.tabs[0].id);
   });
 
+  it("does not expose a close button for the only tab", async () => {
+    harness("/cluster/prod/workloads");
+    const onlyTab = (await screen.findByText("prod · Workloads")).closest("[role='tab']")!;
+    expect(
+      within(onlyTab as HTMLElement).queryByRole("button", { name: /close tab/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("opens a new tab via the + button and navigates to it", async () => {
     harness("/cluster/prod/workloads");
     await screen.findByText("prod · Workloads");
@@ -47,6 +55,50 @@ describe("<TabBar />", () => {
     expect(screen.getByTestId("location").textContent).toBe("/cluster");
     expect(getPaneTabs(PANE).tabs).toHaveLength(2);
     expect(screen.getByText("Fleet")).toBeInTheDocument();
+  });
+
+  it("does not overwrite a just-activated tab with the stale router location", () => {
+    const oldId = useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads");
+    const fleetId = useTabsStore.getState().openTab(PANE, "/cluster");
+    expect(getPaneTabs(PANE).activeId).toBe(fleetId);
+
+    harness("/cluster/prod/workloads");
+
+    const pane = getPaneTabs(PANE);
+    expect(pane.tabs.find((t) => t.id === oldId)?.url).toBe(
+      "/cluster/prod/workloads",
+    );
+    expect(pane.tabs.find((t) => t.id === fleetId)?.url).toBe("/cluster");
+  });
+
+  it("dedupes persisted duplicate tabs before rendering", async () => {
+    useTabsStore.setState({
+      byPane: {
+        [PANE]: {
+          activeId: "dup-2",
+          tabs: [
+            {
+              id: "dup-1",
+              url: "/cluster/prod/workloads",
+              title: "prod · Workloads",
+              context: "prod",
+            },
+            {
+              id: "dup-2",
+              url: "/cluster/prod/workloads",
+              title: "prod · Workloads",
+              context: "prod",
+            },
+          ],
+        },
+      },
+    });
+
+    harness("/cluster/prod/workloads");
+
+    expect(await screen.findByText("prod · Workloads")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(getPaneTabs(PANE).tabs).toHaveLength(1);
   });
 
   it("switches tabs by click, navigating to the stored URL", async () => {
@@ -106,18 +158,17 @@ describe("<TabBar />", () => {
     expect(screen.getByTestId("location").textContent).toBe("/cluster");
   });
 
-  it("resets to fleet when the last tab is closed instead of going empty", async () => {
+  it("keeps the last remaining tab open instead of going empty", async () => {
     harness("/cluster/prod/workloads");
     await screen.findByText("prod · Workloads");
 
-    const only = screen.getByText("prod · Workloads").closest("[role='tab']")!;
-    const closeBtn = within(only as HTMLElement).getByRole("button", {
-      name: /close tab/i,
-    });
-    await userEvent.click(closeBtn);
-
-    expect(screen.getByText("Fleet")).toBeInTheDocument();
-    expect(getPaneTabs(PANE).tabs).toHaveLength(1);
+    const only = screen.getByText("prod · Workloads").closest("[role='tab']") as HTMLElement;
+    expect(within(only).queryByRole("button", { name: /close tab/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("location").textContent).toBe("/cluster/prod/workloads");
+    const pane = getPaneTabs(PANE);
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0].url).toBe("/cluster/prod/workloads");
+    expect(pane.activeId).toBe(pane.tabs[0].id);
   });
 
   it("preserves the prior tab's title when a new tab is opened over it", async () => {

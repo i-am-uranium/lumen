@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
@@ -327,14 +327,16 @@ function GlobalShortcuts() {
   useShortcut("newTab", openNewTab);
 
   const closeActiveTab = useCallback(() => {
-    const pane = useTabsStore.getState().byPane[focusedId];
-    if (!pane?.activeId) return;
-    const nextId = useTabsStore.getState().closeTab(focusedId, pane.activeId);
-    if (!nextId) return;
-    const tab = useTabsStore.getState().byPane[focusedId]?.tabs.find(
-      (t) => t.id === nextId,
-    );
-    if (tab) navigateFocused(tab.url);
+    startTransition(() => {
+      const pane = useTabsStore.getState().byPane[focusedId];
+      if (!pane?.activeId) return;
+      const nextId = useTabsStore.getState().closeTab(focusedId, pane.activeId);
+      if (!nextId) return;
+      const tab = useTabsStore.getState().byPane[focusedId]?.tabs.find(
+        (t) => t.id === nextId,
+      );
+      if (tab) navigateFocused(tab.url);
+    });
   }, [focusedId]);
   useShortcut("closeTab", closeActiveTab);
 

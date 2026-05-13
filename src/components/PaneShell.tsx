@@ -235,11 +235,13 @@ function PaneLocationBridge({ paneId }: { paneId: string }) {
 
   // store → inner (chrome-driven navigation)
   useEffect(() => {
-    if (storeUrl !== innerUrl) {
-      navigate(storeUrl);
+    const latestStoreUrl =
+      usePanesStore.getState().panes.find((p) => p.id === paneId)?.url ?? "/";
+    if (latestStoreUrl !== innerUrl) {
+      navigate(latestStoreUrl);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeUrl, navigate]);
+  }, [paneId, storeUrl, innerUrl, navigate]);
 
   return null;
 }

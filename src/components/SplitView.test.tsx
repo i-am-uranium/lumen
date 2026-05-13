@@ -156,4 +156,26 @@ describe("multi-pane navigation isolation", () => {
 
     expect(usePanesStore.getState().panes[0].url).toBe("/cluster");
   });
+
+  it("clicking the pane tab + keeps the previous tab and stays on fleet", async () => {
+    usePanesStore.setState({
+      panes: [{ id: "only", url: "/cluster/prod/workloads" }],
+      focusedId: "only",
+      sizes: [100],
+      orientation: "horizontal",
+    });
+    useTabsStore.getState().reset();
+
+    render(<SplitView />);
+    await screen.findByTestId("cluster-workspace");
+    expect(await screen.findByText("prod · Workloads")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /new tab/i }));
+
+    expect(await screen.findByTestId("fleet")).toBeInTheDocument();
+    expect(usePanesStore.getState().panes[0].url).toBe("/cluster");
+    expect(useTabsStore.getState().byPane.only?.tabs).toHaveLength(2);
+    expect(screen.getByText("prod · Workloads")).toBeInTheDocument();
+    expect(screen.getByText("Fleet")).toBeInTheDocument();
+  });
 });

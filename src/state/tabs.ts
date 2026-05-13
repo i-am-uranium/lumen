@@ -131,6 +131,31 @@ function writePane(
   return { ...byPane, [paneId]: state };
 }
 
+function repairPaneState(pane: PaneTabsState): PaneTabsState {
+  if (pane.tabs.length < 2) return pane;
+
+  const tabs: Tab[] = [];
+  const indexByUrl = new Map<string, number>();
+  for (const tab of pane.tabs) {
+    const key = normalize(tab.url);
+    const existingIndex = indexByUrl.get(key);
+    if (existingIndex === undefined) {
+      indexByUrl.set(key, tabs.length);
+      tabs.push(tab.url === key ? tab : { ...tab, url: key });
+      continue;
+    }
+    if (tab.id === pane.activeId) {
+      tabs[existingIndex] = tab.url === key ? tab : { ...tab, url: key };
+    }
+  }
+
+  const activeId = tabs.some((tab) => tab.id === pane.activeId)
+    ? pane.activeId
+    : tabs[0]?.id ?? null;
+  if (tabs.length === pane.tabs.length && activeId === pane.activeId) return pane;
+  return { tabs, activeId };
+}
+
 export const useTabsStore = create<Store>()(
   persist(
     (set, get) => ({
@@ -176,17 +201,11 @@ export const useTabsStore = create<Store>()(
         const idx = pane.tabs.findIndex((t) => t.id === id);
         if (idx === -1) return pane.activeId;
 
-        // Last tab: reset it to fleet rather than leaving the user
-        // with an empty strip and no way back.
+        // Last tab: leave it in place rather than churning a synthetic
+        // replacement. The UI hides the close affordance for this case,
+        // and this store-level guard also protects keyboard/context paths.
         if (pane.tabs.length === 1) {
-          const fresh = makeTab(FLEET_URL);
-          set({
-            byPane: writePane(get().byPane, paneId, {
-              tabs: [fresh],
-              activeId: fresh.id,
-            }),
-          });
-          return fresh.id;
+          return pane.activeId;
         }
 
         const nextTabs = pane.tabs.filter((t) => t.id !== id);
@@ -346,6 +365,11 @@ export const useTabsStore = create<Store>()(
 
       ensureSeeded: (paneId, url) => {
         const pane = readPane(get().byPane, paneId);
+        const repaired = repairPaneState(pane);
+        if (repaired !== pane) {
+          set({ byPane: writePane(get().byPane, paneId, repaired) });
+          return;
+        }
         if (pane.tabs.length > 0) return;
         const tab = makeTab(url);
         set({
