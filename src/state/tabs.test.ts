@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { deriveTab, useTabsStore, visibleOrder } from "./tabs";
+import { deriveTab, getPaneTabs, useTabsStore, visibleOrder } from "./tabs";
+
+const PANE = "test-pane";
 
 beforeEach(() => {
   useTabsStore.getState().reset();
@@ -51,139 +53,169 @@ describe("deriveTab", () => {
 });
 
 describe("useTabsStore.openTab", () => {
-  it("creates a new tab and activates it", () => {
-    const id = useTabsStore.getState().openTab("/cluster/prod/workloads");
-    const { tabs, activeId } = useTabsStore.getState();
-    expect(tabs).toHaveLength(1);
-    expect(activeId).toBe(id);
-    expect(tabs[0].title).toBe("prod · Workloads");
-    expect(tabs[0].context).toBe("prod");
+  it("creates a new tab in the given pane and activates it", () => {
+    const id = useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads");
+    const pane = getPaneTabs(PANE);
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.activeId).toBe(id);
+    expect(pane.tabs[0].title).toBe("prod · Workloads");
+    expect(pane.tabs[0].context).toBe("prod");
   });
 
   it("activates the existing tab instead of duplicating on same url", () => {
-    const a = useTabsStore.getState().openTab("/cluster/prod/workloads");
-    useTabsStore.getState().openTab("/cluster/staging/logs");
-    const b = useTabsStore.getState().openTab("/cluster/prod/workloads");
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads");
+    useTabsStore.getState().openTab(PANE, "/cluster/staging/logs");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads");
     expect(a).toBe(b);
-    expect(useTabsStore.getState().tabs).toHaveLength(2);
-    expect(useTabsStore.getState().activeId).toBe(a);
+    expect(getPaneTabs(PANE).tabs).toHaveLength(2);
+    expect(getPaneTabs(PANE).activeId).toBe(a);
   });
 
   it("treats trailing-slash variants as the same url", () => {
-    const a = useTabsStore.getState().openTab("/cluster/prod/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/prod/workloads/");
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads/");
     expect(a).toBe(b);
-    expect(useTabsStore.getState().tabs).toHaveLength(1);
+    expect(getPaneTabs(PANE).tabs).toHaveLength(1);
+  });
+
+  it("keeps tab lists isolated between panes", () => {
+    useTabsStore.getState().openTab("pane-a", "/cluster/a");
+    useTabsStore.getState().openTab("pane-b", "/cluster/b");
+    expect(getPaneTabs("pane-a").tabs).toHaveLength(1);
+    expect(getPaneTabs("pane-b").tabs).toHaveLength(1);
+    expect(getPaneTabs("pane-a").tabs[0].url).toBe("/cluster/a");
+    expect(getPaneTabs("pane-b").tabs[0].url).toBe("/cluster/b");
   });
 });
 
 describe("useTabsStore.closeTab", () => {
   it("shifts focus to the right neighbor when closing the active tab", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().setActive(b);
-    useTabsStore.getState().closeTab(b);
-    expect(useTabsStore.getState().activeId).toBe(c);
-    expect(useTabsStore.getState().tabs.map((t) => t.id)).toEqual([a, c]);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().setActive(PANE, b);
+    useTabsStore.getState().closeTab(PANE, b);
+    expect(getPaneTabs(PANE).activeId).toBe(c);
+    expect(getPaneTabs(PANE).tabs.map((t) => t.id)).toEqual([a, c]);
   });
 
   it("falls back to the left neighbor when closing the rightmost active tab", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    useTabsStore.getState().setActive(b);
-    useTabsStore.getState().closeTab(b);
-    expect(useTabsStore.getState().activeId).toBe(a);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    useTabsStore.getState().setActive(PANE, b);
+    useTabsStore.getState().closeTab(PANE, b);
+    expect(getPaneTabs(PANE).activeId).toBe(a);
   });
 
   it("never empties the strip — closing the last tab resets it to fleet", () => {
-    useTabsStore.getState().openTab("/cluster/a/workloads");
-    const only = useTabsStore.getState().tabs[0].id;
-    const newId = useTabsStore.getState().closeTab(only);
-    const state = useTabsStore.getState();
-    expect(state.tabs).toHaveLength(1);
-    expect(state.tabs[0].url).toBe("/cluster");
-    expect(state.activeId).toBe(newId);
-    expect(state.activeId).toBe(state.tabs[0].id);
+    useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const only = getPaneTabs(PANE).tabs[0].id;
+    const newId = useTabsStore.getState().closeTab(PANE, only);
+    const pane = getPaneTabs(PANE);
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0].url).toBe("/cluster");
+    expect(pane.activeId).toBe(newId);
+    expect(pane.activeId).toBe(pane.tabs[0].id);
   });
 });
 
 describe("useTabsStore.syncActiveUrl", () => {
   it("updates the active tab's url and re-derives the title", () => {
-    const id = useTabsStore.getState().openTab("/cluster/prod/workloads");
-    useTabsStore.getState().syncActiveUrl("/cluster/prod/logs?ns=payments");
-    const tab = useTabsStore.getState().tabs.find((t) => t.id === id)!;
+    const id = useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads");
+    useTabsStore.getState().syncActiveUrl(PANE, "/cluster/prod/logs?ns=payments");
+    const tab = getPaneTabs(PANE).tabs.find((t) => t.id === id)!;
     expect(tab.url).toBe("/cluster/prod/logs?ns=payments");
     expect(tab.title).toBe("prod · Logs · payments");
   });
 
-  it("is a no-op when there's no active tab", () => {
-    useTabsStore.getState().syncActiveUrl("/cluster/prod/workloads");
-    expect(useTabsStore.getState().tabs).toHaveLength(0);
+  it("is a no-op when the pane has no active tab", () => {
+    useTabsStore.getState().syncActiveUrl(PANE, "/cluster/prod/workloads");
+    expect(getPaneTabs(PANE).tabs).toHaveLength(0);
   });
 });
 
 describe("useTabsStore.next/prev", () => {
   it("cycles forward and wraps", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().setActive(a);
-    useTabsStore.getState().next();
-    expect(useTabsStore.getState().activeId).toBe(b);
-    useTabsStore.getState().next();
-    expect(useTabsStore.getState().activeId).toBe(c);
-    useTabsStore.getState().next();
-    expect(useTabsStore.getState().activeId).toBe(a);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().setActive(PANE, a);
+    useTabsStore.getState().next(PANE);
+    expect(getPaneTabs(PANE).activeId).toBe(b);
+    useTabsStore.getState().next(PANE);
+    expect(getPaneTabs(PANE).activeId).toBe(c);
+    useTabsStore.getState().next(PANE);
+    expect(getPaneTabs(PANE).activeId).toBe(a);
   });
 
   it("cycles backward and wraps", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().setActive(a);
-    useTabsStore.getState().prev();
-    expect(useTabsStore.getState().activeId).toBe(c);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().setActive(PANE, a);
+    useTabsStore.getState().prev(PANE);
+    expect(getPaneTabs(PANE).activeId).toBe(c);
   });
 });
 
 describe("useTabsStore.ensureSeeded", () => {
-  it("seeds a tab when the strip is empty", () => {
-    useTabsStore.getState().ensureSeeded("/cluster/prod/workloads");
-    const state = useTabsStore.getState();
-    expect(state.tabs).toHaveLength(1);
-    expect(state.tabs[0].url).toBe("/cluster/prod/workloads");
-    expect(state.activeId).toBe(state.tabs[0].id);
+  it("seeds a tab when the pane is empty", () => {
+    useTabsStore.getState().ensureSeeded(PANE, "/cluster/prod/workloads");
+    const pane = getPaneTabs(PANE);
+    expect(pane.tabs).toHaveLength(1);
+    expect(pane.tabs[0].url).toBe("/cluster/prod/workloads");
+    expect(pane.activeId).toBe(pane.tabs[0].id);
   });
 
   it("is idempotent — leaves existing tabs untouched", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    useTabsStore.getState().ensureSeeded("/cluster/b/workloads");
-    expect(useTabsStore.getState().tabs).toHaveLength(1);
-    expect(useTabsStore.getState().activeId).toBe(a);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    useTabsStore.getState().ensureSeeded(PANE, "/cluster/b/workloads");
+    expect(getPaneTabs(PANE).tabs).toHaveLength(1);
+    expect(getPaneTabs(PANE).activeId).toBe(a);
+  });
+});
+
+describe("initPane / removePane", () => {
+  it("initPane seeds a tab from the given url", () => {
+    useTabsStore.getState().initPane(PANE, "/cluster/prod/workloads");
+    expect(getPaneTabs(PANE).tabs).toHaveLength(1);
+    expect(getPaneTabs(PANE).tabs[0].url).toBe("/cluster/prod/workloads");
+  });
+
+  it("initPane is idempotent — doesn't reseed an already-initialised pane", () => {
+    useTabsStore.getState().initPane(PANE, "/cluster/a");
+    useTabsStore.getState().initPane(PANE, "/cluster/b");
+    expect(getPaneTabs(PANE).tabs).toHaveLength(1);
+    expect(getPaneTabs(PANE).tabs[0].url).toBe("/cluster/a");
+  });
+
+  it("removePane drops a pane's tabs entry", () => {
+    useTabsStore.getState().openTab(PANE, "/cluster/prod/workloads");
+    useTabsStore.getState().removePane(PANE);
+    expect(getPaneTabs(PANE).tabs).toHaveLength(0);
   });
 });
 
 describe("pin / unpin", () => {
   it("pinning moves the tab to the pinned section without changing active", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().setActive(b);
-    useTabsStore.getState().pinTab(b);
-    const ordered = visibleOrder(useTabsStore.getState().tabs);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().setActive(PANE, b);
+    useTabsStore.getState().pinTab(PANE, b);
+    const ordered = visibleOrder(getPaneTabs(PANE).tabs);
     expect(ordered.map((t) => t.id)).toEqual([b, a, c]);
-    expect(useTabsStore.getState().activeId).toBe(b);
+    expect(getPaneTabs(PANE).activeId).toBe(b);
     expect(ordered[0].pinned).toBe(true);
   });
 
   it("pinning a second tab appends to the pinned section in order", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().pinTab(a);
-    useTabsStore.getState().pinTab(b);
-    expect(visibleOrder(useTabsStore.getState().tabs).map((t) => t.id)).toEqual([
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().pinTab(PANE, a);
+    useTabsStore.getState().pinTab(PANE, b);
+    expect(visibleOrder(getPaneTabs(PANE).tabs).map((t) => t.id)).toEqual([
       a,
       b,
       expect.any(String),
@@ -191,13 +223,13 @@ describe("pin / unpin", () => {
   });
 
   it("unpinning moves the tab to the start of the unpinned section", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().pinTab(a);
-    useTabsStore.getState().pinTab(b);
-    useTabsStore.getState().unpinTab(a);
-    expect(visibleOrder(useTabsStore.getState().tabs).map((t) => t.id)).toEqual([
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().pinTab(PANE, a);
+    useTabsStore.getState().pinTab(PANE, b);
+    useTabsStore.getState().unpinTab(PANE, a);
+    expect(visibleOrder(getPaneTabs(PANE).tabs).map((t) => t.id)).toEqual([
       b,
       a,
       c,
@@ -205,24 +237,24 @@ describe("pin / unpin", () => {
   });
 
   it("ignores pinning when already pinned (and vice versa)", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    useTabsStore.getState().pinTab(a);
-    const snapshot = useTabsStore.getState().tabs;
-    useTabsStore.getState().pinTab(a);
-    expect(useTabsStore.getState().tabs).toEqual(snapshot);
-    useTabsStore.getState().unpinTab(a);
-    useTabsStore.getState().unpinTab(a);
-    expect(useTabsStore.getState().tabs.find((t) => t.id === a)?.pinned).toBeFalsy();
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    useTabsStore.getState().pinTab(PANE, a);
+    const snapshot = getPaneTabs(PANE).tabs;
+    useTabsStore.getState().pinTab(PANE, a);
+    expect(getPaneTabs(PANE).tabs).toEqual(snapshot);
+    useTabsStore.getState().unpinTab(PANE, a);
+    useTabsStore.getState().unpinTab(PANE, a);
+    expect(getPaneTabs(PANE).tabs.find((t) => t.id === a)?.pinned).toBeFalsy();
   });
 });
 
 describe("reorderTab", () => {
   it("moves a tab within the unpinned section", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().reorderTab(0, 2);
-    expect(visibleOrder(useTabsStore.getState().tabs).map((t) => t.id)).toEqual([
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().reorderTab(PANE, 0, 2);
+    expect(visibleOrder(getPaneTabs(PANE).tabs).map((t) => t.id)).toEqual([
       b,
       c,
       a,
@@ -230,14 +262,12 @@ describe("reorderTab", () => {
   });
 
   it("clamps cross-section drags so the pin invariant holds", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().pinTab(a); // visible: [a*, b, c]
-    // Try to drag unpinned "c" (index 2) all the way into pinned (index 0).
-    // Should clamp to the first unpinned slot (index 1) → no change.
-    useTabsStore.getState().reorderTab(2, 0);
-    expect(visibleOrder(useTabsStore.getState().tabs).map((t) => t.id)).toEqual([
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().pinTab(PANE, a); // visible: [a*, b, c]
+    useTabsStore.getState().reorderTab(PANE, 2, 0);
+    expect(visibleOrder(getPaneTabs(PANE).tabs).map((t) => t.id)).toEqual([
       a,
       c,
       b,
@@ -247,61 +277,59 @@ describe("reorderTab", () => {
 
 describe("closeOthers / closeToRight", () => {
   it("closeOthers keeps the anchor plus all pinned tabs", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().pinTab(a);
-    useTabsStore.getState().closeOthers(c);
-    const ids = useTabsStore.getState().tabs.map((t) => t.id).sort();
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().pinTab(PANE, a);
+    useTabsStore.getState().closeOthers(PANE, c);
+    const ids = getPaneTabs(PANE).tabs.map((t) => t.id).sort();
     expect(ids).toEqual([a, c].sort());
-    expect(useTabsStore.getState().activeId).toBe(c);
+    expect(getPaneTabs(PANE).activeId).toBe(c);
     void b;
   });
 
   it("closeToRight closes unpinned tabs strictly after the anchor", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    const d = useTabsStore.getState().openTab("/cluster/d/workloads");
-    useTabsStore.getState().setActive(d);
-    useTabsStore.getState().closeToRight(b);
-    expect(visibleOrder(useTabsStore.getState().tabs).map((t) => t.id)).toEqual([
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    const d = useTabsStore.getState().openTab(PANE, "/cluster/d/workloads");
+    useTabsStore.getState().setActive(PANE, d);
+    useTabsStore.getState().closeToRight(PANE, b);
+    expect(visibleOrder(getPaneTabs(PANE).tabs).map((t) => t.id)).toEqual([
       a,
       b,
     ]);
-    // Active was closed → focus shifts to the anchor.
-    expect(useTabsStore.getState().activeId).toBe(b);
+    expect(getPaneTabs(PANE).activeId).toBe(b);
     void c;
   });
 });
 
 describe("duplicateTab", () => {
   it("inserts a copy after the source and activates it", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads?ns=ops");
-    useTabsStore.getState().openTab("/cluster/b/workloads");
-    const copyId = useTabsStore.getState().duplicateTab(a);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads?ns=ops");
+    useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const copyId = useTabsStore.getState().duplicateTab(PANE, a);
     expect(copyId).toBeTruthy();
-    const tabs = useTabsStore.getState().tabs;
+    const tabs = getPaneTabs(PANE).tabs;
     const aIdx = tabs.findIndex((t) => t.id === a);
     expect(tabs[aIdx + 1].id).toBe(copyId);
     expect(tabs[aIdx + 1].url).toBe("/cluster/a/workloads?ns=ops");
-    expect(useTabsStore.getState().activeId).toBe(copyId);
+    expect(getPaneTabs(PANE).activeId).toBe(copyId);
   });
 });
 
 describe("jumpToIndex", () => {
   it("activates the tab at the given visible-order index", () => {
-    const a = useTabsStore.getState().openTab("/cluster/a/workloads");
-    const b = useTabsStore.getState().openTab("/cluster/b/workloads");
-    const c = useTabsStore.getState().openTab("/cluster/c/workloads");
-    useTabsStore.getState().pinTab(b); // visible: [b*, a, c]
-    useTabsStore.getState().jumpToIndex(0);
-    expect(useTabsStore.getState().activeId).toBe(b);
-    useTabsStore.getState().jumpToIndex(2);
-    expect(useTabsStore.getState().activeId).toBe(c);
-    useTabsStore.getState().jumpToIndex(99);
-    // Out-of-range jumps are no-ops; activeId stays put.
-    expect(useTabsStore.getState().activeId).toBe(c);
+    const a = useTabsStore.getState().openTab(PANE, "/cluster/a/workloads");
+    const b = useTabsStore.getState().openTab(PANE, "/cluster/b/workloads");
+    const c = useTabsStore.getState().openTab(PANE, "/cluster/c/workloads");
+    useTabsStore.getState().pinTab(PANE, b); // visible: [b*, a, c]
+    useTabsStore.getState().jumpToIndex(PANE, 0);
+    expect(getPaneTabs(PANE).activeId).toBe(b);
+    useTabsStore.getState().jumpToIndex(PANE, 2);
+    expect(getPaneTabs(PANE).activeId).toBe(c);
+    useTabsStore.getState().jumpToIndex(PANE, 99);
+    expect(getPaneTabs(PANE).activeId).toBe(c);
     void a;
   });
 });

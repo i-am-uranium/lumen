@@ -2,34 +2,35 @@ import { useEffect, useRef, useState } from "react";
 import { Pin, PinOff, Plus, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { TABS_NEW_URL, useTabsStore, visibleOrder, type Tab } from "@/state/tabs";
+import {
+  TABS_NEW_URL,
+  getPaneTabs,
+  useTabsStore,
+  visibleOrder,
+  type Tab,
+} from "@/state/tabs";
 
 /**
- * Horizontal tab strip. Each tab is a frozen URL — clicking navigates
- * to it; in-app navigation updates the active tab's URL in place via
- * <TabsSyncer />. Multiple tabs across different cluster contexts
- * let users keep several investigations open without losing place.
+ * Horizontal tab strip — one strip per pane. Each tab is a frozen URL;
+ * clicking navigates to it via the pane's local MemoryRouter, so
+ * switching tabs in one pane does not affect any other pane.
  *
  * Interactions:
- *   - Left click       → switch to tab
+ *   - Left click       → switch to tab (this pane only)
  *   - Middle click / X → close (pinned tabs hide the X; middle still closes)
  *   - Right click      → context menu (close, others, right, duplicate, pin)
  *   - Drag             → reorder within section
- *   - +                → new fleet tab
+ *   - +                → new fleet tab in this pane
  */
-export function TabBar() {
+export function TabBar({ paneId }: { paneId: string }) {
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
-  const tabs = useTabsStore((s) => s.tabs);
-  const activeId = useTabsStore((s) => s.activeId);
+  const tabs = useTabsStore((s) => s.byPane[paneId]?.tabs ?? []);
+  const activeId = useTabsStore((s) => s.byPane[paneId]?.activeId ?? null);
   const ordered = visibleOrder(tabs);
 
-  // Drag state. We track the source index in the visible order; the
-  // destination index is computed on dragover from the target's index.
   const [dragFromIndex, setDragFromIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-
-  // Right-click menu — position + which tab it's anchored to.
   const [menu, setMenu] = useState<{ tab: Tab; x: number; y: number } | null>(
     null,
   );
@@ -37,35 +38,30 @@ export function TabBar() {
   if (tabs.length === 0) return null;
 
   const navigateToTab = (id: string) => {
-    const tab = useTabsStore.getState().tabs.find((t) => t.id === id);
+    const tab = getPaneTabs(paneId).tabs.find((t) => t.id === id);
     if (tab) navigate(tab.url);
   };
 
   const onSelect = (id: string) => {
     if (id === activeId) return;
-    useTabsStore.getState().setActive(id);
+    useTabsStore.getState().setActive(paneId, id);
     navigateToTab(id);
   };
 
   const onClose = (id: string) => {
-    const nextId = useTabsStore.getState().closeTab(id);
+    const nextId = useTabsStore.getState().closeTab(paneId, id);
     if (nextId && nextId !== activeId) navigateToTab(nextId);
   };
 
   const onMiddleClick = (id: string, e: React.MouseEvent) => {
-    // Middle-click closes the tab — works on pinned tabs too since the
-    // X is hidden in that state but users still need a way out.
     if (e.button !== 1) return;
     e.preventDefault();
     onClose(id);
   };
 
   const onAdd = () => {
-    // Stash the current pathname into the active tab before opening a
-    // fresh one, so the user's in-progress view isn't lost if it had
-    // drifted from the persisted URL.
-    if (activeId) useTabsStore.getState().syncActiveUrl(pathname + search);
-    useTabsStore.getState().openTab(TABS_NEW_URL);
+    if (activeId) useTabsStore.getState().syncActiveUrl(paneId, pathname + search);
+    useTabsStore.getState().openTab(paneId, TABS_NEW_URL);
     navigate(TABS_NEW_URL);
   };
 
@@ -76,8 +72,6 @@ export function TabBar() {
 
   const onDragStart = (index: number, e: React.DragEvent) => {
     setDragFromIndex(index);
-    // Required for the drag to actually fire in Firefox; we don't use
-    // the payload since the source is tracked in component state.
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", String(index));
   };
@@ -96,7 +90,7 @@ export function TabBar() {
       setDragOverIndex(null);
       return;
     }
-    useTabsStore.getState().reorderTab(dragFromIndex, index);
+    useTabsStore.getState().reorderTab(paneId, dragFromIndex, index);
     setDragFromIndex(null);
     setDragOverIndex(null);
   };
@@ -141,8 +135,6 @@ export function TabBar() {
                     ? "border-accent-primary/40 bg-accent-primary-soft text-accent-primary"
                     : "border-term-border-soft bg-term-bg/70 text-term-muted hover:border-accent-primary/35 hover:text-term-fg",
                   dragTarget && "ring-2 ring-accent-primary/60",
-                  // Pinned tabs are visually narrower so a long pinned
-                  // row doesn't crowd out unpinned tabs.
                   tab.pinned && "max-w-[140px]",
                 )}
               >
@@ -215,23 +207,23 @@ export function TabBar() {
                 onClose(id);
                 return;
               case "closeOthers": {
-                store.closeOthers(id);
+                store.closeOthers(paneId, id);
                 if (activeId !== id) navigateToTab(id);
                 return;
               }
               case "closeRight":
-                store.closeToRight(id);
+                store.closeToRight(paneId, id);
                 return;
               case "duplicate": {
-                const copyId = store.duplicateTab(id);
+                const copyId = store.duplicateTab(paneId, id);
                 if (copyId) navigateToTab(copyId);
                 return;
               }
               case "pin":
-                store.pinTab(id);
+                store.pinTab(paneId, id);
                 return;
               case "unpin":
-                store.unpinTab(id);
+                store.unpinTab(paneId, id);
                 return;
             }
           }}
@@ -275,8 +267,6 @@ function TabContextMenu(props: {
     };
   }, [onClose]);
 
-  // Clamp to viewport so the menu doesn't render off-screen near the
-  // right edge — the strip can sit far right when many tabs are open.
   const viewportW = typeof window === "undefined" ? 1024 : window.innerWidth;
   const left = Math.min(x, viewportW - 200);
 
@@ -315,20 +305,21 @@ function TabContextMenu(props: {
 }
 
 /**
- * Keeps the active tab's URL in sync with the router. Mounted once
- * inside <BrowserRouter>. Also seeds the first tab on initial load so
- * the user never sees an empty strip.
+ * Per-pane location/tab syncer. Mirrors the enclosing MemoryRouter's
+ * location into this pane's tabs entry, seeds the first tab if empty,
+ * and pushes the location into the panes store so the focused-pane
+ * URL stays current for chrome consumers.
  */
-export function TabsSyncer() {
+export function TabsSyncer({ paneId }: { paneId: string }) {
   const { pathname, search } = useLocation();
   const ensureSeeded = useTabsStore((s) => s.ensureSeeded);
   const syncActiveUrl = useTabsStore((s) => s.syncActiveUrl);
 
   useEffect(() => {
     const url = pathname + search;
-    ensureSeeded(url);
-    syncActiveUrl(url);
-  }, [pathname, search, ensureSeeded, syncActiveUrl]);
+    ensureSeeded(paneId, url);
+    syncActiveUrl(paneId, url);
+  }, [paneId, pathname, search, ensureSeeded, syncActiveUrl]);
 
   return null;
 }

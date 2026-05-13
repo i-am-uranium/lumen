@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { openInNewTab, shouldOpenInNewTab } from "@/state/tabs";
+import { usePaneId } from "@/components/PaneContext";
 import {
   ArrowRight,
   BookOpenCheck,
@@ -103,6 +104,7 @@ export function WorkspacesView() {
   const context = decodeURIComponent(ctx);
   const navigate = useNavigate();
   const location = useLocation();
+  const paneId = usePaneId();
 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const addWorkspace = useWorkspacesStore((s) => s.addWorkspace);
@@ -269,6 +271,7 @@ export function WorkspacesView() {
                           const target = buildWorkspaceRestoreUrl(workspace);
                           if (shouldOpenInNewTab(event)) {
                             openInNewTab(
+                              paneId,
                               target,
                               navigate,
                               location.pathname + location.search,
@@ -281,6 +284,7 @@ export function WorkspacesView() {
                           if (event.button !== 1) return;
                           event.preventDefault();
                           openInNewTab(
+                            paneId,
                             buildWorkspaceRestoreUrl(workspace),
                             navigate,
                             location.pathname + location.search,

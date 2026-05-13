@@ -107,6 +107,32 @@ export const REGISTRY: ShortcutAction[] = [
     }),
   ),
   {
+    id: "splitPane",
+    label: "Split pane",
+    description:
+      "Opens a new pane alongside the focused one, cloning its current URL. Use to navigate two clusters side-by-side.",
+    defaultChord: "Cmd+\\",
+  },
+  {
+    id: "closePane",
+    label: "Close pane",
+    description:
+      "Closes the focused pane. No-op when only one pane remains so the user is never left without a workspace.",
+    defaultChord: "Cmd+Shift+W",
+  },
+  {
+    id: "focusNextPane",
+    label: "Focus next pane",
+    description: "Moves focus to the pane on the right, wrapping at the end.",
+    defaultChord: "Cmd+Alt+]",
+  },
+  {
+    id: "focusPrevPane",
+    label: "Focus previous pane",
+    description: "Moves focus to the pane on the left, wrapping at the start.",
+    defaultChord: "Cmd+Alt+[",
+  },
+  {
     id: "drawerLogs",
     label: "Drawer: open logs tab",
     description: "Opens the logs tab inside the resource detail drawer.",
