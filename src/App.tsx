@@ -6,6 +6,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ActivityDrawer } from "@/components/ActivityDrawer";
+import { TabBar, TabsSyncer } from "@/components/TabBar";
+import { TABS_NEW_URL, useTabsStore } from "@/state/tabs";
 import {
   ClusterSwitcher,
   clusterSwitchPath,
@@ -283,6 +285,7 @@ function NavBar() {
  */
 function GlobalShortcuts() {
   const navigate = useNavigate();
+  const { pathname, search } = useLocation();
   const { contextName } = useClusterStore();
   const goLogs = useCallback(() => {
     if (!contextName) return;
@@ -290,6 +293,42 @@ function GlobalShortcuts() {
   }, [contextName, navigate]);
   useShortcut("openLogs", goLogs);
   useShortcut("focusSearch", () => dispatchFocusSearch());
+
+  const openNewTab = useCallback(() => {
+    // Persist the current URL into the active tab so the user's
+    // in-progress view isn't lost when they pop a fresh tab.
+    useTabsStore.getState().syncActiveUrl(pathname + search);
+    useTabsStore.getState().openTab(TABS_NEW_URL);
+    navigate(TABS_NEW_URL);
+  }, [navigate, pathname, search]);
+  useShortcut("newTab", openNewTab);
+
+  const closeActiveTab = useCallback(() => {
+    const { activeId } = useTabsStore.getState();
+    if (!activeId) return;
+    const nextId = useTabsStore.getState().closeTab(activeId);
+    if (!nextId) return;
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === nextId);
+    if (tab) navigate(tab.url);
+  }, [navigate]);
+  useShortcut("closeTab", closeActiveTab);
+
+  const jumpNext = useCallback(() => {
+    useTabsStore.getState().next();
+    const { tabs, activeId } = useTabsStore.getState();
+    const tab = tabs.find((t) => t.id === activeId);
+    if (tab) navigate(tab.url);
+  }, [navigate]);
+  useShortcut("nextTab", jumpNext);
+
+  const jumpPrev = useCallback(() => {
+    useTabsStore.getState().prev();
+    const { tabs, activeId } = useTabsStore.getState();
+    const tab = tabs.find((t) => t.id === activeId);
+    if (tab) navigate(tab.url);
+  }, [navigate]);
+  useShortcut("prevTab", jumpPrev);
+
   return null;
 }
 
@@ -298,8 +337,10 @@ function Shell() {
     <BrowserRouter>
       <Toaster richColors position="bottom-right" />
       <GlobalShortcuts />
+      <TabsSyncer />
       <div className="flex h-screen flex-col bg-term-bg text-term-fg">
         <NavBar />
+        <TabBar />
         <div className="flex-1 overflow-hidden">
           <Suspense
             fallback={

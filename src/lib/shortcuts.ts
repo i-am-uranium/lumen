@@ -70,6 +70,32 @@ export const REGISTRY: ShortcutAction[] = [
     defaultChord: "Cmd+/",
   },
   {
+    id: "newTab",
+    label: "Open new tab",
+    description:
+      "Opens a fresh tab on the fleet view. Use to keep multiple clusters or resources open side-by-side.",
+    defaultChord: "Cmd+T",
+  },
+  {
+    id: "closeTab",
+    label: "Close current tab",
+    description:
+      "Closes the active tab. Closing the last tab resets it to the fleet view.",
+    defaultChord: "Cmd+W",
+  },
+  {
+    id: "nextTab",
+    label: "Next tab",
+    description: "Cycles forward through open tabs, wrapping at the end.",
+    defaultChord: "Cmd+Shift+]",
+  },
+  {
+    id: "prevTab",
+    label: "Previous tab",
+    description: "Cycles backward through open tabs, wrapping at the start.",
+    defaultChord: "Cmd+Shift+[",
+  },
+  {
     id: "drawerLogs",
     label: "Drawer: open logs tab",
     description: "Opens the logs tab inside the resource detail drawer.",
