@@ -28,6 +28,22 @@ Lumen is intentionally local-first:
 - RBAC-aware mutating actions for YAML apply and generic resource delete.
 - Secret YAML redaction by default.
 
+See [docs/FEATURES.md](docs/FEATURES.md) for a fuller feature overview.
+
+## Screenshots
+
+Masked screenshots for workloads, nodes, metrics, security, and cloud map views
+are included in the [feature gallery](docs/FEATURES.md#screenshot-gallery).
+
+## Install
+
+Download the latest release from
+[GitHub Releases](https://github.com/i-am-uranium/lumen/releases/latest).
+
+Lumen ships macOS, Windows, and Linux preview builds. See
+[docs/INSTALL.md](docs/INSTALL.md) for platform-specific install and download
+verification steps.
+
 ## Security Model
 
 - No hosted backend: the app talks to the Kubernetes API directly from the local desktop process.
@@ -80,6 +96,10 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+Release maintainers should use
+[docs/release/RELEASE_CHECKLIST.md](docs/release/RELEASE_CHECKLIST.md) and
+[docs/release/NOTARIZATION.md](docs/release/NOTARIZATION.md).
 
 ## Performance
 

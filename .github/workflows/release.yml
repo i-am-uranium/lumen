@@ -100,7 +100,7 @@ jobs:
               --repo "$REPO" \
               --draft \
               --title "Lumen $TAG" \
-              --notes "Lumen $TAG"
+              --generate-notes
           fi
 
   build-macos:
@@ -375,10 +375,8 @@ jobs:
 
   publish-release:
     name: publish release
-    # build-linux/windows failure should not block macOS release — those
-    # are newer surfaces. Once both are proven, tighten this to require all.
     needs: [detect, build-macos, build-linux, build-windows]
-    if: needs.detect.outputs.should_release == 'true' && always() && needs.build-macos.result == 'success'
+    if: needs.detect.outputs.should_release == 'true' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Flip draft to published
