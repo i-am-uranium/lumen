@@ -318,6 +318,7 @@ function GlobalShortcuts() {
   }, [contextName]);
   useShortcut("openLogs", goLogs);
   useShortcut("focusSearch", () => dispatchFocusSearch());
+  useShortcut("focusSearchFind", () => dispatchFocusSearch());
 
   const openNewTab = useCallback(() => {
     useTabsStore.getState().syncActiveUrl(focusedId, focusedUrl);
