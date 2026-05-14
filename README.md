@@ -30,11 +30,6 @@ Lumen is intentionally local-first:
 
 See [docs/FEATURES.md](docs/FEATURES.md) for a fuller feature overview.
 
-## Screenshots
-
-Masked screenshots for workloads, nodes, metrics, security, and cloud map views
-are included in the [feature gallery](docs/FEATURES.md#screenshot-gallery).
-
 ## Install
 
 Download the latest release from
