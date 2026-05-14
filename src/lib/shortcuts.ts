@@ -70,6 +70,13 @@ export const REGISTRY: ShortcutAction[] = [
     defaultChord: "Cmd+/",
   },
   {
+    id: "focusSearchFind",
+    label: "Focus search (Find)",
+    description:
+      "Alternate binding for focusing the in-page search input. Replaces the browser's default Find shortcut.",
+    defaultChord: "Cmd+F",
+  },
+  {
     id: "newTab",
     label: "Open new tab",
     description:

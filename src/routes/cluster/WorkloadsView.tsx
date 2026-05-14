@@ -49,6 +49,7 @@ import { LumenPage, PageHeader, SectionPanel, ToolbarSurface } from "@/component
 import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
 import { Star } from "lucide-react";
 import { ColumnPicker } from "@/components/ColumnPicker";
+import { NamespacePicker } from "@/components/NamespacePicker";
 import { applyColumnLayout, useUiSettings } from "@/state/uiSettings";
 import { usePinnedResources } from "@/hooks/usePinnedResources";
 import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
@@ -1399,18 +1400,11 @@ export function WorkloadsView() {
                   className="w-[280px] pl-8 text-xs"
                 />
               </div>
-              <select
+              <NamespacePicker
                 value={namespace}
-                onChange={(e) => setNamespace(e.target.value)}
-                className="h-9 rounded-control border border-border-default bg-elevated px-3 py-2 text-xs text-text-primary outline-none transition hover:bg-hover focus-visible:ring-2 focus-visible:ring-primary/45"
-              >
-                <option value="">all namespaces</option>
-                {namespaces.map((ns) => (
-                  <option key={ns} value={ns}>
-                    {ns}
-                  </option>
-                ))}
-              </select>
+                namespaces={namespaces}
+                onChange={setNamespace}
+              />
               <ColumnPicker
                 view={isPodView ? "workloads-pod" : "workloads-other"}
                 columns={(isPodView ? POD_COLUMNS : OTHER_COLUMNS).map((c) => ({
