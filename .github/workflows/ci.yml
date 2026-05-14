@@ -30,11 +30,27 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
       - name: Build
         run: npm run build
 
       - name: Bundle budget
         run: npm run perf:bundle
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   rust:
     name: rust
@@ -66,6 +82,11 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Dependency audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --file src-tauri/Cargo.lock
 
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml

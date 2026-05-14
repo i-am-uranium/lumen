@@ -63,7 +63,7 @@ Every create, apply, edit, patch, delete, scale, restart, trigger, shell, and po
 - `SECURITY.md` with disclosure process.
 - Dependabot for npm and cargo where possible.
 - CI gates: TypeScript, Vitest, Rust tests, formatting, cargo audit, npm audit, secret scanning, CodeQL.
-- Release gates: signed macOS/Windows artifacts where credentials are configured, checksums, SBOM, draft release review.
+- Release gates: signed macOS/Windows artifacts where credentials are configured, checksums, generated release notes, and draft release review.
 - Third-party notices for bundled assets and dependencies before v1.0.
 
 ## Future Plugin / MCP Requirements
