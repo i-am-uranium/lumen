@@ -2,16 +2,6 @@
 
 Use this guide when preparing release assets, README images, or launch posts.
 
-## Current Screenshot Asset
-
-The following masked `ms_aks_stage` screenshot is ready for docs and release
-drafting:
-
-- `docs/assets/screenshots/lumen-ms-aks-stage-workloads-masked.png`
-
-It intentionally masks resource names, table contents, and other
-cluster-specific operational details.
-
 ## Screenshot Checklist
 
 Capture:

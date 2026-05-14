@@ -30,11 +30,6 @@ Lumen is intentionally local-first:
 
 See [docs/FEATURES.md](docs/FEATURES.md) for a fuller feature overview.
 
-## Screenshot
-
-A masked workload explorer screenshot is included in the
-[feature overview](docs/FEATURES.md#screenshot).
-
 ## Install
 
 Download the latest release from

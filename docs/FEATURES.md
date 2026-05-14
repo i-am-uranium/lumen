@@ -4,13 +4,6 @@ Lumen is a local-first Kubernetes desktop workbench. It is built for operators
 and developers who want a capable dashboard without routing cluster access
 through a hosted control plane.
 
-## Screenshot
-
-This public screenshot was captured from `ms_aks_stage` with resource names,
-table rows, and sensitive operational details masked.
-
-![Masked workload explorer screenshot](assets/screenshots/lumen-ms-aks-stage-workloads-masked.png)
-
 ## Cluster Fleet
 
 - Discover kubeconfig contexts and switch between clusters.
