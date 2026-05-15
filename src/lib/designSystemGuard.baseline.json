@@ -16,7 +16,7 @@
     "src/routes/cluster/FleetView.tsx:520",
     "src/routes/cluster/LogsTab.tsx:509",
     "src/routes/cluster/LogsTab.tsx:517",
-    "src/routes/cluster/NodesView.tsx:307"
+    "src/routes/cluster/NodesView.tsx:322"
   ],
   "rawHexColors": [
     "src/components/shell/ShellTerminalHost.tsx:17",

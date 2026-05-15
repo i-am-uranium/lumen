@@ -21,6 +21,7 @@ import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { applyColumnLayout, useUiSettings } from "@/state/uiSettings";
 import { ColumnPicker } from "@/components/ColumnPicker";
 import { usePinnedResources } from "@/hooks/usePinnedResources";
+import { NodeDetailDrawer } from "@/components/NodeDetailDrawer";
 
 function formatBytes(n: number): string {
   const u = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -213,6 +214,7 @@ function Row({
   favorited,
   onToggleFavorite,
   onAction,
+  onSelect,
 }: {
   n: NodeSummary;
   columns: NodeColumn[];
@@ -221,6 +223,7 @@ function Row({
   favorited: boolean;
   onToggleFavorite: (n: NodeSummary) => void;
   onAction: (a: NodeAction) => void;
+  onSelect: (n: NodeSummary) => void;
 }) {
   // `busy` reflects an in-flight server action on this row; `readOnly` is the
   // global app-level switch. Combine them so the buttons disable for either,
@@ -231,8 +234,20 @@ function Row({
     ? `Unfavorite node ${n.name}`
     : `Favorite node ${n.name}`;
   return (
-    <tr className="group border-b border-border-subtle hover:bg-elevated">
-      <td className="w-7 px-1 py-2.5">
+    <tr
+      className="group border-b border-border-subtle hover:bg-elevated cursor-pointer"
+      onClick={() => onSelect(n)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(n);
+        }
+      }}
+      aria-label={`open details for node ${n.name}`}
+    >
+      <td className="w-7 px-1 py-2.5" onClick={(e) => e.stopPropagation()}>
         <button
           type="button"
           onClick={(e) => {
@@ -259,7 +274,7 @@ function Row({
       {columns.map((c) => (
         <React.Fragment key={c.key}>{c.cell(n)}</React.Fragment>
       ))}
-      <td className="px-3 py-2.5">
+      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-1">
           {n.unschedulable ? (
             <button
@@ -348,6 +363,17 @@ export function NodesView() {
   );
   const [pendingAction, setPendingAction] = useState<NodeAction | null>(null);
   const [actionBusyNode, setActionBusyNode] = useState<string | null>(null);
+  const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
+  // Re-resolve the selected node from the latest list so the drawer
+  // reflects refreshed metrics/state without us having to clone the
+  // NodeSummary into state.
+  const selectedNode = useMemo(
+    () =>
+      selectedNodeName
+        ? (nodes.find((n) => n.name === selectedNodeName) ?? null)
+        : null,
+    [nodes, selectedNodeName],
+  );
 
   // Favorites — D10 finish. Reuses the cluster-scoped pinned store so
   // starring a node here surfaces it in the workspace sidebar's
@@ -531,6 +557,7 @@ export function NodesView() {
                         favorited={isFav}
                         onToggleFavorite={() => favorites.toggle(ref)}
                         onAction={setPendingAction}
+                        onSelect={(node) => setSelectedNodeName(node.name)}
                       />
                     );
                   })}
@@ -540,6 +567,11 @@ export function NodesView() {
           </>
         )}
       </div>
+      <NodeDetailDrawer
+        ctx={context}
+        node={selectedNode}
+        onClose={() => setSelectedNodeName(null)}
+      />
       {pendingAction && (
         <ConfirmActionDialog
           open
