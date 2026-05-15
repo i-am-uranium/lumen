@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Activity,
   AlertTriangle,
+  Clipboard,
   Cpu,
   Database,
+  FileText,
   Gauge,
   Loader2,
   MemoryStick,
@@ -27,6 +30,13 @@ import {
   type MetricRollup,
   type Pressure,
 } from "@/lib/metricsExplorer";
+import {
+  buildGitOpsPatch,
+  buildRecommendationPrSummary,
+  recommendResourceChanges,
+  type ResourceRecommendation,
+  type ResourceRecommendationSignal,
+} from "@/lib/resourceRecommendations";
 import { cn } from "@/lib/utils";
 
 type DrawerResource = { kind: string; namespace: string; name: string };
@@ -200,6 +210,269 @@ function PodsTable({
   );
 }
 
+function RecommendationStat({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-panel border border-border-subtle bg-shell px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-text-muted">{label}</div>
+      <div className="mt-1 font-mono text-[17px] font-semibold tabular-nums text-text-primary">
+        {value}
+      </div>
+      <div className="mt-1 text-[11px] text-text-secondary">{helper}</div>
+    </div>
+  );
+}
+
+function recommendationLabel(signal: ResourceRecommendationSignal): string {
+  if (signal === "cpu-downsize") return "CPU downsize";
+  if (signal === "memory-risk") return "memory risk";
+  if (signal === "missing-request") return "missing request";
+  return "missing limit";
+}
+
+function RecommendationSignalBadge({ signal }: { signal: ResourceRecommendationSignal }) {
+  const tone =
+    signal === "memory-risk"
+      ? "border-warning/35 bg-warning-soft text-warning"
+      : signal === "cpu-downsize"
+        ? "border-success/30 bg-success-soft text-success"
+        : "border-info/35 bg-info-soft text-info";
+  return (
+    <span className={cn("rounded-[4px] border px-1.5 py-0.5 text-[10px]", tone)}>
+      {signal}
+    </span>
+  );
+}
+
+function recommendationCurrent(rec: ResourceRecommendation): string {
+  if (rec.signal === "memory-risk") {
+    return formatMemory(rec.currentMemoryRequestBytes);
+  }
+  return formatCpu(rec.currentCpuRequestMilli);
+}
+
+function recommendationTarget(rec: ResourceRecommendation): string {
+  if (rec.signal === "memory-risk") {
+    return formatMemory(rec.recommendedMemoryRequestBytes);
+  }
+  if (rec.recommendedCpuRequestMilli !== null) {
+    return formatCpu(rec.recommendedCpuRequestMilli);
+  }
+  return rec.supported ? "review policy" : "insight only";
+}
+
+function RecommendationActions({
+  context,
+  recommendation,
+}: {
+  context: string;
+  recommendation: ResourceRecommendation;
+}) {
+  const canCopyPatch = recommendation.supported && recommendation.samplePodName;
+
+  async function writeClipboard(text: string, success: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(success);
+    } catch {
+      toast.error("copy failed");
+    }
+  }
+
+  async function copyPatch() {
+    if (!canCopyPatch) return;
+    try {
+      const pod = await k8s.getPodDetails(
+        context,
+        recommendation.namespace,
+        recommendation.samplePodName,
+      );
+      await writeClipboard(buildGitOpsPatch(recommendation, pod), "copied GitOps patch");
+    } catch (error) {
+      toast.error((error as Error).message ?? "failed to build GitOps patch");
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap justify-end gap-1.5">
+      <button
+        type="button"
+        onClick={copyPatch}
+        disabled={!canCopyPatch}
+        title={canCopyPatch ? "copy GitOps patch" : "patch export unavailable for this target"}
+        className="inline-flex h-7 items-center gap-1 rounded-[5px] border border-border-default bg-surface px-2 text-[11px] text-text-secondary hover:border-accent-primary/40 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Clipboard className="size-3" aria-hidden="true" />
+        copy GitOps patch
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          void writeClipboard(
+            buildRecommendationPrSummary(recommendation),
+            "copied PR summary",
+          )
+        }
+        className="inline-flex h-7 items-center gap-1 rounded-[5px] border border-border-default bg-surface px-2 text-[11px] text-text-secondary hover:border-accent-primary/40 hover:text-text-primary"
+      >
+        <FileText className="size-3" aria-hidden="true" />
+        copy PR summary
+      </button>
+    </div>
+  );
+}
+
+function RecommendationsPanel({
+  context,
+  recommendations,
+  onOpen,
+}: {
+  context: string;
+  recommendations: ResourceRecommendation[];
+  onOpen: (resource: DrawerResource) => void;
+}) {
+  const [signal, setSignal] = useState<"all" | ResourceRecommendationSignal>("all");
+  const filtered = useMemo(
+    () =>
+      signal === "all"
+        ? recommendations
+        : recommendations.filter((rec) => rec.signal === signal),
+    [recommendations, signal],
+  );
+  const cpuReclaim = recommendations.reduce(
+    (sum, rec) => sum + rec.reclaimableCpuMilli,
+    0,
+  );
+  const riskCount = recommendations.filter((rec) => rec.signal === "memory-risk").length;
+  const actionableCount = recommendations.filter((rec) => rec.supported).length;
+  const nodeImpact =
+    cpuReclaim >= 1_000
+      ? `${Math.floor(cpuReclaim / 1_000)} potential`
+      : "review";
+
+  return (
+    <section
+      aria-label="resource recommendations"
+      className="mb-4 rounded-panel border border-border-subtle bg-surface"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle px-3 py-2">
+        <div className="flex items-center gap-2 text-[12px] font-medium text-text-primary">
+          <Cpu className="size-3.5" aria-hidden="true" />
+          resource recommendations
+        </div>
+        <label className="flex items-center gap-2 text-[11px] text-text-muted">
+          signal
+          <select
+            value={signal}
+            onChange={(event) => setSignal(event.target.value as typeof signal)}
+            aria-label="recommendation signal"
+            className="h-7 rounded-control border border-border-default bg-shell px-2 text-[11px] text-text-primary outline-none focus:border-accent-primary/50"
+          >
+            <option value="all">all signals</option>
+            <option value="cpu-downsize">CPU downsize</option>
+            <option value="memory-risk">memory risk</option>
+            <option value="missing-request">missing request</option>
+            <option value="missing-limit">missing limit</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="grid gap-2 p-3 md:grid-cols-4">
+        <RecommendationStat
+          label="CPU reclaimable"
+          value={formatCpu(cpuReclaim)}
+          helper="potential request reduction"
+        />
+        <RecommendationStat
+          label="Memory risk"
+          value={String(riskCount)}
+          helper="requests near observed usage"
+        />
+        <RecommendationStat
+          label="Recommendations"
+          value={String(recommendations.length)}
+          helper={`${actionableCount} GitOps patchable`}
+        />
+        <RecommendationStat
+          label="Node impact"
+          value={nodeImpact}
+          helper="depends on autoscaler fit"
+        />
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-shell">
+              {["namespace", "workload", "signal", "current", "recommended", "confidence", "actions"].map((label) => (
+                <th key={label} className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-text-muted">
+                  {label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-3 py-6 text-center text-[12px] text-text-muted">
+                  no recommendations match the selected filters.
+                </td>
+              </tr>
+            ) : (
+              filtered.map((rec) => (
+                <tr key={rec.id} className="border-t border-border-subtle">
+                  <td className="px-3 py-2 font-mono text-[12px] text-text-primary">
+                    {rec.namespace}
+                  </td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpen({
+                          kind: "pod",
+                          namespace: rec.namespace,
+                          name: rec.samplePodName,
+                        })
+                      }
+                      className="text-left font-mono text-[12px] text-text-primary hover:text-accent-primary"
+                      title={`open sample pod · ${rec.reason}`}
+                    >
+                      {rec.workloadKind}/{rec.workloadName}
+                    </button>
+                    <div className="text-[10px] text-text-muted">{recommendationLabel(rec.signal)}</div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <RecommendationSignalBadge signal={rec.signal} />
+                  </td>
+                  <td className="px-3 py-2 font-mono text-[12px] text-text-secondary">
+                    {recommendationCurrent(rec)}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-[12px] text-text-primary">
+                    {recommendationTarget(rec)}
+                  </td>
+                  <td className="px-3 py-2 text-[12px] text-text-secondary">
+                    {rec.confidence}
+                  </td>
+                  <td className="px-3 py-2">
+                    <RecommendationActions context={context} recommendation={rec} />
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function MetricsExplorerView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
@@ -227,6 +500,10 @@ export function MetricsExplorerView() {
         ? summarizeMetricsExplorer(snapshot.data, { namespace, search })
         : null,
     [namespace, search, snapshot.data],
+  );
+  const recommendations = useMemo(
+    () => (snapshot.data ? recommendResourceChanges(snapshot.data) : []),
+    [snapshot.data],
   );
 
   return (
@@ -320,6 +597,12 @@ export function MetricsExplorerView() {
                 </div>
               </div>
             </div>
+
+            <RecommendationsPanel
+              context={context}
+              recommendations={recommendations}
+              onOpen={setDrawerResource}
+            />
 
             <div className="mb-4 rounded-panel border border-border-subtle bg-surface">
               <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2 text-[12px] font-medium text-text-primary">
