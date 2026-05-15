@@ -131,6 +131,25 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Verify Rust toolchain
+        # GitHub-hosted runners (notably macOS-14) sometimes leave a
+        # rustup-init stub at /usr/local/bin/cargo ahead of the real
+        # cargo on PATH. Tauri's `cargo metadata` call then hits the
+        # stub and prints rustup-init usage ("unexpected argument
+        # 'metadata' found"). `rustup default stable` forces the stub
+        # to finish its self-install, and the assertions below fail
+        # loudly here instead of breaking deep inside tauri-action.
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          echo "cargo path: $(command -v cargo)"
+          cargo --version
+          rustc --version
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -268,6 +287,25 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Verify Rust toolchain
+        # GitHub-hosted runners (notably macOS-14) sometimes leave a
+        # rustup-init stub at /usr/local/bin/cargo ahead of the real
+        # cargo on PATH. Tauri's `cargo metadata` call then hits the
+        # stub and prints rustup-init usage ("unexpected argument
+        # 'metadata' found"). `rustup default stable` forces the stub
+        # to finish its self-install, and the assertions below fail
+        # loudly here instead of breaking deep inside tauri-action.
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          echo "cargo path: $(command -v cargo)"
+          cargo --version
+          rustc --version
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -344,6 +382,25 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Verify Rust toolchain
+        # GitHub-hosted runners (notably macOS-14) sometimes leave a
+        # rustup-init stub at /usr/local/bin/cargo ahead of the real
+        # cargo on PATH. Tauri's `cargo metadata` call then hits the
+        # stub and prints rustup-init usage ("unexpected argument
+        # 'metadata' found"). `rustup default stable` forces the stub
+        # to finish its self-install, and the assertions below fail
+        # loudly here instead of breaking deep inside tauri-action.
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          echo "cargo path: $(command -v cargo)"
+          cargo --version
+          rustc --version
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
