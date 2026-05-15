@@ -15,6 +15,7 @@ import {
   DrawerPanel,
   DrawerResizeHandle,
 } from "@/components/lumen/drawer";
+import { CopyableName } from "@/components/lumen/copyable-name";
 import { k8s, type NodeSummary, type WorkloadSummary } from "@/lib/k8s";
 import { useShortcut } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
@@ -204,12 +205,17 @@ export function NodeDetailDrawer({
         <DrawerHeader>
           <Server className="size-4 text-text-secondary" />
           <div className="min-w-0 flex-1">
-            <h2
-              id={titleId}
-              className="mds-heading truncate text-[14px] text-text-primary"
+            <CopyableName
+              value={node.name}
+              className="px-1 -mx-1 py-0.5 min-w-0"
             >
-              {node.name}
-            </h2>
+              <h2
+                id={titleId}
+                className="mds-heading truncate text-[14px] text-text-primary"
+              >
+                {node.name}
+              </h2>
+            </CopyableName>
             <div className="mt-0.5 flex items-center gap-2 text-[11px] text-text-secondary">
               <span
                 className={cn(
