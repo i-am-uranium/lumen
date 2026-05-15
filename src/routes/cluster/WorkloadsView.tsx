@@ -50,6 +50,7 @@ import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
 import { Star } from "lucide-react";
 import { ColumnPicker } from "@/components/ColumnPicker";
 import { NamespacePicker } from "@/components/NamespacePicker";
+import { AutoRefreshPicker } from "@/components/AutoRefreshPicker";
 import { applyColumnLayout, useUiSettings } from "@/state/uiSettings";
 import { usePinnedResources } from "@/hooks/usePinnedResources";
 import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
@@ -1066,11 +1067,17 @@ export function WorkloadsView() {
     staleTime: 60_000,
   });
 
+  const autoRefreshSeconds = useUiSettings((s) => s.workloadsAutoRefreshSeconds);
+  const setAutoRefreshSeconds = useUiSettings((s) => s.setWorkloadsAutoRefreshSeconds);
+  const refetchInterval = autoRefreshSeconds ? autoRefreshSeconds * 1000 : false;
+
   const queries = useQueries({
     queries: kindsToFetch.map((k) => ({
       queryKey: ["k8s", "workloads", context, namespace, k] as const,
       queryFn: () => k8s.listWorkloads(namespace, k, context || undefined),
       staleTime: 5_000,
+      refetchInterval,
+      refetchIntervalInBackground: false,
     })),
   });
 
@@ -1412,6 +1419,10 @@ export function WorkloadsView() {
                   label: c.label,
                   alwaysOn: c.alwaysOn,
                 }))}
+              />
+              <AutoRefreshPicker
+                valueSeconds={autoRefreshSeconds}
+                onChange={setAutoRefreshSeconds}
               />
               <Button onClick={refetchAll} disabled={isFetching}>
                 <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />

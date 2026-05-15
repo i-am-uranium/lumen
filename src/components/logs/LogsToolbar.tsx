@@ -1,4 +1,4 @@
-import { Pause, Play, Eraser, WrapText, Clock, Download, ChevronDown } from "lucide-react";
+import { Pause, Play, Eraser, WrapText, Clock, Download, ChevronDown, History } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { LogsContainerPills, type ContainerOption } from "./LogsContainerPills";
@@ -21,6 +21,7 @@ export function LogsToolbar({
   search, matchCount, currentMatch, regexError, onSearchChange, onSearchPrev, onSearchNext,
   levels, onLevelToggle,
   rangeSeconds, onRangeChange,
+  previous, onPreviousToggle,
   paused, onPauseToggle, pendingCount,
   onClear, wrap, onWrapToggle, timestamps, onTimestampsToggle,
   onDownload, downloading,
@@ -39,6 +40,9 @@ export function LogsToolbar({
   onLevelToggle: (l: Level) => void;
   rangeSeconds: number | null;
   onRangeChange: (seconds: number | null) => void;
+  /** When true, the stream sources `--previous` logs (last terminated container). */
+  previous: boolean;
+  onPreviousToggle: () => void;
   paused: boolean;
   onPauseToggle: () => void;
   pendingCount: number;
@@ -92,13 +96,20 @@ export function LogsToolbar({
       <div className="relative">
         <button
           type="button"
-          onClick={() => setRangeOpen((o) => !o)}
-          className="px-2 py-0.5 rounded text-[10px] border border-border-default text-text-secondary hover:text-text-primary flex items-center gap-1"
+          onClick={() => !previous && setRangeOpen((o) => !o)}
+          disabled={previous}
+          title={previous ? "range is ignored in previous mode" : "log range"}
+          className={cn(
+            "px-2 py-0.5 rounded text-[10px] border border-border-default flex items-center gap-1",
+            previous
+              ? "text-text-muted opacity-50 cursor-not-allowed"
+              : "text-text-secondary hover:text-text-primary",
+          )}
         >
           {rangeLabel}
           <ChevronDown className="size-2.5" />
         </button>
-        {rangeOpen && (
+        {rangeOpen && !previous && (
           <div className="absolute right-0 top-full mt-1 z-10 bg-surface border border-border-default rounded-control shadow-[var(--shadow-popover)] py-1 min-w-[80px]">
             {RANGE_OPTIONS.map((o) => (
               <button
@@ -117,8 +128,34 @@ export function LogsToolbar({
         )}
       </div>
 
+      <div
+        role="group"
+        aria-label="log source"
+        className="flex items-center overflow-hidden rounded border border-border-default"
+      >
+        <SegmentBtn
+          active={!previous}
+          onClick={() => previous && onPreviousToggle()}
+          title="stream live logs"
+        >
+          live
+        </SegmentBtn>
+        <SegmentBtn
+          active={previous}
+          onClick={() => !previous && onPreviousToggle()}
+          title="show logs from the previously terminated container (kubectl --previous)"
+        >
+          <History className="size-2.5" aria-hidden="true" />
+          previous
+        </SegmentBtn>
+      </div>
+
       <div className="flex items-center gap-0.5 ml-auto">
-        <IconBtn onClick={onPauseToggle} title={paused ? `resume (${pendingCount} buffered)` : "pause"}>
+        <IconBtn
+          onClick={onPauseToggle}
+          title={paused ? `resume (${pendingCount} buffered)` : "pause"}
+          disabled={previous}
+        >
           {paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
         </IconBtn>
         <IconBtn onClick={onClear} title="clear buffer">
@@ -135,6 +172,32 @@ export function LogsToolbar({
         </IconBtn>
       </div>
     </div>
+  );
+}
+
+function SegmentBtn({
+  active, onClick, title, children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={cn(
+        "inline-flex items-center gap-1 px-2 py-0.5 text-[10px] uppercase tracking-wide transition-colors",
+        active
+          ? "bg-accent-primary-soft text-accent-primary"
+          : "text-text-secondary hover:bg-elevated hover:text-text-primary",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

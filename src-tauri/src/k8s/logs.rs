@@ -25,6 +25,12 @@ pub struct LogSelector {
     pub container: Option<String>,
     pub since_seconds: Option<i64>,
     pub tail_lines: Option<i64>,
+    /// When true, request logs from the previously terminated container
+    /// (kubectl's `--previous`). Implies `follow=false` and ignores
+    /// `since_seconds` — there's nothing to follow on a dead container
+    /// and the kubelet only retains a single previous log slice.
+    #[serde(default)]
+    pub previous: bool,
 }
 
 /// Known service-mesh / observability sidecar container names. When a pod has
@@ -165,11 +171,25 @@ pub async fn stream_logs(
     channel: Channel<LogLine>,
     cancel: CancellationToken,
 ) -> AppResult<()> {
-    let params = LogParams {
-        follow: true,
-        tail_lines: selector.tail_lines.or(Some(200)),
-        since_seconds: selector.since_seconds,
-        ..Default::default()
+    // Previous-pod mode is a one-shot read of the kubelet's retained
+    // log slice for the last terminated container. Following makes no
+    // sense (nothing is writing), and slicing by since_seconds against
+    // a frozen log only confuses operators digging through a crash.
+    let params = if selector.previous {
+        LogParams {
+            previous: true,
+            follow: false,
+            tail_lines: selector.tail_lines,
+            since_seconds: None,
+            ..Default::default()
+        }
+    } else {
+        LogParams {
+            follow: true,
+            tail_lines: selector.tail_lines.or(Some(200)),
+            since_seconds: selector.since_seconds,
+            ..Default::default()
+        }
     };
 
     // Single-pod path: one-shot, no polling needed.

@@ -1,5 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { LogStream } from "./logStream";
+
+vi.mock("@tauri-apps/api/core", () => {
+  return {
+    Channel: class {
+      onmessage?: (msg: unknown) => void;
+    },
+    invoke: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 describe("LogStream — buffer", () => {
   it("appends lines and assigns monotonic ids", () => {
@@ -116,6 +125,39 @@ describe("LogStream — pause/clear", () => {
     s._flushForTest();
     expect(s.getBuffer()).toHaveLength(1);
     expect(s.getBuffer()[0].text).toBe("b");
+  });
+
+  it("forwards previous=true to stream_logs so the kubelet returns the prior container slice", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const s = new LogStream({
+      pod: "api-1",
+      container: "app",
+      namespace: "prod",
+      previous: true,
+    });
+    s.start();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [cmd, args] = vi.mocked(invoke).mock.calls[0] as [
+      string,
+      { selector: { previous: boolean } },
+    ];
+    expect(cmd).toBe("stream_logs");
+    expect(args.selector.previous).toBe(true);
+    s.stop();
+  });
+
+  it("defaults previous=false when the consumer doesn't specify", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const s = new LogStream({ pod: "api-1", container: "app" });
+    s.start();
+    const [, args] = vi.mocked(invoke).mock.calls[0] as [
+      string,
+      { selector: { previous: boolean } },
+    ];
+    expect(args.selector.previous).toBe(false);
+    s.stop();
   });
 
   it("isPaused reflects state and notifies subscribers on toggle", () => {
