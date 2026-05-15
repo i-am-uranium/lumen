@@ -127,9 +127,28 @@ jobs:
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          toolchain: stable
+          target: ${{ matrix.target }}
+          cache: false
+
+      - name: Verify Rust toolchain
+        # macOS-14 runners ship a rustup-init shim at /usr/local/bin/cargo
+        # that swallows `cargo metadata` and prints rustup-init usage —
+        # Tauri's build then dies with "unexpected argument 'metadata'".
+        # Forcing a default toolchain + asserting the real cargo is first
+        # in PATH catches that failure mode loudly instead of inside tauri.
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          echo "cargo path: $(command -v cargo)"
+          cargo --version
+          rustc --version
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -264,9 +283,28 @@ jobs:
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          toolchain: stable
+          target: ${{ matrix.target }}
+          cache: false
+
+      - name: Verify Rust toolchain
+        # macOS-14 runners ship a rustup-init shim at /usr/local/bin/cargo
+        # that swallows `cargo metadata` and prints rustup-init usage —
+        # Tauri's build then dies with "unexpected argument 'metadata'".
+        # Forcing a default toolchain + asserting the real cargo is first
+        # in PATH catches that failure mode loudly instead of inside tauri.
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          echo "cargo path: $(command -v cargo)"
+          cargo --version
+          rustc --version
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -341,9 +379,28 @@ jobs:
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          toolchain: stable
+          target: ${{ matrix.target }}
+          cache: false
+
+      - name: Verify Rust toolchain
+        # macOS-14 runners ship a rustup-init shim at /usr/local/bin/cargo
+        # that swallows `cargo metadata` and prints rustup-init usage —
+        # Tauri's build then dies with "unexpected argument 'metadata'".
+        # Forcing a default toolchain + asserting the real cargo is first
+        # in PATH catches that failure mode loudly instead of inside tauri.
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          echo "cargo path: $(command -v cargo)"
+          cargo --version
+          rustc --version
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
