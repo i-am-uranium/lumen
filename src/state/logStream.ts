@@ -20,6 +20,8 @@ export class LogStream {
   namespace = "";
   sinceSeconds: number | null = 600;
   tailLines: number | null = 500;
+  /** When true, request the previous terminated container's logs (kubectl --previous). */
+  previous = false;
 
   // Ring-buffer + drop accounting.
   private buffer: LogLine[] = [];
@@ -45,6 +47,7 @@ export class LogStream {
     context?: string;
     sinceSeconds?: number | null;
     tailLines?: number | null;
+    previous?: boolean;
   }) {
     this.pod = key.pod;
     this.container = key.container;
@@ -52,6 +55,7 @@ export class LogStream {
     this.context = key.context;
     if (key.sinceSeconds !== undefined) this.sinceSeconds = key.sinceSeconds;
     if (key.tailLines !== undefined) this.tailLines = key.tailLines;
+    if (key.previous !== undefined) this.previous = key.previous;
   }
 
   /**
@@ -137,6 +141,7 @@ export class LogStream {
         container: this.container,
         since_seconds: this.sinceSeconds,
         tail_lines: this.tailLines,
+        previous: this.previous,
       },
       streamId: id,
       channel,

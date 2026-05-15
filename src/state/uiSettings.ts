@@ -83,7 +83,30 @@ export type UiSettings = {
    * "all namespaces".
    */
   selectedNamespaces: Record<string, string>;
+  /**
+   * Auto-refresh interval for the Workloads (Resource Explorer) view in
+   * seconds. `null` disables auto-refresh — the default. Lives next to
+   * the refresh button in the page header and is persisted so a user
+   * who picked 30s sees fresh data on every visit. Background refresh
+   * is suppressed by tanstack-query when the window is hidden.
+   */
+  workloadsAutoRefreshSeconds: number | null;
 };
+
+/** Allowed picks for the Workloads auto-refresh dropdown (seconds, null = off). */
+export const WORKLOADS_AUTO_REFRESH_OPTIONS: { label: string; seconds: number | null }[] = [
+  { label: "off", seconds: null },
+  { label: "10s", seconds: 10 },
+  { label: "30s", seconds: 30 },
+  { label: "1m", seconds: 60 },
+  { label: "5m", seconds: 300 },
+];
+
+function normalizeAutoRefresh(raw: unknown): number | null {
+  if (raw === null) return null;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  return WORKLOADS_AUTO_REFRESH_OPTIONS.some((o) => o.seconds === raw) ? raw : null;
+}
 
 export const ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT = 460;
 export const ARGOCD_DETAIL_PANEL_WIDTH_MIN = 360;
@@ -112,6 +135,7 @@ function defaults(): UiSettings {
     argocdDetailPanelWidth: ARGOCD_DETAIL_PANEL_WIDTH_DEFAULT,
     argocdTreeCollapsed: [],
     selectedNamespaces: {},
+    workloadsAutoRefreshSeconds: null,
   };
 }
 
@@ -192,6 +216,9 @@ function readPersisted(): UiSettings {
               ),
             )
           : {},
+      workloadsAutoRefreshSeconds: normalizeAutoRefresh(
+        parsed.workloadsAutoRefreshSeconds,
+      ),
     };
   } catch {
     return defaults();
@@ -237,6 +264,7 @@ type Store = UiSettings & {
   toggleArgocdTreeKind: (kind: string) => void;
   resetArgocdTreeCollapsed: () => void;
   setSelectedNamespace: (context: string, namespace: string) => void;
+  setWorkloadsAutoRefreshSeconds: (next: number | null) => void;
 };
 
 export const useUiSettings = create<Store>((set, get) => {
@@ -361,6 +389,13 @@ export const useUiSettings = create<Store>((set, get) => {
       const snapshot = { ...get(), selectedNamespaces: next };
       writePersisted(snapshot);
       set({ selectedNamespaces: next });
+    },
+    setWorkloadsAutoRefreshSeconds: (next) => {
+      const normalized = normalizeAutoRefresh(next);
+      if (get().workloadsAutoRefreshSeconds === normalized) return;
+      const snapshot = { ...get(), workloadsAutoRefreshSeconds: normalized };
+      writePersisted(snapshot);
+      set({ workloadsAutoRefreshSeconds: normalized });
     },
   };
 });

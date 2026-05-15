@@ -28,6 +28,7 @@ export function LogsPanel(props: LogsPanelProps) {
     new Set(["error", "warn", "info", "debug"]),
   );
   const [rangeSeconds, setRangeSeconds] = useState<number | null>(60 * 60);
+  const [previous, setPrevious] = useState(false);
   const [paused, setPaused] = useState(false);
   const [wrap, setWrap] = useState(true);
   const [timestamps, setTimestamps] = useState(true);
@@ -58,15 +59,32 @@ export function LogsPanel(props: LogsPanelProps) {
           container: name,
           namespace,
           context: ctx,
-          sinceSeconds: rangeSeconds,
+          // Previous logs are a one-shot read of a fixed slice — slicing by
+          // sinceSeconds doesn't make sense, so pass null to surface the
+          // whole retained log.
+          sinceSeconds: previous ? null : rangeSeconds,
           tailLines: 500,
+          previous,
         });
         s.start();
         map.set(name, s);
       }
     }
     setStreamsTick((t) => t + 1);
-  }, [activeContainerNames, namespace, pod, ctx, rangeSeconds]);
+  }, [activeContainerNames, namespace, pod, ctx, rangeSeconds, previous]);
+
+  // Switching previous on/off needs to recreate streams with the new mode
+  // — but the container-set effect above only fires when the container list
+  // changes. Tear down everything when `previous` flips so the next render
+  // rebuilds streams with the right params.
+  const previousRef = useRef(previous);
+  useEffect(() => {
+    if (previousRef.current === previous) return;
+    previousRef.current = previous;
+    for (const s of streamsRef.current.values()) s.stop();
+    streamsRef.current.clear();
+    setStreamsTick((t) => t + 1);
+  }, [previous]);
 
   useEffect(() => {
     return () => {
@@ -186,6 +204,8 @@ export function LogsPanel(props: LogsPanelProps) {
         }}
         rangeSeconds={rangeSeconds}
         onRangeChange={setRangeSeconds}
+        previous={previous}
+        onPreviousToggle={() => setPrevious((p) => !p)}
         paused={paused}
         onPauseToggle={() => setPaused((p) => !p)}
         pendingCount={pendingCount}

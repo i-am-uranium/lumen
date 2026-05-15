@@ -295,4 +295,39 @@ describe("argocd resource view + tree collapse (PR #48)", () => {
     useUiSettings.getState().resetArgocdTreeCollapsed();
     expect(useUiSettings.getState().argocdTreeCollapsed).toEqual([]);
   });
+
+  describe("workloadsAutoRefreshSeconds", () => {
+    beforeEach(() => {
+      // The outer beforeEach resets the column/argocd state but not this
+      // field; force it back to the default so tests don't leak.
+      useUiSettings.getState().setWorkloadsAutoRefreshSeconds(null);
+    });
+
+    it("defaults to null (auto-refresh off) when nothing is persisted", () => {
+      expect(useUiSettings.getState().workloadsAutoRefreshSeconds).toBeNull();
+    });
+
+    it("setWorkloadsAutoRefreshSeconds persists allowed values", () => {
+      useUiSettings.getState().setWorkloadsAutoRefreshSeconds(30);
+      expect(useUiSettings.getState().workloadsAutoRefreshSeconds).toBe(30);
+      const persisted = JSON.parse(
+        window.localStorage.getItem(UI_SETTINGS_STORAGE_KEY) ?? "{}",
+      );
+      expect(persisted.workloadsAutoRefreshSeconds).toBe(30);
+    });
+
+    it("rejects intervals not in the allowed picker set (falls back to off)", () => {
+      // 7 is not in WORKLOADS_AUTO_REFRESH_OPTIONS; treat as off so a stale
+      // persisted blob from a future build never wedges the picker into a
+      // hidden value the user can't choose again.
+      useUiSettings.getState().setWorkloadsAutoRefreshSeconds(7);
+      expect(useUiSettings.getState().workloadsAutoRefreshSeconds).toBeNull();
+    });
+
+    it("null disables auto-refresh", () => {
+      useUiSettings.getState().setWorkloadsAutoRefreshSeconds(60);
+      useUiSettings.getState().setWorkloadsAutoRefreshSeconds(null);
+      expect(useUiSettings.getState().workloadsAutoRefreshSeconds).toBeNull();
+    });
+  });
 });
