@@ -52,6 +52,7 @@ pub fn run() {
             commands::k8s::watch_workloads,
             commands::k8s::stream_logs,
             commands::k8s::list_pods_for,
+            commands::k8s::list_pods_on_node,
             commands::k8s::list_fleet,
             commands::k8s::probe_fleet_context,
             commands::k8s::disconnect_context,

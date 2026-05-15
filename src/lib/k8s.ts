@@ -929,6 +929,8 @@ export const k8s = {
     context?: string,
   ) =>
     invoke<WorkloadSummary[]>("list_pods_for", { namespace, kind, name, context }),
+  listPodsOnNode: (node: string, context?: string) =>
+    invoke<WorkloadSummary[]>("list_pods_on_node", { node, context }),
   fetchLatestLogs: async ({
     context,
     target,

@@ -1724,6 +1724,46 @@ pub async fn list_pods_for(
     }
 }
 
+/// List every pod scheduled on a single node. Uses a server-side
+/// `spec.nodeName=<node>` field selector so we don't drag the whole
+/// pod set across the wire on large clusters, then folds in metrics-server
+/// usage when available (same enrichment as the workloads pod table).
+#[tauri::command]
+pub async fn list_pods_on_node(
+    node: String,
+    context: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<WorkloadSummary>> {
+    let client = client_for(&state, context.as_deref()).await?;
+    let api: Api<Pod> = Api::all(client.clone());
+    let lp = ListParams::default().fields(&format!("spec.nodeName={node}"));
+    let mut summaries: Vec<WorkloadSummary> = api
+        .list(&lp)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?
+        .items
+        .iter()
+        .map(resources::pod_summary)
+        .collect();
+    let ctx_name = context.as_deref().unwrap_or("");
+    if !ctx_name.is_empty() {
+        if let Some(usage) = crate::k8s::metrics::pod_usage(&client, ctx_name).await {
+            let mut by_key: std::collections::HashMap<(String, String), (i64, i64)> =
+                std::collections::HashMap::with_capacity(usage.len());
+            for u in usage {
+                by_key.insert((u.namespace, u.name), (u.cpu_milli, u.mem_bytes));
+            }
+            for s in summaries.iter_mut() {
+                if let Some((cpu, mem)) = by_key.get(&(s.namespace.clone(), s.name.clone())) {
+                    s.cpu_milli = Some(*cpu);
+                    s.mem_bytes = Some(*mem);
+                }
+            }
+        }
+    }
+    Ok(summaries)
+}
+
 // ─── CRD Browser ──────────────────────────────────────────────────────────
 
 #[tauri::command]
