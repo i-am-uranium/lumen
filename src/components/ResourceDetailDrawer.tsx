@@ -50,6 +50,7 @@ import {
   DrawerTabButton,
   DrawerTabs,
 } from "@/components/lumen/drawer";
+import { CopyableName } from "@/components/lumen/copyable-name";
 
 // ─── Lumen-distinct touches vs Lens ────────────────────────────────────
 //   • Side-docked panel (not floating modal); main view stays visible.
@@ -724,15 +725,27 @@ function Header({
             {resource.kind}
           </span>
           <span className="text-text-muted">/</span>
-          <span
-            id={titleId}
-            className="text-[13px] text-text-primary font-medium font-mono truncate"
-          >
-            {resource.name}
-          </span>
+          <CopyableName value={resource.name} className="px-1 -mx-1 py-0.5 min-w-0">
+            <span
+              id={titleId}
+              className="text-[13px] text-text-primary font-medium font-mono truncate"
+            >
+              {resource.name}
+            </span>
+          </CopyableName>
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-text-muted min-w-0">
-          <span className="font-mono truncate">{resource.namespace}</span>
+          {resource.namespace ? (
+            <CopyableName
+              value={resource.namespace}
+              className="px-1 -mx-1 py-0.5 min-w-0"
+              iconClassName="size-2.5"
+            >
+              <span className="font-mono truncate">{resource.namespace}</span>
+            </CopyableName>
+          ) : (
+            <span className="font-mono truncate">{resource.namespace}</span>
+          )}
           <span>/</span>
           <span className="font-mono truncate">ctx: {ctx}</span>
         </div>
