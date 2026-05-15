@@ -432,12 +432,18 @@ function ExplorerMetric({
   value,
   sub,
   tone = "muted",
+  onClick,
+  active,
+  actionLabel,
 }: {
   icon: React.ReactNode;
   label: string;
   value: React.ReactNode;
   sub: React.ReactNode;
   tone?: "good" | "warn" | "bad" | "info" | "muted";
+  onClick?: () => void;
+  active?: boolean;
+  actionLabel?: string;
 }) {
   const mappedTone: MetricTone =
     tone === "good"
@@ -450,7 +456,16 @@ function ExplorerMetric({
             ? "muted"
             : "info";
   return (
-    <MetricCard icon={icon} label={label} value={value} helper={sub} tone={mappedTone} />
+    <MetricCard
+      icon={icon}
+      label={label}
+      value={value}
+      helper={sub}
+      tone={mappedTone}
+      onClick={onClick}
+      active={active}
+      actionLabel={actionLabel}
+    />
   );
 }
 
@@ -1440,6 +1455,8 @@ export function WorkloadsView() {
               value={items.length}
               sub={<span>{filteredItems.length} visible</span>}
               tone="info"
+              onClick={hasFilters ? clearFilters : undefined}
+              actionLabel={hasFilters ? "Clear filters to show all resources" : undefined}
             />
             <ExplorerMetric
               icon={<Activity className="size-3.5" />}
@@ -1447,6 +1464,8 @@ export function WorkloadsView() {
               value={explorerStats.pods}
               sub={<span>{isPodView ? "Current view" : "Across workloads"}</span>}
               tone="info"
+              onClick={isPodView ? undefined : () => selectKind("pod")}
+              actionLabel={isPodView ? undefined : "Switch to pods view"}
             />
             <ExplorerMetric
               icon={<CheckCircle2 className="size-3.5" />}
@@ -1459,22 +1478,42 @@ export function WorkloadsView() {
               icon={<AlertTriangle className="size-3.5" />}
               label="At Risk"
               value={explorerStats.failed + explorerStats.degraded}
-              sub={<span>{explorerStats.failed} failed</span>}
+              sub={
+                <span>
+                  {explorerStats.failed + explorerStats.degraded > 0
+                    ? `${explorerStats.failed} failed — show only`
+                    : `${explorerStats.failed} failed`}
+                </span>
+              }
               tone={explorerStats.failed > 0 ? "bad" : explorerStats.degraded > 0 ? "warn" : "good"}
+              onClick={
+                explorerStats.failed + explorerStats.degraded > 0
+                  ? () => toggleQuickFilter("unhealthy")
+                  : undefined
+              }
+              active={quickFilters.has("unhealthy")}
+              actionLabel="Filter to unhealthy resources"
             />
             <ExplorerMetric
               icon={<RefreshCw className="size-3.5" />}
               label="Restarts"
               value={explorerStats.restarts}
-              sub={<span>{explorerStats.restarts > 0 ? "Needs review" : "No restarts"}</span>}
+              sub={<span>{explorerStats.restarts > 0 ? "Needs review — show only" : "No restarts"}</span>}
               tone={explorerStats.restarts > 0 ? "warn" : "good"}
+              onClick={
+                explorerStats.restarts > 0 ? () => toggleQuickFilter("restarts") : undefined
+              }
+              active={quickFilters.has("restarts")}
+              actionLabel="Filter to resources with restarts"
             />
             <ExplorerMetric
               icon={<Server className="size-3.5" />}
               label="Nodes"
               value={explorerStats.nodes || "—"}
-              sub={<span>{explorerStats.nodes ? "Hosting results" : "No node data"}</span>}
+              sub={<span>{explorerStats.nodes ? "View all nodes" : "No node data"}</span>}
               tone="muted"
+              onClick={() => navigate(`/cluster/${encodeURIComponent(context)}/nodes`)}
+              actionLabel="Open nodes view"
             />
           </div>
 

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  WorkloadsView,
   buildSelectedWorkloadsAiContext,
   matchQuickFilters,
   restartEligibleWorkloads,
@@ -9,7 +13,23 @@ import {
   workloadRiskScore,
   type QuickFilter,
 } from "./WorkloadsView";
-import type { WorkloadSummary } from "@/lib/k8s";
+import { k8s, type WorkloadSummary } from "@/lib/k8s";
+
+vi.mock("@/hooks/useK8sWatch", () => ({
+  useK8sWatch: vi.fn(),
+}));
+
+vi.mock("@/lib/k8s", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/k8s")>("@/lib/k8s");
+  return {
+    ...actual,
+    k8s: {
+      ...actual.k8s,
+      listNamespaces: vi.fn(),
+      listWorkloads: vi.fn(),
+    },
+  };
+});
 
 function workload(overrides: Partial<WorkloadSummary>): WorkloadSummary {
   return {
@@ -194,3 +214,148 @@ describe("workload selection helpers", () => {
     expect(context).toContain("restarts=3");
   });
 });
+
+function renderWorkloads(items: WorkloadSummary[]) {
+  vi.mocked(k8s.listNamespaces).mockResolvedValue([]);
+  vi.mocked(k8s.listWorkloads).mockImplementation(async (_ns, kind) =>
+    items.filter((w) => w.kind === kind),
+  );
+
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={["/cluster/dev/workloads/pod"]}>
+        <Routes>
+          <Route
+            path="/cluster/:ctx/workloads/:kind"
+            element={<WorkloadsView />}
+          />
+          <Route
+            path="/cluster/:ctx/nodes"
+            element={<div data-testid="nodes-route">nodes route</div>}
+          />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function statCard(label: string): HTMLElement {
+  const labelEl = screen.getByText(label, {
+    selector: ".uppercase, .uppercase *, span, div",
+  });
+  const card = labelEl.closest('[role="button"]') as HTMLElement | null;
+  if (!card) {
+    throw new Error(`stat card "${label}" is not interactive`);
+  }
+  return card;
+}
+
+describe("WorkloadsView actionable stat cards", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("filters to restarting pods when the Restarts card is clicked and exposes the toggle via aria-pressed", async () => {
+    renderWorkloads([
+      workload({ kind: "pod", namespace: "default", name: "calm-pod", pod_phase: "Running" }),
+      workload({
+        kind: "pod",
+        namespace: "default",
+        name: "flapping-pod",
+        pod_phase: "Running",
+        restart_count: 5,
+      }),
+    ]);
+
+    await waitFor(() => {
+      expect(screen.getByText("calm-pod")).toBeInTheDocument();
+      expect(screen.getByText("flapping-pod")).toBeInTheDocument();
+    });
+
+    const restartsCard = statCard("Restarts");
+    expect(restartsCard).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(restartsCard);
+
+    await waitFor(() => {
+      expect(screen.queryByText("calm-pod")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("flapping-pod")).toBeInTheDocument();
+    expect(statCard("Restarts")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("filters to unhealthy resources when the At Risk card is clicked", async () => {
+    renderWorkloads([
+      workload({ kind: "pod", namespace: "default", name: "healthy-pod", pod_phase: "Running" }),
+      workload({
+        kind: "pod",
+        namespace: "default",
+        name: "broken-pod",
+        health: "failed",
+        pod_phase: "Failed",
+      }),
+    ]);
+
+    await waitFor(() => {
+      expect(screen.getByText("healthy-pod")).toBeInTheDocument();
+    });
+
+    fireEvent.click(statCard("At Risk"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("healthy-pod")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("broken-pod")).toBeInTheDocument();
+  });
+
+  it("clears filters when the Resources card is clicked after a filter is applied", async () => {
+    renderWorkloads([
+      workload({ kind: "pod", namespace: "default", name: "calm-pod", pod_phase: "Running" }),
+      workload({
+        kind: "pod",
+        namespace: "default",
+        name: "flapping-pod",
+        pod_phase: "Running",
+        restart_count: 3,
+      }),
+    ]);
+
+    await waitFor(() => expect(screen.getByText("calm-pod")).toBeInTheDocument());
+
+    fireEvent.click(statCard("Restarts"));
+    await waitFor(() => {
+      expect(screen.queryByText("calm-pod")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(statCard("Resources"));
+    await waitFor(() => {
+      expect(screen.getByText("calm-pod")).toBeInTheDocument();
+    });
+    expect(screen.getByText("flapping-pod")).toBeInTheDocument();
+    expect(statCard("Restarts")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("navigates to the nodes route when the Nodes card is clicked", async () => {
+    renderWorkloads([
+      workload({
+        kind: "pod",
+        namespace: "default",
+        name: "any-pod",
+        pod_phase: "Running",
+        node_name: "node-a",
+      }),
+    ]);
+
+    await waitFor(() => expect(screen.getByText("any-pod")).toBeInTheDocument());
+
+    fireEvent.click(statCard("Nodes"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("nodes-route")).toBeInTheDocument();
+    });
+  });
+});
+
