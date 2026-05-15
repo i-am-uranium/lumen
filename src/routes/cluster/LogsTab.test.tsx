@@ -65,6 +65,7 @@ describe("LogsTab deep links", () => {
       );
     });
     await screen.findByText("prod");
-    expect(screen.getAllByText("customer-service").length).toBeGreaterThan(0);
+    const matches = await screen.findAllByText("customer-service");
+    expect(matches.length).toBeGreaterThan(0);
   });
 });
