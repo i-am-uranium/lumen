@@ -33,9 +33,11 @@ export type IncidentReportInput = {
   warningEvents?: IncidentReportWarningEvent[];
   rolloutEntries?: RolloutTimelineEntry[];
   manualNotes?: string;
+  investigation?: { startedAt: string; sources: string[]; observations: string[] };
 };
 
 export type IncidentReportData = {
+  investigation?: { startedAt: string; sources: string[]; observations: string[] };
   generatedAtIso: string;
   scope: {
     clusterContext: string;
@@ -147,6 +149,7 @@ export function buildIncidentReportData(input: IncidentReportInput): IncidentRep
   );
 
   return {
+    investigation: input.investigation ? { startedAt: cleanLine(input.investigation.startedAt), sources: input.investigation.sources.map(cleanLine), observations: input.investigation.observations.map(cleanLine) } : undefined,
     generatedAtIso,
     scope: {
       clusterContext: input.clusterContext || "current-context",
@@ -200,6 +203,10 @@ export function renderIncidentReportMarkdown(report: IncidentReportData): string
     `- **Rollout notes:** ${report.summary.rolloutNotes}`,
     "",
   ];
+
+  if (report.investigation) {
+    lines.push("## Investigation capture", "", `Started: ${report.investigation.startedAt}`, "", ...renderList("Sources and freshness:", report.investigation.sources), ...renderList("Observed evidence and limitations:", report.investigation.observations));
+  }
 
   if (report.triageIssues.length === 0) {
     lines.push("No active triage issues were captured.", "");
