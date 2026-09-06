@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   RUNBOOKS_STORAGE_KEY,
   buildRunbookStepUrl,
@@ -53,6 +53,23 @@ beforeEach(() => {
 });
 
 describe("runbooks store", () => {
+  it("restores legacy assistant steps as manual checks without losing prompts or notes", async () => {
+    const stored = [{ id: "saved", name: "Incident", createdAt: 1, updatedAt: 2,
+      steps: [{ id: "legacy", kind: "ask-ai", title: "Investigate API", prompt: "Why is API restarting?", note: "Contact owner first." }],
+    }];
+    window.localStorage.setItem(RUNBOOKS_STORAGE_KEY, JSON.stringify(stored));
+    vi.resetModules();
+    const { useRunbooksStore: restoredStore } = await import("./runbooks");
+    const saved = restoredStore.getState().runbooks[0];
+    expect(saved).toMatchObject({ id: "saved", createdAt: 1, updatedAt: 2 });
+    expect(saved.steps[0]).toMatchObject({ kind: "checklist", title: "Investigate API", note: "Contact owner first.\n\nWhy is API restarting?" });
+    expect(buildRunbookStepUrl(saved.steps[0], "prod")).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(RUNBOOKS_STORAGE_KEY)!)).toEqual(stored);
+    restoredStore.getState().updateRunbook("saved", { description: "Reviewed" });
+    const persisted = JSON.parse(window.localStorage.getItem(RUNBOOKS_STORAGE_KEY)!);
+    expect(persisted[0].steps[0].note).toBe("Contact owner first.\n\nWhy is API restarting?");
+  });
+
   it("validates names and structured step requirements", () => {
     expect(validateRunbookInput({ ...runbook, name: "" })).toContain(
       "Name is required.",
@@ -112,7 +129,7 @@ describe("runbooks store", () => {
     expect(useRunbooksStore.getState().activeRun).toBeNull();
   });
 
-  it("builds safe step URLs for route, resource, logs, and AI steps", () => {
+  it("builds safe step URLs for route, resource, and logs", () => {
     expect(buildRunbookStepUrl(runbook.steps[0], "prod/us-east")).toBe(
       "/cluster/prod%2Fus-east/workloads/deployments?ns=payments&q=api",
     );
@@ -121,19 +138,6 @@ describe("runbooks store", () => {
     );
     expect(buildRunbookStepUrl(runbook.steps[2], "prod/us-east")).toBe(
       "/cluster/prod%2Fus-east/logs?ns=payments&kind=deployment&name=api&grep=panic",
-    );
-    expect(
-      buildRunbookStepUrl(
-        {
-          id: "step-ai",
-          kind: "ask-ai",
-          title: "Ask AI",
-          prompt: "Why is deployment/api restarting?",
-        },
-        "prod/us-east",
-      ),
-    ).toBe(
-      "/cluster/prod%2Fus-east/ai?task=root-cause&question=Why+is+deployment%2Fapi+restarting%3F",
     );
   });
 });

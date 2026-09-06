@@ -46,5 +46,5 @@ through a hosted control plane.
 - Lumen reads the user's kubeconfig and talks directly to Kubernetes APIs.
 - There is no hosted backend requirement.
 - Secret YAML is redacted by default before rendering.
-- AI and report workflows redact obvious tokens, credentials, kubeconfig
-  material, and secret values before prompt/report construction.
+- Incident report exports redact obvious tokens, credentials, kubeconfig
+  material, and secret values before report construction.

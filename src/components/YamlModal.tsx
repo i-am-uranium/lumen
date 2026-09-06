@@ -36,7 +36,18 @@ type Props = {
 };
 
 /** YAML inspector with optional server-side-apply editing. */
-export function YamlModal({
+export function YamlModal(props: Props) {
+  // A target change must discard the draft, validation, confirmations, and
+  // in-flight responses even when two clusters have identically named objects.
+  const key = JSON.stringify([
+    props.title, props.subtitle, props.sensitive,
+    props.editable?.context, props.editable?.namespace,
+    props.editable?.kind, props.editable?.name,
+  ]);
+  return <YamlModalContent key={key} {...props} />;
+}
+
+function YamlModalContent({
   title,
   subtitle,
   yaml,
@@ -52,8 +63,29 @@ export function YamlModal({
   const [dryRunOutput, setDryRunOutput] = useState<string | null>(null);
   const [applyErr, setApplyErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [validatedDraft, setValidatedDraft] = useState<string | null>(null);
+  const operation = useRef(0);
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; operation.current++; };
+  }, []);
+
+  function changeDraft(next: string) {
+    if (applying) return;
+    operation.current++;
+    inFlight.current = false;
+    setBusy(false);
+    setDraft(next);
+    setValidatedDraft(null);
+    setDryRunOutput(null);
+    setApplyErr(null);
+    setApplyConfirmOpen(false);
+  }
   const updateAccess = useQuery({
     queryKey: [
       "k8s",
@@ -62,13 +94,13 @@ export function YamlModal({
       editable?.namespace,
       editable?.kind,
       editable?.name,
-      "update",
+      "patch",
     ],
     queryFn: () =>
       k8s.checkAccess(
         {
           kind: editable!.kind,
-          verb: "update",
+          verb: "patch",
           namespace: editable!.namespace || null,
           name: editable!.name,
         },
@@ -102,34 +134,48 @@ export function YamlModal({
   };
 
   const runApply = async (dry: boolean) => {
-    if (!editable) return;
+    if (!editable || sensitive || !canEdit || inFlight.current) return;
+    if (!dry && validatedDraft !== draft) return;
+    const submittedDraft = dry ? draft : validatedDraft!;
+    const target = { ...editable };
+    const request = ++operation.current;
+    const isCurrent = () => mounted.current && operation.current === request;
+    inFlight.current = true;
     setBusy(true);
+    setApplying(!dry);
     setApplyErr(null);
-    setDryRunOutput(null);
+    if (dry) {
+      setValidatedDraft(null);
+      setDryRunOutput(null);
+    }
     try {
       const out = await k8s.applyResource(
-        editable.namespace,
-        editable.kind,
-        editable.name,
-        draft,
-        dry,
-        editable.context,
+        target.namespace, target.kind, target.name, submittedDraft, dry, target.context,
       );
+      if (!isCurrent()) return;
       if (dry) {
+        setValidatedDraft(submittedDraft);
         setDryRunOutput(out.yaml);
         toast.success("dry-run ok — server validated");
       } else {
-        toast.success(`applied ${editable.kind}/${editable.name}`);
-        editable.onApplied?.(out);
-        // Refresh the visible YAML from the server and drop edit mode.
+        toast.success(`applied ${target.kind}/${target.name}`);
+        target.onApplied?.(out);
         setDraft(out.yaml);
         setMode("read");
+        setValidatedDraft(null);
         setDryRunOutput(null);
       }
     } catch (e) {
+      if (!isCurrent()) return;
+      setValidatedDraft(null);
+      setDryRunOutput(null);
       setApplyErr((e as Error).message ?? String(e));
     } finally {
-      setBusy(false);
+      if (isCurrent()) {
+        inFlight.current = false;
+        setBusy(false);
+        setApplying(false);
+      }
     }
   };
 
@@ -195,7 +241,7 @@ export function YamlModal({
                     setApplyErr(null);
                   }
                 }}
-                disabled={!canEdit || updateAccess.isLoading}
+                disabled={busy || !canEdit || updateAccess.isLoading}
                 title={
                   updateAccess.data?.allowed === false
                     ? "edit denied by RBAC"
@@ -236,7 +282,8 @@ export function YamlModal({
             <textarea
               ref={textareaRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              disabled={applying}
+              onChange={(e) => changeDraft(e.target.value)}
               spellCheck={false}
               className="flex-1 min-h-0 p-4 text-[12px] font-mono leading-relaxed bg-term-bg text-term-fg outline-none resize-none [font-feature-settings:'liga'_0,'calt'_0]"
             />
@@ -272,7 +319,7 @@ export function YamlModal({
           <div className="px-4 py-3 border-t border-term-border-soft flex justify-end gap-2 shrink-0">
             <span className="mr-auto text-[11px] text-term-subtle self-center">
               Server-side apply as field manager{" "}
-              <span className="font-mono text-term-muted">lumen</span> · force=true
+              <span className="font-mono text-term-muted">lumen</span> · dry-run required
             </span>
             <button
               onClick={() => runApply(true)}
@@ -283,7 +330,7 @@ export function YamlModal({
             </button>
             <button
               onClick={() => setApplyConfirmOpen(true)}
-              disabled={busy || !dirty || !canEdit}
+              disabled={busy || !dirty || !canEdit || validatedDraft !== draft}
               className="term-btn term-btn-primary !min-h-[30px] !text-[11px] disabled:opacity-50"
             >
               <Check className="size-3" /> {busy ? "applying…" : "apply"}
@@ -294,7 +341,7 @@ export function YamlModal({
           <PreflightPreviewDialog
             open={applyConfirmOpen}
             title={`preflight apply ${editCapability.kind}`}
-            description={`This server-side apply can create or update ${editCapability.kind}/${editCapability.name} in ${editCapability.namespace || "cluster scope"}. Dry-run first if you only want validation.`}
+            description={`This server-side apply can create or update ${editCapability.kind}/${editCapability.name} in ${editCapability.namespace || "cluster scope"}. The current draft passed server dry-run. Field ownership conflicts will block apply.`}
             impact={applyPreflight}
             confirmText={`${editCapability.namespace || "cluster"}/${editCapability.name}`}
             confirmLabel="apply"

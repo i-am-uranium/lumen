@@ -7,6 +7,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import { LegacyAssistantRedirect } from "@/components/LegacyAssistantRedirect";
 import { cn } from "@/lib/utils";
 import { PaneProvider } from "@/components/PaneContext";
 import { PaneErrorBoundary } from "@/components/PaneErrorBoundary";
@@ -77,9 +78,6 @@ const AlertInboxView = lazy(() =>
 );
 const RolloutTimelineView = lazy(() =>
   import("@/routes/cluster/RolloutTimelineView").then(named("RolloutTimelineView")),
-);
-const AiAssistant = lazy(() =>
-  import("@/routes/cluster/AiAssistant").then(named("AiAssistant")),
 );
 const Settings = lazy(() =>
   import("@/routes/Settings").then(named("Settings")),
@@ -174,7 +172,7 @@ function PaneRoutes() {
           <Route path="helm" element={<HelmBrowser />} />
           <Route path="access" element={<TeamAccess />} />
           <Route path="logs" element={<LogsTab />} />
-          <Route path="ai" element={<AiAssistant />} />
+          <Route path="ai" element={<LegacyAssistantRedirect />} />
           <Route path="argocd" element={<ArgocdView />} />
           <Route path="tekton" element={<TektonView />} />
           <Route path="workspaces" element={<WorkspacesView />} />

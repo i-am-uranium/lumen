@@ -74,7 +74,6 @@ function humanize(segment: string): string {
   const decoded = decodeURIComponent(segment);
   if (decoded.toLowerCase() === "crds") return "CRDs";
   if (decoded.toLowerCase() === "rbac") return "RBAC";
-  if (decoded.toLowerCase() === "ai") return "AI";
   if (decoded.toLowerCase() === "argocd") return "ArgoCD";
   return decoded.charAt(0).toUpperCase() + decoded.slice(1).replace(/-/g, " ");
 }

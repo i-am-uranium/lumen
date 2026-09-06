@@ -41,9 +41,8 @@ describe("deriveTab", () => {
     );
   });
 
-  it("normalizes lumen-specific acronyms (CRDs, AI, ArgoCD)", () => {
+  it("normalizes lumen-specific acronyms (CRDs, ArgoCD)", () => {
     expect(deriveTab("/cluster/dev/crds").title).toBe("dev · CRDs");
-    expect(deriveTab("/cluster/dev/ai").title).toBe("dev · AI");
     expect(deriveTab("/cluster/dev/argocd").title).toBe("dev · ArgoCD");
   });
 

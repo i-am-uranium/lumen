@@ -1535,20 +1535,51 @@ pub async fn stop_stream(stream_id: String, state: State<'_, AppState>) -> AppRe
 pub async fn stream_logs(
     selector: crate::k8s::logs::LogSelector,
     stream_id: String,
-    channel: tauri::ipc::Channel<crate::k8s::logs::LogLine>,
+    channel: tauri::ipc::Channel<crate::k8s::logs::LogEvent>,
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
     let cancel = tokio_util::sync::CancellationToken::new();
-    state
-        .k8s
-        .streams
-        .write()
-        .await
-        .insert(stream_id.clone(), cancel.clone());
+    let registry = state.k8s.clone();
+    {
+        let mut streams = registry.streams.write().await;
+        if streams.contains_key(&stream_id) {
+            return Err(AppError::K8s("log stream ID is already active".into()));
+        }
+        streams.insert(stream_id.clone(), cancel.clone());
+    }
+    // Register before client creation so stop_stream can cancel a slow startup.
+    let client = tokio::select! {
+        _ = cancel.cancelled() => return Ok(()),
+        result = client_for(&state, context.as_deref()) => result,
+    };
+    let client = match client {
+        Ok(client) => client,
+        Err(error) => {
+            let mut streams = registry.streams.write().await;
+            if !cancel.is_cancelled() {
+                streams.remove(&stream_id);
+            }
+            return Err(error);
+        }
+    };
     tokio::spawn(async move {
-        let _ = crate::k8s::logs::stream_logs(client, selector, channel, cancel).await;
+        let result =
+            crate::k8s::logs::stream_logs(client, selector, channel.clone(), cancel.clone()).await;
+        if !cancel.is_cancelled() {
+            match result {
+                Ok(()) => crate::k8s::logs::emit_status(&channel, "", "ended", None),
+                Err(error) => {
+                    crate::k8s::logs::emit_status(&channel, "", "error", Some(error.to_string()))
+                }
+            }
+        }
+        let mut streams = registry.streams.write().await;
+        // A cancelled entry was already removed by stop_stream. It may now
+        // belong to a newer request with the same ID; leave that entry alone.
+        if !cancel.is_cancelled() {
+            streams.remove(&stream_id);
+        }
     });
     Ok(())
 }

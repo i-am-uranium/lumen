@@ -7,7 +7,7 @@
     "url": "git+https://github.com/i-am-uranium/lumen.git"
   },
   "license": "Apache-2.0",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,7 +23,6 @@
     "design-guard:refresh": "node scripts/update-design-system-guard-baseline.mjs"
   },
   "dependencies": {
-    "@assistant-ui/react": "^0.14.0",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@radix-ui/react-dialog": "^1.1.15",

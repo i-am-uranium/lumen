@@ -1,0 +1,25 @@
+title = "Lumen secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deliberately synthetic Stripe token used to test redaction"
+condition = "AND"
+paths = ['''^src/lib/incidentReport\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^sk_live_1234567890$''']
+
+[[allowlists]]
+description = "Public Tauri updater verification key, not a signing secret"
+condition = "AND"
+paths = ['''^src-tauri/tauri\.conf\.json$''']
+regexTarget = "secret"
+regexes = ['''^6AB02409CE854837$''']
+
+[[allowlists]]
+description = "Kubernetes scheduling API group in resource registry"
+condition = "AND"
+paths = ['''^src/lib/k8s/resourceRegistry\.ts$''']
+regexTarget = "secret"
+regexes = ['''^scheduling\.k8s\.io$''']

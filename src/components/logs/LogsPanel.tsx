@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { LogStream } from "@/state/logStream";
+import { toast } from "sonner";
+import { LogStream, captureLogSnapshot, logErrorMessage } from "@/state/logStream";
 import { useTabView } from "@/hooks/useTabView";
 import { LogsToolbar, type Level } from "./LogsToolbar";
 import { LogsRowList } from "./LogsRowList";
@@ -47,7 +47,8 @@ export function LogsPanel(props: LogsPanelProps) {
     const wanted = new Set(activeContainerNames);
     const map = streamsRef.current;
     for (const [name, s] of map) {
-      if (!wanted.has(name)) {
+      if (!wanted.has(name) || s.pod !== pod || s.namespace !== namespace || s.context !== ctx ||
+          s.sinceSeconds !== (previous ? null : rangeSeconds) || s.previous !== previous) {
         s.stop();
         map.delete(name);
       }
@@ -72,19 +73,6 @@ export function LogsPanel(props: LogsPanelProps) {
     }
     setStreamsTick((t) => t + 1);
   }, [activeContainerNames, namespace, pod, ctx, rangeSeconds, previous]);
-
-  // Switching previous on/off needs to recreate streams with the new mode
-  // — but the container-set effect above only fires when the container list
-  // changes. Tear down everything when `previous` flips so the next render
-  // rebuilds streams with the right params.
-  const previousRef = useRef(previous);
-  useEffect(() => {
-    if (previousRef.current === previous) return;
-    previousRef.current = previous;
-    for (const s of streamsRef.current.values()) s.stop();
-    streamsRef.current.clear();
-    setStreamsTick((t) => t + 1);
-  }, [previous]);
 
   useEffect(() => {
     return () => {
@@ -140,27 +128,7 @@ export function LogsPanel(props: LogsPanelProps) {
     if (downloading) return;
     setDownloading(true);
     try {
-      const channel = new Channel<{ pod: string; container: string; text: string }>();
-      const lines: string[] = [];
-      channel.onmessage = (msg) => {
-        if (msg.text) lines.push(msg.text);
-      };
-      const streamId = `download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await invoke("stream_logs", {
-        selector: {
-          namespace,
-          label_selector: null,
-          pod_name: pod,
-          container: null,
-          since_seconds: null,
-          tail_lines: 5000,
-        },
-        streamId,
-        channel,
-        context: ctx || undefined,
-      });
-      await new Promise((r) => setTimeout(r, 2000));
-      await invoke("stop_stream", { streamId }).catch(() => {});
+      const lines = await captureLogSnapshot({ namespace, pod, context: ctx, previous });
       const blob = new Blob([lines.join("\n")], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -168,6 +136,8 @@ export function LogsPanel(props: LogsPanelProps) {
       a.download = `${namespace}-${resourceName}.log`;
       a.click();
       URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(`Log download failed: ${logErrorMessage(error)}`);
     } finally {
       setDownloading(false);
     }
@@ -183,6 +153,12 @@ export function LogsPanel(props: LogsPanelProps) {
       <div className="shrink-0 px-3 py-1.5 border-b border-border-default bg-shell text-[11px] text-text-muted truncate">
         {namespace} / {pod} · since {sinceRef.current} · {view.lines.length.toLocaleString()} lines
         {paused && " · paused"}
+        {streams.map((stream) => (
+          <span key={stream.container} title={stream.errorMessage ?? undefined}>
+            {` · ${stream.container}: ${stream.status}`}
+            {stream.errorMessage && ` (${stream.errorMessage})`}
+          </span>
+        ))}
       </div>
       <LogsToolbar
         containers={containers}

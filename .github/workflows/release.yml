@@ -12,6 +12,11 @@ on:
 
 permissions:
   contents: write
+  security-events: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   detect:
@@ -21,10 +26,12 @@ jobs:
       tag: ${{ steps.compute.outputs.tag }}
       version: ${{ steps.compute.outputs.version }}
       should_release: ${{ steps.compute.outputs.should_release }}
+      sha: ${{ steps.compute.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 2
+          fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - id: compute
         env:
@@ -32,6 +39,8 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_TAG: ${{ github.event.inputs.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -56,33 +65,65 @@ jobs:
 
           TAG="$(resolve_tag)"
           SHOULD=false
-
-          if [ -n "$TAG" ]; then
-            case "$TAG" in
-              v[0-9]*) ;;
-              *) echo "::error::Invalid tag '$TAG' — must start with 'v' followed by digits."; exit 1 ;;
-            esac
-            if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
-              echo "::notice::Tag $TAG already exists on remote — nothing to release."
-            else
-              SHOULD=true
-              echo "::notice::Tag $TAG does not exist yet — releasing."
-            fi
+          SHA="$(git rev-parse HEAD)"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a stable semantic version tag, got '$TAG'."
+            exit 1
           fi
-
+          if git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            SHA="$(git rev-parse "refs/tags/$TAG^{commit}")"
+            # Retry an existing draft against its original immutable commit.
+            # Missing release metadata is recoverable; API failures are not.
+            RELEASES="$(gh api "repos/$REPO/releases" --paginate --slurp)"
+            STATE="$(jq -r --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)] | if length == 0 then "missing" elif .[0].draft then "draft" else "published" end' <<< "$RELEASES")"
+            if [ "$STATE" != "published" ]; then SHOULD=true; fi
+          else
+            SHOULD=true
+          fi
           VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "should_release=$SHOULD" >> "$GITHUB_OUTPUT"
-          echo "resolved: tag='$TAG' should_release='$SHOULD'"
+          MANIFEST_VERSION="$(git show "$SHA:package.json" | jq -r .version)"
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::Tag version does not match its package.json."
+            exit 1
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "should_release=$SHOULD"
+            echo "sha=$SHA"
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved: tag='$TAG' sha='$SHA' should_release='$SHOULD'"
+
+  verify:
+    name: verify release commit
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      checkout_ref: ${{ needs.detect.outputs.sha }}
+    permissions:
+      contents: read
+
+  analyze:
+    name: analyze release commit
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true'
+    uses: ./.github/workflows/codeql.yml
+    with:
+      checkout_ref: ${{ needs.detect.outputs.sha }}
+    permissions:
+      contents: read
+      security-events: write
 
   create-release:
     name: create draft release
-    needs: detect
+    needs: [detect, verify, analyze]
     if: needs.detect.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.detect.outputs.sha }}
 
       - name: Create tag and draft release
         env:
@@ -119,6 +160,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.detect.outputs.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -191,8 +234,11 @@ jobs:
           security import "$CERT_PATH" \
             -P "$APPLE_CERTIFICATE_PASSWORD" \
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          EXISTING=$(security list-keychains -d user | tr -d '"')
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING
+          EXISTING=()
+          while IFS= read -r entry; do
+            EXISTING+=("$entry")
+          done < <(security list-keychains -d user | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING[@]}"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           rm -f "$CERT_PATH"
 
@@ -275,6 +321,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.detect.outputs.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -371,6 +419,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.detect.outputs.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -430,17 +480,26 @@ jobs:
           prerelease: false
           args: --target ${{ matrix.target }}
 
-  publish-release:
-    name: publish release
+  validate-release:
+    name: validate draft assets
     needs: [detect, build-macos, build-linux, build-windows]
-    if: needs.detect.outputs.should_release == 'true' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.build-windows.result == 'success'
+    if: needs.detect.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Flip draft to published
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.detect.outputs.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Validate release asset manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.detect.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          gh release view "$TAG" --repo "$REPO" --json assets > "$RUNNER_TEMP/assets.json"
+          gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$RUNNER_TEMP"
+          node scripts/verify-release-assets.mjs "$TAG" "$REPO" "$RUNNER_TEMP/assets.json" "$RUNNER_TEMP/latest.json"
+          echo "Validated draft $TAG. Review platform installation, upgrade behavior, signing and release notes before publishing." >> "$GITHUB_STEP_SUMMARY"

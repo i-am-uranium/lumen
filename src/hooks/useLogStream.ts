@@ -7,6 +7,7 @@ type Snapshot = {
   dropCount: number;
   pendingCount: number;
   error: string | null;
+  status: LogStream["status"];
 };
 
 /**
@@ -27,5 +28,6 @@ export function useLogStream(stream: LogStream): Snapshot {
     dropCount: stream.getDropCount(),
     pendingCount: stream.getPendingCount(),
     error: stream.errorMessage,
+    status: stream.status,
   };
 }

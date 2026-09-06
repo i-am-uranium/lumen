@@ -38,7 +38,6 @@ import {
   Search,
   Server,
   ShieldAlert,
-  Sparkles,
   Siren,
   Sun,
   Terminal,
@@ -47,7 +46,6 @@ import {
 } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
-import { useCopilotUi } from "@/state/copilotUi";
 import { useShortcut } from "@/lib/shortcuts";
 
 export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
@@ -72,11 +70,7 @@ export function CommandPalette() {
   const normalizedQuery = q
     .replace(/^ns\s+/i, "switch namespace: ")
     .replace(/^ctx\s+/i, "switch context: ")
-    .replace(/^logs\s+/i, "view logs: ")
-    .replace(/^ai$/i, "go: AI assistant")
-    .replace(/^ask$/i, "go: AI assistant")
-    .replace(/^assistant$/i, "go: AI assistant")
-    .replace(/^copilot$/i, "open: Copilot");
+    .replace(/^logs\s+/i, "view logs: ");
   const shouldSearchResources = normalizedQuery.trim().length >= 2;
 
   const { data: contexts = [] } = useQuery({
@@ -195,11 +189,6 @@ export function CommandPalette() {
     close();
   }
 
-  function openCopilot() {
-    useCopilotUi.getState().openDrawer();
-    close();
-  }
-
   function pickNamespace(ns: string) {
     setNamespace(ns);
     close();
@@ -250,8 +239,8 @@ export function CommandPalette() {
             <CommandInput
               placeholder={
                 currentNs
-                  ? `search ${currentNs} · resource, ns, logs, AI, command...`
-                  : "search all namespaces · resource, ns, logs, AI, command..."
+                  ? `search ${currentNs} · resource, ns, logs, command...`
+                  : "search all namespaces · resource, ns, logs, command..."
               }
               value={q}
               onValueChange={setQ}
@@ -285,8 +274,6 @@ export function CommandPalette() {
                   <NavItem value="go: logs" icon={Terminal} onSelect={() => pickTab("logs")} />
                   <NavItem value="go: rollout timeline" icon={Clock3} onSelect={() => pickTab("timeline")} />
                   <NavItem value="go: change history" icon={History} onSelect={() => pickTab("change-history")} />
-                  <NavItem value="open: Copilot" icon={Sparkles} onSelect={openCopilot} />
-                  <NavItem value="go: AI assistant" icon={Sparkles} onSelect={() => pickTab("ai")} />
                   <NavItem value="go: workspaces" icon={BookOpenCheck} onSelect={() => pickTab("workspaces")} />
                   <NavItem value="go: argocd" icon={Layers} onSelect={() => pickTab("argocd")} />
                   <NavItem value="go: tekton pipelines" icon={Workflow} onSelect={() => pickTab("tekton")} />

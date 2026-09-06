@@ -82,38 +82,6 @@ export type WorkloadKind =
 
 export type Health = "healthy" | "degraded" | "failed" | "unknown";
 
-export type LatestLogLine = {
-  pod: string;
-  container: string;
-  text: string;
-};
-
-export type LatestLogsTarget = {
-  kind: WorkloadKind | string;
-  namespace: string;
-  name: string;
-};
-
-export type LatestLogsRequest = {
-  context?: string;
-  target: LatestLogsTarget;
-  tailLines?: number;
-  sinceSeconds?: number;
-  podLimit?: number;
-  captureMs?: number;
-};
-
-export type LatestLogsResult = {
-  namespace: string;
-  kind: string;
-  name: string;
-  pods: string[];
-  lines: LatestLogLine[];
-  tailLines: number;
-  sinceSeconds: number;
-  fetchedAt: string;
-};
-
 export type WorkloadSummary = {
   kind: WorkloadKind;
   name: string;
@@ -861,49 +829,6 @@ function argoAction(options: ArgoSyncOptions): ChangeHistoryAction {
   return options.revision && options.prune ? "argocd-rollback" : "argocd-sync";
 }
 
-async function collectLatestPodLogs({
-  context,
-  namespace,
-  pod,
-  tailLines,
-  sinceSeconds,
-  captureMs,
-}: {
-  context?: string;
-  namespace: string;
-  pod: string;
-  tailLines: number;
-  sinceSeconds: number;
-  captureMs: number;
-}): Promise<LatestLogLine[]> {
-  const { Channel } = await import("@tauri-apps/api/core");
-  const channel = new Channel<LatestLogLine>();
-  const lines: LatestLogLine[] = [];
-  channel.onmessage = (line) => {
-    if (line.text) lines.push(line);
-  };
-  const streamId = `copilot-logs-${pod}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  try {
-    await invoke("stream_logs", {
-      selector: {
-        namespace,
-        label_selector: null,
-        pod_name: pod,
-        container: null,
-        since_seconds: sinceSeconds,
-        tail_lines: tailLines,
-      },
-      streamId,
-      channel,
-      context: context || undefined,
-    });
-    await new Promise((resolve) => setTimeout(resolve, captureMs));
-  } finally {
-    await invoke("stop_stream", { streamId }).catch(() => {});
-  }
-  return lines;
-}
-
 export const k8s = {
   listContexts: () => invoke<ContextInfo[]>("list_contexts"),
   setContext: (name: string) => invoke<ContextInfo>("set_context", { name }),
@@ -931,53 +856,6 @@ export const k8s = {
     invoke<WorkloadSummary[]>("list_pods_for", { namespace, kind, name, context }),
   listPodsOnNode: (node: string, context?: string) =>
     invoke<WorkloadSummary[]>("list_pods_on_node", { node, context }),
-  fetchLatestLogs: async ({
-    context,
-    target,
-    tailLines = 120,
-    sinceSeconds = 1_800,
-    podLimit = 2,
-    captureMs = 1_200,
-  }: LatestLogsRequest): Promise<LatestLogsResult> => {
-    const kind = target.kind.toLowerCase() as WorkloadKind;
-    const pods =
-      kind === "pod"
-        ? [target.name]
-        : (
-            await k8s.listPodsFor(
-              target.namespace,
-              kind,
-              target.name,
-              context,
-            )
-          )
-            .map((pod) => pod.name)
-            .filter(Boolean)
-            .slice(0, podLimit);
-    const perPodTail = Math.max(20, Math.ceil(tailLines / Math.max(pods.length, 1)));
-    const batches = await Promise.all(
-      pods.map((pod) =>
-        collectLatestPodLogs({
-          context,
-          namespace: target.namespace,
-          pod,
-          tailLines: perPodTail,
-          sinceSeconds,
-          captureMs,
-        }),
-      ),
-    );
-    return {
-      namespace: target.namespace,
-      kind: target.kind,
-      name: target.name,
-      pods,
-      lines: batches.flat().slice(-tailLines),
-      tailLines,
-      sinceSeconds,
-      fetchedAt: new Date().toISOString(),
-    };
-  },
   getPodDetails: (ctx: string, namespace: string, name: string) =>
     invoke<PodDetails>("get_pod_details", { ctx, namespace, name }),
   listFleet: () => invoke<FleetCard[]>("list_fleet"),
