@@ -200,6 +200,23 @@ describe("FleetView", () => {
     expect(diagnoseConnection).toHaveBeenCalledWith(null);
   });
 
+  it("captures a rejected retry as the latest safe diagnostic error", async () => {
+    renderFleet([fleetCard({ name: "unstable", reachable: false, error: "old timeout" })]);
+    await userEvent.click(await screen.findByRole("button", { name: /connect unstable/i }));
+    vi.mocked(k8s.probeFleetContext).mockRejectedValueOnce(
+      new Error("Forbidden token=never-render-this"),
+    );
+    await userEvent.click(await screen.findByRole("button", { name: /diagnose unstable/i }));
+    await screen.findByRole("dialog", { name: /connection diagnostics/i });
+    await userEvent.click(screen.getByRole("button", { name: /retry connection/i }));
+    expect(
+      await within(screen.getByRole("dialog", { name: /connection diagnostics/i })).findByText(
+        "Permission denied",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/never-render-this/)).not.toBeInTheDocument();
+  });
+
   it("orders cluster cards by operator risk", async () => {
     renderFleet([
       fleetCard({ name: "healthy-dev" }),

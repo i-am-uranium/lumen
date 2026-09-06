@@ -185,10 +185,36 @@ describe("TriageView", () => {
     expect(screen.queryByText(/Cluster looks quiet/i)).not.toBeInTheDocument();
   });
 
+  it("keeps warning availability unverified after a successful stream startup and in exports", async () => {
+    vi.mocked(k8s.listWorkloads).mockImplementation(async (_ns, kind) => kind === "pod" ? [workload({ restart_count: 5 })] : []);
+    renderTriage();
+    await screen.findByText("Pod restarting repeatedly");
+    expect(screen.getByText(/Live warning event availability is unverified/i)).toBeInTheDocument();
+    expect(screen.getByText(/Received only; completeness unverified/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^export report$/i }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Live warning event availability is unverified");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Zero received events does not establish that no warnings exist");
+  });
+
+  it("keeps existing workload issues visible but waits for Nodes before exporting", async () => {
+    let finishNodes!: (value: NodeSummary[]) => void;
+    vi.mocked(k8s.listNodes).mockReturnValue(new Promise((resolve) => { finishNodes = resolve; }));
+    vi.mocked(k8s.listWorkloads).mockImplementation(async (_ns, kind) => kind === "pod" ? [workload({ restart_count: 5 })] : []);
+    renderTriage();
+    await screen.findByText("Pod restarting repeatedly");
+    expect(screen.getByText(/Node checks pending/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^export report$/i })).toBeDisabled();
+    expect(screen.queryByText("No critical issues")).not.toBeInTheDocument();
+    act(() => finishNodes([]));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^export report$/i })).not.toBeDisabled());
+    expect(screen.queryByText(/Node checks pending/i)).not.toBeInTheDocument();
+  });
+
   it("shows a useful empty state when no issues are classified", async () => {
     renderTriage();
 
     expect(await screen.findByText(/No active triage issues/i)).toBeInTheDocument();
-    expect(screen.getByText(/Cluster looks quiet from workloads, nodes, and streamed warnings/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Cluster looks quiet/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Warning stream availability remains unverified/i)).toBeInTheDocument();
   });
 });

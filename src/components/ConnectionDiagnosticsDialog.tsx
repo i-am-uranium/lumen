@@ -21,7 +21,7 @@ type Props = {
   observedError?: unknown;
   retrying: boolean;
   onClose: () => void;
-  onRetry: () => void;
+  onRetry: () => void | Promise<void>;
 };
 
 export function ConnectionDiagnosticsDialog({ open, context, observedError, retrying, onClose, onRetry }: Props) {
@@ -32,6 +32,8 @@ export function ConnectionDiagnosticsDialog({ open, context, observedError, retr
   } | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [failedKey, setFailedKey] = useState<string | null>(null);
+  const [inspectionVersion, setInspectionVersion] = useState(0);
+  const [retryInspectionPending, setRetryInspectionPending] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -50,18 +52,34 @@ export function ConnectionDiagnosticsDialog({ open, context, observedError, retr
         }
       })
       .finally(() => {
-        if (current) setLoadingKey(null);
+        if (current) {
+          setLoadingKey(null);
+          setRetryInspectionPending(false);
+        }
       });
     return () => {
       current = false;
     };
-  }, [context, open, requestKey]);
+  }, [context, inspectionVersion, open, requestKey]);
 
   const diagnostic = diagnosticState?.key === requestKey ? diagnosticState.value : null;
-  const loading = open && (loadingKey === requestKey || (!diagnostic && failedKey !== requestKey));
+  const loading = open && (retryInspectionPending || loadingKey === requestKey || (!diagnostic && failedKey !== requestKey));
   const inspectionFailed = failedKey === requestKey;
   const failure = observedError ? classifyConnectionError(observedError) : null;
-  const canRetry = !loading && (diagnostic?.status === "ready_to_retry" || failure !== null);
+  const canRetry =
+    !loading &&
+    (diagnostic?.status === "ready_to_retry" ||
+      diagnostic?.status === "missing_credential_executable" ||
+      failure !== null);
+
+  async function retryAndInspect() {
+    setRetryInspectionPending(true);
+    try {
+      await onRetry();
+    } finally {
+      setInspectionVersion((version) => version + 1);
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -94,7 +112,7 @@ export function ConnectionDiagnosticsDialog({ open, context, observedError, retr
         </div>
         <DialogFooter>
           <Button variant="secondary" onClick={onClose}>Close</Button>
-          <Button disabled={!canRetry || retrying} onClick={onRetry}>
+          <Button disabled={!canRetry || retrying} onClick={() => void retryAndInspect()}>
             <RefreshCw className={retrying ? "size-4 animate-spin" : "size-4"} />
             {retrying ? "Retrying…" : "Retry connection"}
           </Button>

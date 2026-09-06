@@ -966,6 +966,7 @@ export function FleetView() {
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnosticsContext, setDiagnosticsContext] = useState<string | null>(null);
+  const [probeErrorsByContext, setProbeErrorsByContext] = useState<Record<string, unknown>>({});
   const { data: contexts = [], isLoading, isFetching, refetch, error } = useQuery({
     queryKey: ["k8s", "contexts"],
     queryFn: k8s.listContexts,
@@ -1061,9 +1062,29 @@ export function FleetView() {
     setConnecting((prev) => new Set(prev).add(contextName));
     try {
       const card = await k8s.probeFleetContext(contextName);
+      setProbeErrorsByContext((prev) => {
+        const next = { ...prev };
+        delete next[contextName];
+        return next;
+      });
       setContext(card.context.name);
       setCardsByContext((prev) => ({ ...prev, [contextName]: card }));
       await k8s.setContext(contextName).catch(() => undefined);
+    } catch (err) {
+      setProbeErrorsByContext((prev) => ({ ...prev, [contextName]: err }));
+      setCardsByContext((prev) => {
+        const existing = prev[contextName];
+        if (!existing) return prev;
+        return {
+          ...prev,
+          [contextName]: {
+            ...existing,
+            reachable: false,
+            error: errorMessage(err),
+            fetched_at_ms: Date.now(),
+          },
+        };
+      });
     } finally {
       setConnecting((prev) => {
         const next = new Set(prev);
@@ -1331,13 +1352,17 @@ export function FleetView() {
         open={diagnosticsOpen}
         context={diagnosticsContext}
         observedError={
-          diagnosticsContext ? cardsByContext[diagnosticsContext]?.error ?? undefined : error
+          diagnosticsContext
+            ? probeErrorsByContext[diagnosticsContext] ??
+              cardsByContext[diagnosticsContext]?.error ??
+              undefined
+            : error
         }
         retrying={diagnosticsContext ? connecting.has(diagnosticsContext) : false}
         onClose={() => setDiagnosticsOpen(false)}
         onRetry={() => {
-          if (diagnosticsContext) void connectContext(diagnosticsContext);
-          else void rescan();
+          if (diagnosticsContext) return connectContext(diagnosticsContext);
+          return rescan();
         }}
       />
     </LumenPage>

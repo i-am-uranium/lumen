@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionDiagnosticsDialog } from "./ConnectionDiagnosticsDialog";
 import { diagnoseConnection } from "@/lib/connectionDiagnostics";
 
@@ -10,6 +10,10 @@ vi.mock("@/lib/connectionDiagnostics", async (importOriginal) => ({
 }));
 
 describe("ConnectionDiagnosticsDialog", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
   function deferred<T>() {
     let resolve!: (value: T) => void;
     let reject!: (reason?: unknown) => void;
@@ -149,5 +153,37 @@ describe("ConnectionDiagnosticsDialog", () => {
     await act(async () => failed.reject(new Error("inspection failed")));
     expect(await screen.findByText(/inspection could not be completed/i)).toBeInTheDocument();
     expect(screen.queryByText("Old inspection passed.")).not.toBeInTheDocument();
+  });
+
+  it("reinspects after retry so credential-tool remediation replaces the old result", async () => {
+    vi.mocked(diagnoseConnection)
+      .mockResolvedValueOnce({
+        context: "dev",
+        config_path: "/tmp/config",
+        status: "missing_credential_executable",
+        credential_executable: "kubelogin",
+        credential_executable_available: false,
+        message: "Credential tool is missing.",
+        single_source_only: true,
+      })
+      .mockResolvedValueOnce({
+        context: "dev",
+        config_path: "/tmp/config",
+        status: "ready_to_retry",
+        credential_executable: "kubelogin",
+        credential_executable_available: true,
+        message: "Configuration inspection passed after remediation.",
+        single_source_only: true,
+      });
+    const retry = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ConnectionDiagnosticsDialog open context="dev" retrying={false} onClose={() => undefined} onRetry={retry} />,
+    );
+    expect(await screen.findByText("Credential tool is missing.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /retry connection/i }));
+    expect(retry).toHaveBeenCalledOnce();
+    expect(await screen.findByText("Configuration inspection passed after remediation.")).toBeInTheDocument();
+    expect(screen.queryByText("Credential tool is missing.")).not.toBeInTheDocument();
+    expect(diagnoseConnection).toHaveBeenCalledTimes(2);
   });
 });

@@ -36,6 +36,8 @@ import {
 } from "@/lib/triage";
 import { cn } from "@/lib/utils";
 
+const EVENT_AVAILABILITY_UNVERIFIED = "Live warning event availability is unverified. Access and ongoing connection health cannot be confirmed.";
+
 const TRIAGE_KINDS: WorkloadKind[] = [
   "pod",
   "deployment",
@@ -126,6 +128,7 @@ export function TriageView() {
   const [selection, setSelection] = useState<{ scopeKey: string; issue: TriageIssue; startedAt: string } | null>(null);
   const investigation = selection?.scopeKey === scopeKey ? selection : null;
   const [eventError, setEventError] = useState(false);
+  const [captureStartedAt, setCaptureStartedAt] = useState(() => new Date().toISOString());
   const [eventScope, setEventScope] = useState(scopeKey);
   const [search, setSearch] = useState("");
   const [activeGroup, setActiveGroup] = useState<TriageGroup | "all">("all");
@@ -139,6 +142,7 @@ export function TriageView() {
   } | null>(null);
 
   useEffect(() => {
+    setCaptureStartedAt(new Date().toISOString());
     setSelection(null);
     setDrawerResource(null);
     setReportScope(null);
@@ -226,7 +230,10 @@ export function TriageView() {
     [activeGroup, filteredIssues, issues, search],
   );
 
-  const isLoading = scope.isLoading || workloadQueries.some((query) => query.isLoading);
+  const isLoading = scope.isLoading || workloadQueries.some((query) => query.isPending) || nodesQuery.isPending;
+  const eventAvailability = eventError
+    ? "Live warning events unavailable: stream startup failed."
+    : EVENT_AVAILABILITY_UNVERIFIED;
   const isFetching = workloadQueries.some((query) => query.isFetching) || nodesQuery.isFetching;
   const unavailable = [
     ...workloadQueries.flatMap((query, index) => query.isError ? [TRIAGE_KINDS[index]] : []),
@@ -261,7 +268,7 @@ export function TriageView() {
         description={
           <>
             {context} · {namespace || "all namespaces"} · {issues.length} active issue{issues.length === 1 ? "" : "s"} from
-            workloads, nodes, and live warning events
+            workload and node checks, plus received warning events
           </>
         }
         actions={
@@ -290,7 +297,7 @@ export function TriageView() {
               type="button"
               variant="outline"
               onClick={() => setReportScope(scopeKey)}
-              disabled={!context}
+              disabled={!context || isLoading}
             >
               <FileDown className="size-3.5" />
               export report
@@ -299,32 +306,36 @@ export function TriageView() {
         }
       />
 
+      <div role="status" className="rounded-panel border border-border-default p-3 text-sm text-text-secondary">
+        {eventAvailability} Counts reflect received events only; zero does not establish that no warnings exist.
+      </div>
+      {nodesQuery.isPending && <p role="status" className="text-sm text-text-secondary">Node checks pending. Available workload issues remain visible; report export waits for the request to settle.</p>}
       {partial && <div role="status" className="rounded-panel border border-warning/40 bg-warning-soft p-3 text-sm text-text-secondary">Partial data: {unavailable.join(", ")} unavailable. Counts cover successful sources only.</div>}
       {investigation && <TriageInvestigation context={context} issue={investigation.issue} startedAt={investigation.startedAt} onClose={() => setSelection(null)} />}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <TriageMetric
           label="Critical"
           value={counts.critical}
-          tone={counts.critical ? "error" : partial || isLoading ? "muted" : "success"}
-          sub={counts.critical ? "Node or severe restart risk" : partial || isLoading ? "Available sources only" : "No critical issues"}
+          tone={counts.critical ? "error" : "muted"}
+          sub={counts.critical ? "Node or severe restart risk" : partial || isLoading ? "Available sources only" : "None in completed checks"}
         />
         <TriageMetric
           label="High"
           value={counts.high}
-          tone={counts.high ? "warning" : partial || isLoading ? "muted" : "success"}
-          sub={counts.high ? "Failed or unstable resources" : partial || isLoading ? "Available sources only" : "No high issues"}
+          tone={counts.high ? "warning" : "muted"}
+          sub={counts.high ? "Failed or unstable resources" : partial || isLoading ? "Available sources only" : "None in completed checks"}
         />
         <TriageMetric
           label="Medium"
           value={counts.medium}
-          tone={counts.medium ? "info" : partial || isLoading ? "muted" : "success"}
-          sub={counts.medium ? "Pending, degraded, or warnings" : partial || isLoading ? "Available sources only" : "No medium issues"}
+          tone={counts.medium ? "info" : "muted"}
+          sub={counts.medium ? "Pending, degraded, or warnings" : partial || isLoading ? "Available sources only" : "None in completed checks"}
         />
         <TriageMetric
-          label="Warnings"
+          label="Warnings received"
           value={scopedEvents.length}
           tone={scopedEvents.length ? "warning" : "muted"}
-          sub="Live event buffer"
+          sub={eventError ? "Stream startup unavailable" : "Received only; completeness unverified"}
         />
         <TriageMetric
           label="Resources"
@@ -400,7 +411,18 @@ export function TriageView() {
           selectedResource: null,
           triageIssues: reportIssues,
           warningEvents: scopedEvents,
-          investigation: partial ? { startedAt: new Date().toISOString(), sources: unavailable.map((name) => `${name}: unavailable`), observations: ["Partial triage capture; counts cover successful sources only."] } : undefined,
+          investigation: {
+            startedAt: captureStartedAt,
+            sources: [
+              ...unavailable.map((name) => `${name}: unavailable`),
+              nodesQuery.isPending ? "Node checks: pending" : nodesQuery.isSuccess ? `Node checks: captured ${new Date(nodesQuery.dataUpdatedAt).toISOString()}` : "Node checks: unavailable",
+              eventAvailability,
+            ],
+            observations: [
+              "Triage counts cover completed checks and received events only.",
+              "Zero received events does not establish that no warnings exist. The event buffer may be incomplete, including when stream startup succeeds.",
+            ],
+          },
           rolloutEntries: [],
         }}
       />
@@ -595,12 +617,11 @@ function EmptyState({
   return (
     <div className="rounded-panel border border-border-default bg-surface p-6">
       <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
-        <CheckCircle2 className="size-4 text-success" />
-        No active triage issues
+        <CheckCircle2 className="size-4 text-text-muted" />
+        No active triage issues in completed checks
       </div>
       <p className="mt-2 text-sm text-text-secondary">
-        Cluster looks quiet from workloads, nodes, and streamed warnings. Keep this page open
-        during rollout windows to catch new Warning events as they arrive.
+        No issues were found in completed workload and node checks. Warning stream availability remains unverified; zero received events does not establish that no warnings exist.
       </p>
     </div>
   );
