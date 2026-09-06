@@ -186,4 +186,38 @@ describe("ConnectionDiagnosticsDialog", () => {
     expect(screen.queryByText("Credential tool is missing.")).not.toBeInTheDocument();
     expect(diagnoseConnection).toHaveBeenCalledTimes(2);
   });
+
+  it("rescans and reinspects after an externally repaired missing context", async () => {
+    vi.mocked(diagnoseConnection)
+      .mockResolvedValueOnce({
+        context: null,
+        config_path: "/tmp/config",
+        status: "context_missing",
+        credential_executable: null,
+        credential_executable_available: null,
+        message: "No context is selected and the kubeconfig has no current context.",
+        single_source_only: true,
+      })
+      .mockResolvedValueOnce({
+        context: null,
+        config_path: "/tmp/config",
+        status: "ready_to_retry",
+        credential_executable: null,
+        credential_executable_available: null,
+        message: "Configuration inspection passed after rescan.",
+        single_source_only: true,
+      });
+    const rescan = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ConnectionDiagnosticsDialog open context={null} retrying={false} onClose={() => undefined} onRetry={rescan} />,
+    );
+    expect(await screen.findByText(/No context is selected/i)).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: /retry connection/i });
+    expect(retry).toBeEnabled();
+    await userEvent.click(retry);
+    expect(rescan).toHaveBeenCalledOnce();
+    expect(await screen.findByText("Configuration inspection passed after rescan.")).toBeInTheDocument();
+    expect(screen.queryByText(/No context is selected/i)).not.toBeInTheDocument();
+    expect(diagnoseConnection).toHaveBeenCalledTimes(2);
+  });
 });

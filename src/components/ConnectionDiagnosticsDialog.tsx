@@ -66,11 +66,7 @@ export function ConnectionDiagnosticsDialog({ open, context, observedError, retr
   const loading = open && (retryInspectionPending || loadingKey === requestKey || (!diagnostic && failedKey !== requestKey));
   const inspectionFailed = failedKey === requestKey;
   const failure = observedError ? classifyConnectionError(observedError) : null;
-  const canRetry =
-    !loading &&
-    (diagnostic?.status === "ready_to_retry" ||
-      diagnostic?.status === "missing_credential_executable" ||
-      failure !== null);
+  const canRetry = !loading && (diagnostic !== null || failure !== null);
 
   async function retryAndInspect() {
     setRetryInspectionPending(true);
