@@ -137,11 +137,15 @@ jobs:
             git push origin "$TAG"
           fi
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            NOTES_ARGS=(--generate-notes)
+            if [ -f "docs/release/$TAG.md" ]; then
+              NOTES_ARGS=(--notes-file "docs/release/$TAG.md")
+            fi
             gh release create "$TAG" \
               --repo "$REPO" \
               --draft \
               --title "Lumen $TAG" \
-              --generate-notes
+              "${NOTES_ARGS[@]}"
           fi
 
   build-macos:
