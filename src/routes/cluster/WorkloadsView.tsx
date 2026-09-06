@@ -14,7 +14,6 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
-  Bot,
   Box,
   CheckCircle2,
   Filter,
@@ -247,32 +246,6 @@ export function restartEligibleWorkloads(rows: WorkloadSummary[]): WorkloadSumma
   return rows.filter((w) =>
     w.kind === "deployment" || w.kind === "statefulset" || w.kind === "daemonset",
   );
-}
-
-export function buildSelectedWorkloadsAiContext(
-  ctx: string,
-  rows: WorkloadSummary[],
-): string {
-  return [
-    "selected_workload_resources:",
-    rows.length
-      ? rows
-          .map((w) =>
-            [
-              `- ${w.kind}/${w.namespace}/${w.name}`,
-              `cluster=${ctx || "unknown"}`,
-              `health=${w.health}`,
-              `ready=${w.ready || "-"}`,
-              `phase=${w.pod_phase ?? "-"}`,
-              `restarts=${w.restart_count ?? 0}`,
-              `node=${w.node_name ?? "-"}`,
-              `cpu_milli=${w.cpu_milli ?? "-"}`,
-              `mem_bytes=${w.mem_bytes ?? "-"}`,
-            ].join(" "),
-          )
-          .join("\n")
-      : "none",
-  ].join("\n");
 }
 
 export function matchQuickFilters(
@@ -1045,6 +1018,11 @@ export function WorkloadsView() {
       return;
     }
     const next = new URLSearchParams();
+    // Retired assistant tabs can contain saved operator text and a reference
+    // to local evidence. Keep those values inert when normalizing filters.
+    for (const key of ["question", "task", "aiContext", "kind", "name", "namespace"]) {
+      for (const value of searchParams.getAll(key)) next.append(key, value);
+    }
     if (namespace) next.set("ns", namespace);
     if (search) next.set("q", search);
     const nextString = next.toString();
@@ -1349,20 +1327,6 @@ export function WorkloadsView() {
     }
   }
 
-  function askAiAboutSelected() {
-    if (selectedItems.length === 0) return;
-    try {
-      const key = `lumen-ai-context-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      window.sessionStorage.setItem(
-        key,
-        buildSelectedWorkloadsAiContext(context, selectedItems),
-      );
-      navigate(`/cluster/${encodeURIComponent(context)}/ai?task=root-cause&aiContext=${encodeURIComponent(key)}`);
-    } catch (e) {
-      toast.error((e as Error).message ?? "Unable to prepare selected resources for AI");
-    }
-  }
-
   function selectKind(kind: WorkloadKind | null) {
     const base = `/cluster/${encodeURIComponent(context)}/workloads`;
     if (!kind) {
@@ -1583,7 +1547,6 @@ export function WorkloadsView() {
                 skippedRestartCount={selectedSkipRestartCount}
                 readOnly={readOnly}
                 busy={bulkBusy}
-                onAskAi={askAiAboutSelected}
                 onRestart={() => setPendingBulkAction("restart")}
                 onDelete={() => setPendingBulkAction("delete")}
                 onClear={() => setSelectedKeys(new Set())}
@@ -1801,7 +1764,6 @@ function BulkActionBar({
   skippedRestartCount,
   readOnly,
   busy,
-  onAskAi,
   onRestart,
   onDelete,
   onClear,
@@ -1811,7 +1773,6 @@ function BulkActionBar({
   skippedRestartCount: number;
   readOnly: boolean;
   busy: boolean;
-  onAskAi: () => void;
   onRestart: () => void;
   onDelete: () => void;
   onClear: () => void;
@@ -1827,10 +1788,6 @@ function BulkActionBar({
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onAskAi}>
-          <Bot className="size-3.5" />
-          Ask AI
-        </Button>
         <Button
           type="button"
           size="sm"

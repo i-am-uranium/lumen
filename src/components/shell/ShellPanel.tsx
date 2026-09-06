@@ -15,16 +15,19 @@ const ShellTerminalHost = lazy(() =>
 export function ShellPanel({
   session,
   containerOptions,
+  onStartSelection,
 }: {
   session: ShellSession;
   containerOptions: { name: string }[];
+  onStartSelection: (container: string, command: string[]) => void;
 }) {
   const snapshot = useShellSession(session);
   const [search, setSearch] = useState<ShellSearchState>({ query: "", caseSensitive: false });
   const [matchCount, setMatchCount] = useState(0);
   const [currentMatch, setCurrentMatch] = useState(0);
   const [container, setContainer] = useState(session.container);
-  const [command, setCommand] = useState(session.command.join(" "));
+  const [command, setCommand] = useState(formatCommand(session.command));
+  const [startError, setStartError] = useState<string | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
 
   // Run search whenever the query or case toggle changes.
@@ -62,14 +65,17 @@ export function ShellPanel({
   })();
 
   function onStart() {
-    void session.start(80, 24);
+    try {
+      const args = parseCommand(command);
+      if (!container) throw new Error("Select a container.");
+      setStartError(null);
+      onStartSelection(container, args);
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : String(error));
+    }
   }
   function onStop() {
     session.close();
-  }
-  function onResetTerminal() {
-    // Reset is a soft op for v1: we don't expose a re-mount path. Future:
-    // bump a key on ShellTerminalHost to force unmount/remount.
   }
   function onDownload() {
     const chunks = session.getScrollbackChunks();
@@ -97,7 +103,7 @@ export function ShellPanel({
         <span>·</span>
         <span>container {session.container}</span>
         <span>·</span>
-        <span className="font-mono">{session.command.join(" ")}</span>
+        <span className="font-mono">{formatCommand(session.command)}</span>
         <span className={cn("ml-1 size-2 rounded-full", stateDot)} title={snapshot.state} />
       </div>
       <ShellToolbar
@@ -115,9 +121,9 @@ export function ShellPanel({
         onSearchNext={() => searchAddonRef.current?.findNext(search.query, { caseSensitive: search.caseSensitive })}
         onStart={onStart}
         onStop={onStop}
-        onResetTerminal={onResetTerminal}
         onDownload={onDownload}
       />
+      {startError && <div role="alert" className="px-3 py-2 text-[11px] text-term-red">{startError}</div>}
       <Suspense
         fallback={
           <div className="flex h-full items-center justify-center text-[12px] text-term-muted">
@@ -129,4 +135,35 @@ export function ShellPanel({
       </Suspense>
     </div>
   );
+}
+
+// Parse argv only: expansion, pipes, and redirects require an explicit shell
+// command such as /bin/sh -c '...'. Quotes group arguments without being sent.
+function formatCommand(args: ReadonlyArray<string>): string {
+  return args.map((arg) => /^[\w/.=:+-]+$/.test(arg) ? arg : `'${arg.split("'").join("'\\''")}'`).join(" ");
+}
+
+function parseCommand(text: string): string[] {
+  const args: string[] = [];
+  let word = "";
+  let quote: string | null = null;
+  let escaped = false;
+  let started = false;
+  for (const char of text) {
+    if (escaped) { word += char; escaped = false; started = true; continue; }
+    if (char === "\\" && quote !== "'") { escaped = true; started = true; continue; }
+    if (quote) {
+      if (char === quote) quote = null;
+      else word += char;
+      continue;
+    }
+    if (char === "'" || char === '"') { quote = char; started = true; continue; }
+    if (/\s/.test(char)) {
+      if (started) { args.push(word); word = ""; started = false; }
+    } else { word += char; started = true; }
+  }
+  if (quote || escaped) throw new Error("Close the command quote or escape before starting.");
+  if (started) args.push(word);
+  if (!args[0]) throw new Error("Enter a command before starting.");
+  return args;
 }

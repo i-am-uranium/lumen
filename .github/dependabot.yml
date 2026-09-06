@@ -5,31 +5,6 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    ignore:
-      # Linux-only transitive from Tauri's GTK stack; we only ship macOS builds
-      # and Tauri <= 2.10.x is pinned to the glib 0.18.x line. Re-enable once
-      # Tauri upstream moves to glib >= 0.20.
-      - dependency-name: glib
-      - dependency-name: gtk
-      - dependency-name: gtk-sys
-      - dependency-name: gdk
-      - dependency-name: gdk-sys
-      - dependency-name: gdk-pixbuf
-      - dependency-name: gdk-pixbuf-sys
-      - dependency-name: gio
-      - dependency-name: gio-sys
-      - dependency-name: glib-sys
-      - dependency-name: gobject-sys
-      - dependency-name: pango
-      - dependency-name: pango-sys
-      - dependency-name: atk
-      - dependency-name: atk-sys
-      - dependency-name: cairo-rs
-      - dependency-name: cairo-sys-rs
-      - dependency-name: soup3
-      - dependency-name: soup3-sys
-      - dependency-name: webkit2gtk
-      - dependency-name: webkit2gtk-sys
 
   - package-ecosystem: npm
     directory: /

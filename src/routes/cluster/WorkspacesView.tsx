@@ -43,7 +43,6 @@ const STEP_KINDS: Array<{ value: RunbookStepKind; label: string }> = [
   { value: "open-resource", label: "open resource" },
   { value: "open-logs", label: "open logs" },
   { value: "port-forward", label: "port-forward prompt" },
-  { value: "ask-ai", label: "ask AI" },
   { value: "checklist", label: "checklist" },
 ];
 
@@ -72,7 +71,6 @@ function defaultStep(kind: RunbookStepKind = "checklist"): RunbookStep {
       kind === "open-logs"
         ? { kind: "deployment", namespace: "default", name: "", filter: "" }
         : undefined,
-    prompt: kind === "ask-ai" ? "Summarize the likely cause from this context." : undefined,
     note:
       kind === "checklist" || kind === "port-forward"
         ? "Record the expected operator check."
@@ -730,15 +728,6 @@ function StepFields({
       </div>
     );
   }
-  if (step.kind === "ask-ai") {
-    return (
-      <TextAreaField
-        label="prompt"
-        value={step.prompt ?? ""}
-        onChange={(prompt) => onChange({ ...step, prompt })}
-      />
-    );
-  }
   return (
     <TextAreaField
       label={step.kind === "port-forward" ? "prompt" : "note"}
@@ -846,7 +835,6 @@ function stepSummary(step: RunbookStep): string {
   if (step.kind === "open-logs" && step.logs) {
     return `logs ${step.logs.kind}/${step.logs.namespace}/${step.logs.name}`;
   }
-  if (step.kind === "ask-ai") return step.prompt ?? "ask AI";
   return step.note ?? step.kind;
 }
 

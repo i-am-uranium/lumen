@@ -122,7 +122,7 @@ export function useTabView(streams: LogStream[], opts: SearchOpts): TabView {
   );
   // Snapshot is the sum of versions — a primitive that changes whenever any
   // stream notifies. Cheap to compute and stable when nothing changed.
-  useSyncExternalStore(
+  const version = useSyncExternalStore(
     subscribe,
     () => streams.reduce((sum, s) => sum + s.getVersion(), 0),
   );
@@ -130,5 +130,5 @@ export function useTabView(streams: LogStream[], opts: SearchOpts): TabView {
     const buffers = streams.map((s) => s.getBuffer());
     const drops = streams.reduce((sum, s) => sum + s.getDropCount(), 0);
     return mergeAndFilter(buffers, opts, drops);
-  }, [streams, opts.query, opts.regex, opts.caseSensitive, opts.levels]);
+  }, [version, streams, opts.query, opts.regex, opts.caseSensitive, opts.levels]);
 }

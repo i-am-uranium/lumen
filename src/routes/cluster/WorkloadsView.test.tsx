@@ -1,10 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WorkloadsView,
-  buildSelectedWorkloadsAiContext,
   matchQuickFilters,
   restartEligibleWorkloads,
   selectVisibleWorkloadKeys,
@@ -13,6 +12,7 @@ import {
   workloadRiskScore,
   type QuickFilter,
 } from "./WorkloadsView";
+import { LegacyAssistantRedirect } from "@/components/LegacyAssistantRedirect";
 import { k8s, type WorkloadSummary } from "@/lib/k8s";
 
 vi.mock("@/hooks/useK8sWatch", () => ({
@@ -191,31 +191,14 @@ describe("workload selection helpers", () => {
     ]);
   });
 
-  it("formats selected workload context for the AI assistant", () => {
-    const context = buildSelectedWorkloadsAiContext("prod", [
-      workload({
-        kind: "pod",
-        namespace: "checkout",
-        name: "api-7b9",
-        health: "degraded",
-        ready: "0/1",
-        pod_phase: "Pending",
-        restart_count: 3,
-        node_name: "node-a",
-        cpu_milli: 120,
-        mem_bytes: 2048,
-      }),
-    ]);
-
-    expect(context).toContain("selected_workload_resources:");
-    expect(context).toContain("- pod/checkout/api-7b9");
-    expect(context).toContain("cluster=prod");
-    expect(context).toContain("health=degraded");
-    expect(context).toContain("restarts=3");
-  });
 });
 
-function renderWorkloads(items: WorkloadSummary[]) {
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="current route">{location.pathname + location.search}</output>;
+}
+
+function renderWorkloads(items: WorkloadSummary[], initialEntry = "/cluster/dev/workloads/pod") {
   vi.mocked(k8s.listNamespaces).mockResolvedValue([]);
   vi.mocked(k8s.listWorkloads).mockImplementation(async (_ns, kind) =>
     items.filter((w) => w.kind === kind),
@@ -226,10 +209,12 @@ function renderWorkloads(items: WorkloadSummary[]) {
   });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={["/cluster/dev/workloads/pod"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <LocationProbe />
         <Routes>
+          <Route path="/cluster/:ctx/ai" element={<LegacyAssistantRedirect />} />
           <Route
-            path="/cluster/:ctx/workloads/:kind"
+            path="/cluster/:ctx/workloads/:kind?"
             element={<WorkloadsView />}
           />
           <Route
@@ -359,3 +344,25 @@ describe("WorkloadsView actionable stat cards", () => {
   });
 });
 
+
+describe("retired assistant destination", () => {
+  it("retains saved question and context after workloads normalizes and changes its filters", async () => {
+    window.sessionStorage.setItem("saved-context", "operator evidence");
+    renderWorkloads([
+      workload({ name: "api", namespace: "payments" }),
+      workload({ name: "web", namespace: "payments" }),
+    ], "/cluster/dev/ai?namespace=payments&name=api&question=Why%3F&task=root-cause&aiContext=saved-context");
+    await screen.findByText("api");
+    const route = () => new URL(screen.getByLabelText("current route").textContent!, "https://local.invalid");
+    expect(route().pathname).toBe("/cluster/dev/workloads");
+    expect(route().searchParams.get("question")).toBe("Why?");
+    expect(route().searchParams.get("task")).toBe("root-cause");
+    expect(route().searchParams.get("aiContext")).toBe("saved-context");
+    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "web" } });
+    await waitFor(() => expect(route().searchParams.get("q")).toBe("web"));
+    expect(route().searchParams.get("question")).toBe("Why?");
+    expect(route().searchParams.get("aiContext")).toBe("saved-context");
+    expect(window.sessionStorage.getItem("saved-context")).toBe("operator evidence");
+    window.sessionStorage.removeItem("saved-context");
+  });
+});

@@ -1,6 +1,11 @@
 name: codeql
 
 on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        type: string
+        required: true
   pull_request:
   push:
     branches: [main]
@@ -26,6 +31,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

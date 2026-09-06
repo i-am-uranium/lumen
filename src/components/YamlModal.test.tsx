@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { YamlModal } from "./YamlModal";
 import { k8s } from "@/lib/k8s";
 
@@ -71,7 +71,88 @@ function renderEditableYamlModal({
   );
 }
 
+beforeEach(() => { vi.mocked(k8s.applyResource).mockReset(); });
+
 describe("YamlModal", () => {
+  it("checks patch permission for server-side apply instead of update", async () => {
+    vi.mocked(k8s.checkAccess).mockImplementation(async (request) => ({
+      allowed: request.verb === "patch", denied: request.verb !== "patch", reason: null, evaluation_error: null,
+    }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><YamlModal title="configmap/patchable" yaml="kind: ConfigMap" editable={{ namespace: "default", kind: "configmap", name: "patchable", context: "dev" }} onClose={vi.fn()} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByRole("button", { name: /edit/i })).toBeEnabled());
+    expect(k8s.checkAccess).toHaveBeenCalledWith(expect.objectContaining({ verb: "patch", name: "patchable" }), "dev");
+  });
+
+  it("blocks apply until this draft passes server validation and invalidates edits", async () => {
+    renderEditableYamlModal();
+    await userEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}" } });
+    const apply = screen.getByRole("button", { name: /^apply$/i });
+    expect(apply).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    await waitFor(() => expect(apply).toBeEnabled());
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: two}" } });
+    expect(apply).toBeDisabled();
+  });
+
+  it("keeps failed server validation from enabling apply", async () => {
+    renderEditableYamlModal();
+    vi.mocked(k8s.applyResource).mockRejectedValueOnce(new Error("admission denied"));
+    await userEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}" } });
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    expect(await screen.findByText("admission denied")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^apply$/i })).toBeDisabled();
+  });
+
+  it("ignores delayed validation after the draft changes", async () => {
+    renderEditableYamlModal();
+    let complete!: (out: { yaml: string; dry_run: boolean }) => void;
+    vi.mocked(k8s.applyResource).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    await userEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}" } });
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: two}" } });
+    await act(async () => complete({ yaml: "old server result", dry_run: true }));
+    expect(screen.getByRole("button", { name: /^apply$/i })).toBeDisabled();
+    expect(screen.queryByText("old server result")).not.toBeInTheDocument();
+  });
+
+  it("locks the validated draft while the confirmed write is in flight", async () => {
+    renderEditableYamlModal();
+    await userEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    const input = screen.getByRole("textbox");
+    const draft = "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}";
+    fireEvent.change(input, { target: { value: draft } });
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    let complete!: (out: { yaml: string; dry_run: boolean }) => void;
+    vi.mocked(k8s.applyResource).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: /confirmation text/i }), "default/app");
+    await userEvent.click(within(dialog).getByRole("button", { name: /^apply$/i }));
+    expect(input).toBeDisabled();
+    expect(k8s.applyResource).toHaveBeenLastCalledWith("default", "configmap", "app", draft, false, "dev");
+    await act(async () => complete({ yaml: draft, dry_run: false }));
+  });
+
+  it("does not reuse validation or delayed responses across contexts", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.mocked(k8s.checkAccess).mockResolvedValue({ allowed: true, denied: false, reason: null, evaluation_error: null });
+    let complete!: (out: { yaml: string; dry_run: boolean }) => void;
+    vi.mocked(k8s.applyResource).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    const view = (context: string) => <QueryClientProvider client={qc}><YamlModal title="configmap/app" subtitle="default" yaml="kind: ConfigMap" editable={{ namespace: "default", kind: "configmap", name: "app", context }} onClose={vi.fn()} /></QueryClientProvider>;
+    const rendered = render(view("dev"));
+    await userEvent.click(await screen.findByRole("button", { name: /edit/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}" } });
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    rendered.rerender(view("prod"));
+    await act(async () => complete({ yaml: "dev server result", dry_run: true }));
+    expect(screen.queryByText("dev server result")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^apply$/i })).not.toBeInTheDocument();
+  });
+
   it("keeps redacted sensitive YAML read-only", () => {
     renderYamlModal();
 
@@ -86,12 +167,13 @@ describe("YamlModal", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /edit/i }));
     await userEvent.type(screen.getByRole("textbox"), "\n  labels:\n    app: demo");
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
     await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
 
     const dialog = screen.getByRole("dialog", { name: /apply configmap/i });
     const confirm = within(dialog).getByRole("button", { name: /^apply$/i });
     expect(confirm).toBeDisabled();
-    expect(k8s.applyResource).not.toHaveBeenCalled();
+    expect(vi.mocked(k8s.applyResource).mock.calls.every((call) => call[4] === true)).toBe(true);
 
     await userEvent.type(
       screen.getByRole("textbox", { name: /confirmation text/i }),
@@ -154,6 +236,7 @@ spec:
 `,
       },
     });
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
     await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
 
     const dialog = screen.getByRole("dialog", { name: /preflight apply deployment/i });

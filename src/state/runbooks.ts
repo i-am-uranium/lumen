@@ -21,7 +21,6 @@ export type RunbookStepKind =
   | "open-resource"
   | "open-logs"
   | "port-forward"
-  | "ask-ai"
   | "checklist";
 
 export type RunbookStep = {
@@ -31,7 +30,6 @@ export type RunbookStep = {
   route?: string;
   resource?: RunbookResourceTarget;
   logs?: RunbookLogsTarget;
-  prompt?: string;
   note?: string;
 };
 
@@ -86,10 +84,16 @@ function clean(input: RunbookInput): RunbookInput {
   };
 }
 
-function cleanStep(step: RunbookStep): RunbookStep {
+type LegacyRunbookStep = Omit<RunbookStep, "kind"> & {
+  kind: RunbookStepKind | "ask-ai";
+  prompt?: string;
+};
+
+function cleanStep(step: LegacyRunbookStep): RunbookStep {
+  const legacyAssistant = step.kind === "ask-ai";
   return {
     id: step.id?.trim() || makeId("step", nowMs()),
-    kind: step.kind,
+    kind: step.kind === "ask-ai" ? "checklist" : step.kind,
     title: step.title.trim(),
     route: step.route?.trim(),
     resource: step.resource
@@ -108,8 +112,10 @@ function cleanStep(step: RunbookStep): RunbookStep {
           filter: step.logs.filter?.trim() ?? "",
         }
       : undefined,
-    prompt: step.prompt?.trim(),
-    note: step.note?.trim(),
+    note: legacyAssistant
+      ? [step.note?.trim(), step.prompt?.trim()].filter(Boolean).join("\n\n") ||
+        step.title.trim()
+      : step.note?.trim(),
   };
 }
 
@@ -184,9 +190,6 @@ export function validateRunbookInput(input: RunbookInput): string[] {
     }
     if (step.kind === "open-logs" && !step.logs) {
       errors.push(`${label} needs a logs target.`);
-    }
-    if (step.kind === "ask-ai" && !step.prompt?.trim()) {
-      errors.push(`${label} needs an AI prompt.`);
     }
     if (
       (step.kind === "checklist" || step.kind === "port-forward") &&
@@ -269,14 +272,6 @@ export function buildRunbookStepUrl(
     if (step.logs.container) params.set("c", step.logs.container);
     if (step.logs.filter) params.set("grep", step.logs.filter);
     return `${base}/logs?${params.toString()}`;
-  }
-
-  if (step.kind === "ask-ai" && step.prompt) {
-    const params = new URLSearchParams({
-      task: "root-cause",
-      question: step.prompt,
-    });
-    return `${base}/ai?${params.toString()}`;
   }
 
   return null;

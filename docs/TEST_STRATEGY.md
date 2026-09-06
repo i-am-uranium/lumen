@@ -25,6 +25,12 @@ Lumen must be tested as a production Kubernetes operations tool. The test suite 
 
 ## Kubernetes E2E Matrix
 
+`./scripts/test-kind.sh` currently provides a native API integration gate for
+server dry-run, apply/delete, read-only RBAC and namespace isolation. It creates
+a disposable cluster with a temporary kubeconfig and deletes it on exit. It
+does not exercise the desktop UI. The broader matrix below remains the release
+validation target, rather than a claim that every scenario is automated.
+
 Run the core E2E suite on:
 
 - `kind` latest stable Kubernetes.

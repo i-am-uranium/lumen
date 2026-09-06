@@ -172,3 +172,70 @@ describe("LogStream — pause/clear", () => {
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("LogStream — lifecycle", () => {
+  async function start() {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockClear();
+    const stream = new LogStream({ pod: "api", container: "app" });
+    stream.start();
+    const args = vi.mocked(invoke).mock.calls[0][1] as { channel: { onmessage: (event: unknown) => void } };
+    return { stream, send: args.channel.onmessage };
+  }
+
+  it("reports connecting until the backend confirms live, then retrying and ended", async () => {
+    const { stream, send } = await start();
+    expect(stream.status).toBe("connecting");
+    send({ type: "status", pod: "api", status: "live" });
+    expect(stream.status).toBe("live");
+    send({ type: "status", pod: "api", status: "retrying", message: "connection lost" });
+    expect(stream.status).toBe("retrying");
+    expect(stream.getPendingCount()).toBe(0);
+    send({ type: "status", pod: "", status: "ended" });
+    expect(stream.status).toBe("ended");
+    expect(stream.isRunning()).toBe(false);
+  });
+
+  it("ignores late messages and startup failures from a stopped attempt", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    let reject!: (error: unknown) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const { stream, send } = await start();
+    stream.stop();
+    stream.start();
+    send({ pod: "api", container: "app", text: "stale" });
+    reject({ message: "old request failed" });
+    await Promise.resolve();
+    expect(stream.getPendingCount()).toBe(0);
+    expect(stream.errorMessage).toBeNull();
+    expect(stream.status).toBe("connecting");
+    stream.stop();
+  });
+
+  it("surfaces structured startup errors and allows starting again", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockRejectedValueOnce({ kind: "K8s", message: "access denied" });
+    const { stream } = await start();
+    await Promise.resolve();
+    expect(stream.errorMessage).toBe("access denied");
+    expect(stream.status).toBe("error");
+    expect(stream.isRunning()).toBe(false);
+    stream.start();
+    expect(stream.errorMessage).toBeNull();
+    expect(stream.status).toBe("connecting");
+    stream.stop();
+  });
+  it("cancels again after a stopped startup is acknowledged", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    let acknowledge!: () => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise<void>((resolve) => { acknowledge = resolve; }));
+    const { stream } = await start();
+    stream.stop();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "stop_stream")).toHaveLength(1);
+    acknowledge();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "stop_stream")).toHaveLength(2);
+  });
+
+});

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +40,7 @@ describe("LogsTab deep links", () => {
     vi.mocked(k8s.listNamespaces).mockResolvedValue(["prod", "checkout"]);
   });
 
-  it("resolves a workload name across namespaces when Copilot omits namespace", async () => {
+  it("resolves a workload name across namespaces when a deep link omits namespace", async () => {
     vi.mocked(k8s.listWorkloads).mockResolvedValue([
       {
         kind: "deployment",
@@ -68,4 +68,18 @@ describe("LogsTab deep links", () => {
     const matches = await screen.findAllByText("customer-service");
     expect(matches.length).toBeGreaterThan(0);
   });
+  it("keeps a failed pod visible when another pod becomes live", async () => {
+    vi.mocked(k8s.listWorkloads).mockResolvedValue([]);
+    renderLogs("/cluster/dev/logs?kind=deployment&name=api&ns=prod");
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("stream_logs", expect.anything()));
+    const args = vi.mocked(invoke).mock.calls.find(([command]) => command === "stream_logs")![1] as {
+      channel: { onmessage: (event: unknown) => void };
+    };
+    act(() => {
+      args.channel.onmessage({ type: "status", pod: "api-1", status: "error", message: "access denied for api-1" });
+      args.channel.onmessage({ type: "status", pod: "api-2", status: "live" });
+    });
+    expect(screen.getByText("access denied for api-1")).toBeInTheDocument();
+  });
+
 });

@@ -68,10 +68,16 @@ Every create, apply, edit, patch, delete, scale, restart, trigger, shell, and po
 
 ## Future Plugin / MCP Requirements
 
-Plugin runtime, AI assistant, and MCP support are not v1.0 core. If added later, they need:
+The current release has no AI assistant, Copilot, or model-provider process commands. Plugin runtime and MCP support are outside the core release. A future extension design requires:
 
 - Permission manifest per extension.
 - Explicit install trust prompt.
 - No automatic local process execution.
 - Sandboxed renderer execution where practical.
 - Separate security review for filesystem, network, kubeconfig, and process-spawn permissions.
+
+## Retired Assistant Data
+
+Existing local assistant history and preferences are left untouched; this release does not automatically erase saved user content. The inactive keys are `lumen:ai:sessions`, `lumen:ai-assistant:settings`, and `lumen:copilot-ui`. Temporary `lumen-ai-context-*` session entries are also left alone. These values are no longer loaded by an assistant or sent to a model.
+
+Old `/cluster/:context/ai` tabs redirect to workloads in the same cluster, preserving resource filters and existing query text as inert values. Saved runbook `ask-ai` steps become manual checklist steps when read; their prompts and notes remain available as instructions. Loading a runbook does not rewrite its stored data; normal subsequent edits save the migrated form.

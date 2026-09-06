@@ -655,7 +655,7 @@ pub async fn apply_resource(
 ) -> AppResult<ApplyOutcome> {
     let value = prepare_apply_manifest(&kind, namespace, name, yaml_text)?;
 
-    let mut pp = PatchParams::apply("lumen").force();
+    let mut pp = PatchParams::apply("lumen");
     if dry_run {
         pp = pp.dry_run();
     }
@@ -857,6 +857,53 @@ metadata:
             prepare_apply_manifest(&WorkloadKind::ConfigMap, "apps", "settings", yaml).unwrap_err();
 
         assert!(err.to_string().contains("metadata.name 'other' differs"));
+    }
+
+    #[tokio::test]
+    async fn apply_resource_preserves_field_ownership_conflicts() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "apiVersion": "v1", "kind": "Status", "status": "Failure",
+                "message": "field is owned by another manager", "reason": "Conflict", "code": 409
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = mock_client(&server).await;
+        for dry_run in [true, false] {
+            let error = super::apply_resource(
+                &client,
+                "apps",
+                WorkloadKind::Deployment,
+                "api",
+                "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec: {}",
+                dry_run,
+            )
+            .await
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("field is owned by another manager"));
+        }
+        let requests = server.received_requests().await.unwrap();
+        for (index, request) in requests.iter().enumerate() {
+            assert!(!request
+                .url
+                .query_pairs()
+                .any(|(k, v)| k == "force" && v == "true"));
+            assert!(request
+                .url
+                .query_pairs()
+                .any(|(k, v)| k == "fieldManager" && v == "lumen"));
+            assert_eq!(
+                request
+                    .url
+                    .query_pairs()
+                    .any(|(k, v)| k == "dryRun" && v == "All"),
+                index == 0
+            );
+        }
     }
 
     #[tokio::test]
