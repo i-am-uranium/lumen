@@ -40,12 +40,24 @@ pub struct DeletedContextSummary {
 
 pub fn default_path() -> PathBuf {
     if let Ok(p) = std::env::var("KUBECONFIG") {
-        // Only take the first path if colon-separated; multi-file merging is out of scope for v1.
-        return PathBuf::from(p.split(':').next().unwrap_or(&p));
+        if let Some(path) = first_config_path(&p, cfg!(windows)) {
+            return path;
+        }
     }
     dirs::home_dir()
         .map(|h| h.join(".kube/config"))
         .unwrap_or_else(|| PathBuf::from(".kube/config"))
+}
+
+/// Select the first configured source without merging multiple kubeconfig files.
+/// `windows` is explicit so path-list behavior can be tested on every host.
+pub(crate) fn first_config_path(value: &str, windows: bool) -> Option<PathBuf> {
+    let separator = if windows { ';' } else { ':' };
+    value
+        .split(separator)
+        .map(str::trim)
+        .find(|entry| !entry.is_empty())
+        .map(PathBuf::from)
 }
 
 pub fn list_contexts_from(cfg: &Kubeconfig) -> Vec<ContextInfo> {
@@ -577,5 +589,22 @@ users:
             other => panic!("expected Kubeconfig, got {other:?}"),
         }
         std::env::remove_var("KUBECONFIG");
+    }
+
+    #[test]
+    fn selects_complete_windows_drive_path() {
+        assert_eq!(
+            first_config_path(r"C:\Users\ravi\.kube\config;D:\team.yaml", true),
+            Some(PathBuf::from(r"C:\Users\ravi\.kube\config"))
+        );
+    }
+
+    #[test]
+    fn selects_first_unix_path_and_ignores_blank_entries() {
+        assert_eq!(
+            first_config_path("  :/tmp/a:/tmp/b", false),
+            Some(PathBuf::from("/tmp/a"))
+        );
+        assert_eq!(first_config_path(" ; ", true), None);
     }
 }

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import {
   type FleetHealth,
 } from "@/lib/k8s";
 import { useClusterStore } from "@/state/cluster";
+import { diagnoseConnection } from "@/lib/connectionDiagnostics";
 
 vi.mock("@/lib/k8s", () => ({
   k8s: {
@@ -23,6 +24,11 @@ vi.mock("@/lib/k8s", () => ({
     listDeletedContexts: vi.fn(),
     restoreDeletedContext: vi.fn(),
   },
+}));
+
+vi.mock("@/lib/connectionDiagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/connectionDiagnostics")>()),
+  diagnoseConnection: vi.fn(),
 }));
 
 function fleetCard(
@@ -153,6 +159,45 @@ describe("FleetView", () => {
       namespace: null,
       lastNamespaceByContext: {},
     });
+    vi.mocked(diagnoseConnection).mockResolvedValue({
+      context: "unreachable",
+      config_path: "/tmp/config",
+      status: "ready_to_retry",
+      credential_executable: null,
+      credential_executable_available: null,
+      message: "Configuration inspection passed. Retry to test actual cluster access.",
+      single_source_only: true,
+    });
+  });
+
+  it("offers diagnostics on an unreachable card and safely retries", async () => {
+    renderFleet([fleetCard({ name: "unreachable", reachable: false, error: "dial tcp refused" })]);
+    await userEvent.click(await screen.findByRole("button", { name: /connect unreachable/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /diagnose unreachable/i }));
+    expect(await screen.findByRole("dialog", { name: /connection diagnostics/i })).toBeInTheDocument();
+    expect(diagnoseConnection).toHaveBeenCalledWith("unreachable");
+    expect(
+      within(screen.getByRole("dialog", { name: /connection diagnostics/i })).getByText(
+        "Cluster network unavailable",
+      ),
+    ).toBeInTheDocument();
+    vi.mocked(k8s.probeFleetContext).mockResolvedValue(fleetCard({ name: "unreachable" }));
+    await userEvent.click(screen.getByRole("button", { name: /retry connection/i }));
+    expect(k8s.probeFleetContext).toHaveBeenCalledWith("unreachable");
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog", { name: /connection diagnostics/i })).queryByText(
+          "Cluster network unavailable",
+        ),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("provides actionable diagnostics when no contexts exist", async () => {
+    renderFleet([]);
+    await userEvent.click(await screen.findByRole("button", { name: /diagnose kubeconfig/i }));
+    expect(await screen.findByRole("dialog", { name: /connection diagnostics/i })).toBeInTheDocument();
+    expect(diagnoseConnection).toHaveBeenCalledWith(null);
   });
 
   it("orders cluster cards by operator risk", async () => {
