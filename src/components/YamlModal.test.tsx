@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { YamlModal } from "./YamlModal";
 import { k8s } from "@/lib/k8s";
+import { useUiSettings } from "@/state/uiSettings";
 
 vi.mock("@/lib/k8s", () => ({
   k8s: {
@@ -71,9 +72,37 @@ function renderEditableYamlModal({
   );
 }
 
-beforeEach(() => { vi.mocked(k8s.applyResource).mockReset(); });
+beforeEach(() => {
+  vi.mocked(k8s.applyResource).mockReset();
+  useUiSettings.setState({ readOnly: false });
+});
 
 describe("YamlModal", () => {
+  it("keeps every editable entry point read-only when the global policy is enabled", () => {
+    useUiSettings.setState({ readOnly: true });
+    renderEditableYamlModal();
+    expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("discards pending validation when read-only is enabled and does not restore it on unlock", async () => {
+    renderEditableYamlModal();
+    let complete!: (out: { yaml: string; dry_run: boolean }) => void;
+    vi.mocked(k8s.applyResource).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    await userEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}" } });
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    act(() => useUiSettings.getState().setReadOnly(true));
+    await act(async () => complete({ yaml: "stale validated result", dry_run: true }));
+    expect(screen.queryByRole("button", { name: /^apply$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("stale validated result")).not.toBeInTheDocument();
+    act(() => useUiSettings.getState().setReadOnly(false));
+    await userEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}" } });
+    expect(screen.getByRole("button", { name: /^apply$/i })).toBeDisabled();
+    expect(k8s.applyResource).toHaveBeenCalledTimes(1);
+  });
+
   it("checks patch permission for server-side apply instead of update", async () => {
     vi.mocked(k8s.checkAccess).mockImplementation(async (request) => ({
       allowed: request.verb === "patch", denied: request.verb !== "patch", reason: null, evaluation_error: null,

@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResourceDetailDrawer } from "./ResourceDetailDrawer";
 import { k8s } from "@/lib/k8s";
+import { useUiSettings } from "@/state/uiSettings";
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {
@@ -90,6 +91,8 @@ function renderDrawer() {
   );
 }
 
+beforeEach(() => useUiSettings.setState({ readOnly: false }));
+
 describe("ResourceDetailDrawer confirmations", () => {
   it("opens inline logs for deployments", async () => {
     renderDrawer();
@@ -167,12 +170,16 @@ describe("ResourceDetailDrawer confirmations", () => {
     await userEvent.click(screen.getByRole("button", { name: /yaml \(Y\)/i }));
     await userEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
     await userEvent.type(screen.getByRole("textbox"), "\nspec:\n  replicas: 4");
+    expect(screen.getByRole("button", { name: /^apply$/i })).toBeDisabled();
+    expect(k8s.checkAccess).toHaveBeenCalledWith(expect.objectContaining({ verb: "patch", name: "api" }), "dev");
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^apply$/i })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
 
     const dialog = screen.getByRole("dialog", { name: /apply deployment/i });
     const confirm = within(dialog).getByRole("button", { name: /^apply$/i });
     expect(confirm).toBeDisabled();
-    expect(k8s.applyResource).not.toHaveBeenCalled();
+    expect(vi.mocked(k8s.applyResource).mock.calls.every((call) => call[4] === true)).toBe(true);
 
     await userEvent.type(
       within(dialog).getByRole("textbox", { name: /confirmation text/i }),
@@ -188,5 +195,20 @@ describe("ResourceDetailDrawer confirmations", () => {
       false,
       "dev",
     );
+  });
+
+  it("removes drawer editing and pending confirmations when read-only is enabled", async () => {
+    renderDrawer();
+    await userEvent.click(screen.getByRole("button", { name: /yaml \(Y\)/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+    await userEvent.type(screen.getByRole("textbox"), "\nspec:\n  replicas: 4");
+    await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^apply$/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+    expect(screen.getByRole("dialog", { name: /preflight apply deployment/i })).toBeInTheDocument();
+    act(() => useUiSettings.getState().setReadOnly(true));
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^apply$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /preflight apply deployment/i })).not.toBeInTheDocument();
   });
 });

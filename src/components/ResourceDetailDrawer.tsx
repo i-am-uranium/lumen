@@ -1,13 +1,9 @@
 import { captureLogSnapshot, logErrorMessage } from "@/state/logStream";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  Check,
-  Copy,
   Download,
-  Eye,
-  FlaskConical,
   Loader2,
   Minus,
   Pencil,
@@ -27,14 +23,13 @@ import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
 import { useUiSettings } from "@/state/uiSettings";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
-import { summarizeSmartYamlDiff } from "@/lib/smartDiff";
+import { YamlModal } from "@/components/YamlModal";
 import { cn } from "@/lib/utils";
 import { useShortcut } from "@/lib/shortcuts";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
 import {
-  analyzeYamlPreflight,
   buildActionPreflight,
   type PreflightImpact,
   type PreflightTarget,
@@ -1972,295 +1967,34 @@ function ContainerCard({ container: c }: { container: ContainerInfo }) {
 function YamlTab({ ctx, resource }: { ctx: string; resource: Resource }) {
   const kind = resource.kind as Parameters<typeof k8s.getResource>[1];
   const qc = useQueryClient();
-  const [mode, setMode] = useState<"read" | "edit">("read");
-  const [draft, setDraft] = useState("");
-  const [dryRunOutput, setDryRunOutput] = useState<string | null>(null);
-  const [applyErr, setApplyErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const sensitive = resource.kind === "secret";
   const { data, isLoading, error } = useQuery({
     queryKey: ["k8s", "resource-yaml", ctx, resource.namespace, kind, resource.name],
     queryFn: () => k8s.getResource(resource.namespace, kind, resource.name, ctx),
     staleTime: 30_000,
   });
-  const updateAccess = useQuery({
-    queryKey: [
-      "k8s",
-      "access",
-      ctx,
-      resource.namespace,
-      resource.kind,
-      resource.name,
-      "update",
-    ],
-    queryFn: () =>
-      k8s.checkAccess(
-        {
-          kind,
-          verb: "update",
-          namespace: resource.namespace || null,
-          name: resource.name,
-        },
-        ctx || undefined,
-      ),
-    enabled: !sensitive,
-    staleTime: 15_000,
-  });
 
-  useEffect(() => {
-    setMode("read");
-    setDraft("");
-    setDryRunOutput(null);
-    setApplyErr(null);
-    setApplyConfirmOpen(false);
-  }, [ctx, resource.kind, resource.namespace, resource.name]);
-
-  useEffect(() => {
-    if (mode === "edit" && data?.yaml && !draft) setDraft(data.yaml);
-  }, [mode, data?.yaml, draft]);
-
-  const canEdit = !sensitive && updateAccess.data?.allowed === true;
-  const dirty = mode === "edit" && draft !== (data?.yaml ?? "");
-  const smartDiff = dryRunOutput
-    ? summarizeSmartYamlDiff(data?.yaml ?? "", dryRunOutput)
-    : null;
-  const applyPreflight = useMemo(() => {
-    return analyzeYamlPreflight({
-      actionType: "apply",
-      target: {
-        kind: resource.kind,
-        namespace: resource.namespace || null,
-        name: resource.name,
-      },
-      beforeYaml: data?.yaml ?? "",
-      afterYaml: draft,
-    });
-  }, [data?.yaml, draft, resource.kind, resource.name, resource.namespace]);
-
-  async function copyYaml() {
-    const text = mode === "edit" ? draft : (data?.yaml ?? "");
-    if (!text) return;
-    await navigator.clipboard.writeText(text);
-    toast.success("YAML copied");
-  }
-
-  async function runApply(dryRun: boolean) {
-    if (!canEdit || !data || !dirty || busy) return;
-    setBusy(true);
-    setApplyErr(null);
-    setDryRunOutput(null);
-    try {
-      const out = await k8s.applyResource(
-        resource.namespace,
-        kind,
-        resource.name,
-        draft,
-        dryRun,
-        ctx || undefined,
-      );
-      if (dryRun) {
-        setDryRunOutput(out.yaml);
-        toast.success("dry-run ok — server validated");
-      } else {
-        toast.success(`applied ${resource.kind}/${resource.name}`);
-        setDraft(out.yaml);
-        setMode("read");
-        setDryRunOutput(null);
-        await qc.invalidateQueries({
-          queryKey: [
-            "k8s",
-            "resource-yaml",
-            ctx,
-            resource.namespace,
-            kind,
-            resource.name,
-          ],
-        });
-        await qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
-        await qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
-      }
-    } catch (e) {
-      setApplyErr((e as Error).message ?? String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (isLoading) {
-    return (
-      <div className="p-4 text-[12px] text-text-secondary flex items-center gap-2">
-        <Loader2 className="size-3.5 animate-spin" /> loading yaml...
-      </div>
-    );
-  }
-  if (error || !data) {
-    return (
-      <div className="p-4 text-[12px] text-danger flex items-center gap-2">
-        <AlertTriangle className="size-3.5" />
-        failed to load yaml
-      </div>
-    );
-  }
   return (
-    <div className="flex h-full min-h-0 flex-col bg-code-surface">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
-        <div className="min-w-0 flex-1 text-[11px] text-text-muted">
-          server-side apply as <span className="font-mono text-text-secondary">lumen</span>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!canEdit || updateAccess.isLoading}
-          title={
-            sensitive
-              ? "secrets are read-only in the drawer"
-              : updateAccess.data?.allowed === false
-                ? "edit denied by RBAC"
-                : undefined
-          }
-          onClick={() => {
-            if (!canEdit) return;
-            if (mode === "read") {
-              setDraft(data.yaml ?? "");
-              setMode("edit");
-              requestAnimationFrame(() => textareaRef.current?.focus());
-            } else {
-              setMode("read");
-              setDryRunOutput(null);
-              setApplyErr(null);
-            }
-          }}
-          className="h-7 gap-1.5 text-[11px]"
-        >
-          {mode === "read" ? (
-            <>
-              <Pencil className="size-3" /> edit
-            </>
-          ) : (
-            <>
-              <Eye className="size-3" /> view
-            </>
-          )}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!data.yaml && !draft}
-          onClick={() => void copyYaml()}
-          className="h-7 gap-1.5 text-[11px]"
-        >
-          <Copy className="size-3" /> copy
-        </Button>
-        {mode === "edit" && (
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy || !dirty || !canEdit}
-              onClick={() => void runApply(true)}
-              className="h-7 gap-1.5 text-[11px]"
-            >
-              <FlaskConical className="size-3" /> dry-run
-            </Button>
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              disabled={busy || !dirty || !canEdit}
-              onClick={() => setApplyConfirmOpen(true)}
-              className="h-7 gap-1.5 text-[11px]"
-            >
-              {busy ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Check className="size-3" />
-              )}
-              apply
-            </Button>
-          </>
-        )}
-      </div>
-
-      {sensitive && (
-        <div className="shrink-0 border-b border-warning/30 bg-[var(--status-warning-soft)] px-3 py-2 text-[11px] text-warning">
-          sensitive values are redacted and this YAML is read-only.
-        </div>
-      )}
-
-      {mode === "edit" ? (
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          className="min-h-0 flex-1 resize-none bg-code-surface p-4 font-mono text-[11px] leading-relaxed text-text-primary outline-none [font-feature-settings:'liga'_0,'calt'_0]"
-        />
-      ) : (
-        <pre className="m-0 min-h-0 flex-1 overflow-auto p-4 font-mono text-[11px] leading-relaxed text-text-primary whitespace-pre">
-          {data.yaml}
-        </pre>
-      )}
-
-      {applyErr && (
-        <div className="shrink-0 border-t border-danger/40 bg-[var(--status-error-soft)] px-3 py-2 text-[11px] text-danger whitespace-pre-wrap">
-          {applyErr}
-        </div>
-      )}
-      {dryRunOutput && (
-        <details className="shrink-0 border-t border-border-subtle bg-surface">
-          <summary className="cursor-pointer select-none px-3 py-2 text-[11px] text-success">
-            dry-run output
-          </summary>
-          {smartDiff && (
-            <div className="border-b border-border-subtle px-3 py-2">
-              <div className="mb-1 text-[11px] font-medium text-text-primary">
-                smart diff
-              </div>
-              {smartDiff.isNoOp ? (
-                <div className="text-[11px] text-success">
-                  no operationally meaningful changes detected
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {smartDiff.changes.slice(0, 6).map((change) => (
-                    <span
-                      key={`${change.category}-${change.path}`}
-                      className="rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
-                      title={`${change.path}: ${change.before ?? "empty"} -> ${change.after ?? "empty"}`}
-                    >
-                      {change.category}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          <pre className="max-h-[220px] overflow-auto p-3 font-mono text-[11px] text-text-secondary whitespace-pre">
-            {dryRunOutput}
-          </pre>
-        </details>
-      )}
-
-      <PreflightPreviewDialog
-        open={applyConfirmOpen}
-        title={`preflight apply ${resource.kind}`}
-        description={`This server-side apply can create or update ${resource.kind}/${resource.name} in ${resource.namespace || "cluster scope"}. Dry-run first if you only want validation.`}
-        impact={applyPreflight}
-        confirmText={`${resource.namespace || "cluster"}/${resource.name}`}
-        confirmLabel="apply"
-        busy={busy}
-        onCancel={() => setApplyConfirmOpen(false)}
-        onConfirm={() => {
-          setApplyConfirmOpen(false);
-          void runApply(false);
-        }}
-      />
-    </div>
+    <YamlModal
+      embedded
+      title={`${resource.kind}/${resource.name}`}
+      subtitle={`${ctx} · ${resource.namespace || "cluster scope"}`}
+      yaml={data?.yaml}
+      loading={isLoading}
+      error={error ? "Failed to load resource YAML" : null}
+      sensitive={resource.kind === "secret"}
+      editable={{
+        namespace: resource.namespace,
+        kind,
+        name: resource.name,
+        context: ctx,
+        onApplied: () => {
+          void qc.invalidateQueries({ queryKey: ["k8s", "resource-yaml", ctx, resource.namespace, kind, resource.name] });
+          void qc.invalidateQueries({ queryKey: ["k8s", "resource-meta"] });
+          void qc.invalidateQueries({ queryKey: ["k8s", "workloads"] });
+        },
+      }}
+      onClose={() => {}}
+    />
   );
 }
 
