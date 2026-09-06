@@ -1,6 +1,14 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { LogLine } from "./logs";
 
+export type LogStreamStatus = "connecting" | "live" | "retrying" | "ended" | "error";
+export type LogStreamEvent = { type: "status"; pod: string; status: LogStreamStatus; message?: string | null } | Omit<LogLine, "id" | "arrivedAt">;
+
+export function logErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && "message" in error) return String(error.message);
+  return String(error);
+}
+
 export type LogStreamKey = { pod: string; container: string };
 
 const BUFFER_CAP = 10_000;
@@ -37,6 +45,7 @@ export class LogStream {
   private paused = false;
   private streamId: string | null = null;
   errorMessage: string | null = null;
+  status: LogStreamStatus = "ended";
 
   /** Monotonic counter that increments every time subscribers are notified.
    *  Used by useSyncExternalStore as a primitive snapshot. */
@@ -131,8 +140,21 @@ export class LogStream {
     if (this.streamId !== null) return;
     const id = `logstream-${this.pod}-${this.container}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     this.streamId = id;
-    const channel = new Channel<{ pod: string; container: string; text: string }>();
-    channel.onmessage = (msg) => this.enqueue(msg);
+    this.errorMessage = null;
+    this.status = "connecting";
+    this.notify();
+    const channel = new Channel<LogStreamEvent>();
+    channel.onmessage = (msg) => {
+      if (this.streamId !== id) return;
+      if ("type" in msg && msg.type === "status") {
+        this.status = msg.status;
+        this.errorMessage = msg.status === "error" || msg.status === "retrying" ? msg.message ?? null : null;
+        if (msg.status === "ended" || msg.status === "error") this.streamId = null;
+        this.notify();
+      } else if ("text" in msg) {
+        this.enqueue(msg);
+      }
+    };
     invoke("stream_logs", {
       selector: {
         namespace: this.namespace,
@@ -146,8 +168,15 @@ export class LogStream {
       streamId: id,
       channel,
       context: this.context || undefined,
+    }).then(() => {
+      // stop() may race command registration. Once startup is acknowledged,
+      // cancel a stale attempt again so it cannot leave an orphaned reader.
+      if (this.streamId !== id) invoke("stop_stream", { streamId: id }).catch(() => {});
     }).catch((err) => {
-      this.errorMessage = String(err);
+      if (this.streamId !== id) return;
+      this.streamId = null;
+      this.status = "error";
+      this.errorMessage = logErrorMessage(err);
       this.notify();
     });
   }
@@ -162,7 +191,8 @@ export class LogStream {
       cancelAnimationFrame(this.rafHandle);
       this.rafHandle = null;
     }
-    this.subscribers.clear();
+    this.status = "ended";
+    this.notify();
   }
 
   isRunning(): boolean {
@@ -212,4 +242,42 @@ export class LogStream {
       this.dropCount += TRIM_CHUNK;
     }
   }
+}
+
+/** Capture a bounded log sample, rejecting failed streams instead of exporting an empty file. */
+export async function captureLogSnapshot({ namespace, pod, context, previous = false }: {
+  namespace: string;
+  pod: string;
+  context?: string;
+  previous?: boolean;
+}): Promise<string[]> {
+  const streamId = `download-${crypto.randomUUID()}`;
+  const channel = new Channel<LogStreamEvent>();
+  const lines: string[] = [];
+  let error: string | null = null;
+  let finish!: () => void;
+  const completed = new Promise<void>((resolve) => { finish = resolve; });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  channel.onmessage = (event) => {
+    if ("text" in event) {
+      lines.push(event.text);
+    } else if (event.status === "error" || event.status === "retrying") {
+      error = event.message ?? "Log download was interrupted";
+      finish();
+    } else if (event.status === "ended") {
+      finish();
+    }
+  };
+  try {
+    await invoke("stream_logs", {
+      selector: { namespace, pod_name: pod, label_selector: null, container: null, since_seconds: null, tail_lines: 5000, previous },
+      streamId, channel, context: context || undefined,
+    });
+    await Promise.race([completed, new Promise<void>((resolve) => { timer = setTimeout(resolve, 2000); })]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    await invoke("stop_stream", { streamId }).catch(() => {});
+  }
+  if (error) throw new Error(error);
+  return lines;
 }

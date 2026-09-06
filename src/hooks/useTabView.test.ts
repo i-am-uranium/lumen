@@ -80,3 +80,20 @@ describe("mergeAndFilter", () => {
     ]);
   });
 });
+
+it("updates the merged view when an existing stream receives lines", async () => {
+  const { renderHook, act } = await import("@testing-library/react");
+  const { LogStream } = await import("@/state/logStream");
+  const { useTabView } = await import("./useTabView");
+  const stream = new LogStream({ pod: "api", container: "app" });
+  const streams = [stream];
+  const opts = { query: "", regex: false, caseSensitive: false, levels: null };
+  const { result, unmount } = renderHook(() => useTabView(streams, opts));
+  expect(result.current.lines).toHaveLength(0);
+  act(() => {
+    stream.enqueue({ pod: "api", container: "app", text: "recovered" });
+    stream._flushForTest();
+  });
+  expect(result.current.lines.map((line) => line.text)).toEqual(["recovered"]);
+  unmount();
+});

@@ -148,5 +148,9 @@ function ContainerListProvider({ tab }: { tab: ShellTab }) {
     staleTime: 60_000,
   });
   const opts = (data ?? []).filter((c) => !c.is_init).map((c) => ({ name: c.name }));
-  return <ShellPanel session={tab.session} containerOptions={opts} />;
+  return <ShellPanel
+    key={JSON.stringify([tab.id, tab.session.container, tab.session.command])}
+    session={tab.session} containerOptions={opts}
+    onStartSelection={(container, command) => useShellDockStore.getState().replaceSession(tab.id, { container, command })}
+  />;
 }

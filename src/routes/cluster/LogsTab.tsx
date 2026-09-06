@@ -17,7 +17,8 @@ import { toast } from "sonner";
 import { k8s, type WorkloadKind } from "@/lib/k8s";
 import { PodStrip } from "@/components/PodStrip";
 import { LogLineRow } from "@/components/LogLineRow";
-import { useLogsStore, type LogLine } from "@/state/logs";
+import { useLogsStore } from "@/state/logs";
+import { type LogStreamEvent, type LogStreamStatus, logErrorMessage } from "@/state/logStream";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -124,6 +125,8 @@ export function LogsTab() {
   const { openStream, closeStream, appendLine, setPaused, toggleMute, streams } =
     useLogsStore();
   const state = streamId ? streams[streamId] : undefined;
+  const [streamStatus, setStreamStatus] = useState<LogStreamStatus>("connecting");
+  const [streamError, setStreamError] = useState<string | null>(null);
 
   // Stream lifecycle. Ingest is unconditional — pausing only suspends the
   // auto-scroll, it does NOT drop incoming lines. Previously a paused tab
@@ -132,8 +135,30 @@ export function LogsTab() {
   useEffect(() => {
     if (!streamId) return;
     openStream(streamId);
-    const ch = new Channel<LogLine>();
+    let active = true;
+    const backendId = `${streamId}-${crypto.randomUUID()}`;
+    const podStatuses = new Map<string, { status: LogStreamStatus; message?: string | null }>();
+    setStreamStatus("connecting");
+    setStreamError(null);
+    const ch = new Channel<LogStreamEvent>();
     ch.onmessage = (line) => {
+      if (!active) return;
+      if ("type" in line && line.type === "status") {
+        if (!line.pod && (line.status === "error" || line.status === "ended")) {
+          setStreamStatus(line.status);
+          setStreamError(line.message ?? null);
+        } else {
+          podStatuses.set(line.pod, line);
+          const statuses = [...podStatuses.values()];
+          const status = (["error", "retrying", "live", "connecting", "ended"] as const)
+            .find((status) => statuses.some((entry) => entry.status === status)) ?? "connecting";
+          setStreamStatus(status);
+          setStreamError(status === "error" || status === "retrying"
+            ? statuses.find((entry) => entry.status === status)?.message ?? null : null);
+        }
+        return;
+      }
+      if (!("text" in line)) return;
       const st = useLogsStore.getState().streams[streamId];
       if (!st) return;
       appendLine(streamId, line);
@@ -147,12 +172,20 @@ export function LogsTab() {
         since_seconds: 600,
         tail_lines: 500,
       },
-      streamId,
+      streamId: backendId,
       channel: ch,
       context: context || undefined,
-    }).catch((e) => toast.error(`log stream failed: ${e}`));
+    }).then(() => {
+      if (!active) invoke("stop_stream", { streamId: backendId }).catch(() => {});
+    }).catch((e) => {
+      if (!active) return;
+      setStreamStatus("error");
+      setStreamError(logErrorMessage(e));
+      toast.error(`log stream failed: ${logErrorMessage(e)}`);
+    });
     return () => {
-      invoke("stop_stream", { streamId });
+      active = false;
+      invoke("stop_stream", { streamId: backendId }).catch(() => {});
       closeStream(streamId);
     };
   }, [streamId, namespace, kind, name, container, context, openStream, closeStream, appendLine]);
@@ -406,11 +439,12 @@ export function LogsTab() {
                   <CircleDot
                     className={cn(
                       "size-3",
-                      state.paused ? "text-text-muted" : "text-success animate-pulse",
+                      state.paused || streamStatus !== "live" ? "text-text-muted" : "text-success animate-pulse",
                     )}
                   />
-                  {state.paused ? "paused" : "live"} · {state.buffer.length} lines buffered
+                  {streamStatus}{state.paused && " · paused"} · {state.buffer.length} lines buffered
                   {filterLc && ` · ${visibleLines.length} match`}
+                  {streamError && <span title={streamError} className="truncate text-term-amber">{streamError}</span>}
                 </div>
               </div>
               <div className="flex-1" />

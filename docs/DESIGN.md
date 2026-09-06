@@ -1,6 +1,6 @@
 # Lumen Design System
 
-Lumen is an enterprise-grade, multi-cluster Kubernetes operations console. The UI must feel technical, fast, dense, calm, secure, multi-cluster first, and AI-assisted without making AI the center of every workflow.
+Lumen is an enterprise-grade, multi-cluster Kubernetes operations console. The UI must feel technical, fast, dense, calm, secure, and multi-cluster first.
 
 This document is part of the public contributor contract. New screens should reuse these tokens and primitives rather than introducing local one-off styling.
 
@@ -15,13 +15,13 @@ Reference qualities:
 - Lens-style Kubernetes resource density.
 - Datadog/Grafana-style observability surfaces.
 
-Avoid playful SaaS visuals, decorative gradients, oversized empty space, card-heavy marketing layouts, and AI-first surfaces that distract from cluster context.
+Avoid playful SaaS visuals, decorative gradients, oversized empty space, card-heavy marketing layouts, and surfaces that distract from cluster context.
 
 ## UX Principles
 
 ### Context Always Visible
 
-Every resource screen must make these visible before any destructive or AI-assisted action:
+Every resource screen must make these visible before any destructive action:
 
 - Active cluster
 - Namespace
@@ -33,9 +33,9 @@ Every resource screen must make these visible before any destructive or AI-assis
 
 Use compact rows, clear hierarchy, stable panel dimensions, and fixed toolbars. Use monospace text for resource names, namespaces, labels, YAML, logs, commands, and IDs.
 
-### AI Is Contextual
+### Evidence Is Contextual
 
-GPT features belong beside logs, events, resource details, alerts, and incident summaries. Before sending infrastructure context to AI, redact secrets, tokens, kubeconfigs, and sensitive environment values. Show a context preview when possible.
+Keep logs, events, resource details, alerts, and incident reports connected to their cluster and resource. Inspection and report export work without a model provider.
 
 ### Secure By Default
 
@@ -112,7 +112,6 @@ Required:
 - Cluster health table.
 - Top resource pressure.
 - Recent alerts or signals.
-- GPT entry as an assistive action, not the primary surface.
 
 ### Resource Explorer
 
@@ -144,7 +143,6 @@ Required actions:
 - Copy `kubectl describe` command.
 - Restart rollout where applicable.
 - View logs.
-- Ask Lumen GPT with redacted context.
 - Delete with confirmation.
 
 ### Logs
@@ -156,18 +154,10 @@ Required:
 - Time range selector.
 - Namespace and container filters.
 - Insights panel.
-- GPT actions for selected line, recent summary, root cause, and incident summary.
 
-### Settings / AI Assistant
+### Settings
 
-Required:
-
-- Account connection status.
-- Connect/disconnect.
-- Default model preference.
-- Redaction mode.
-- Context preview setting.
-- Usage transparency.
+Keep theme, density, read-only mode, keyboard shortcuts, and workspace preferences easy to find. Settings describe local behavior and do not require account or model setup.
 
 ## Accessibility
 

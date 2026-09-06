@@ -1,6 +1,11 @@
 name: ci
 
 on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        type: string
+        required: true
   pull_request:
   push:
     branches: [main]
@@ -14,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -29,6 +36,9 @@ jobs:
 
       - name: Test
         run: npm run test
+
+      - name: Release manifest tests
+        run: node --test scripts/verify-release-assets.test.mjs
 
       - name: Dependency audit
         run: npm audit --audit-level=high
@@ -46,17 +56,25 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Scan repository for committed secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --exit-code 1 --log-opts="HEAD" .
 
   rust:
     name: rust
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -90,3 +108,28 @@ jobs:
 
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  kind:
+    name: kind integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+      - name: Install kind
+        run: |
+          curl --fail --silent --show-error --location https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 --output "$RUNNER_TEMP/kind"
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/kind" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/kind"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Test native Kubernetes operations against isolated cluster
+        run: ./scripts/test-kind.sh

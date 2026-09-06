@@ -53,8 +53,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PortForwardsChip } from "@/components/PortForwardsChip";
-import { CopilotDrawer } from "@/components/copilot/CopilotDrawer";
-import { CopilotLauncher } from "@/components/copilot/CopilotLauncher";
 import { buildAlertInbox } from "@/lib/alertInbox";
 import { k8s, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
@@ -1103,8 +1101,6 @@ export function ClusterWorkspace() {
       <div className="flex-1 min-w-0 min-h-0">
         <Outlet />
       </div>
-      <CopilotLauncher />
-      <CopilotDrawer clusterContext={context} />
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
         <DialogContent className="max-w-md border-border-default bg-surface text-text-primary">
           <DialogHeader>

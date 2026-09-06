@@ -1,4 +1,4 @@
-import { Play, Square, RotateCcw, Download } from "lucide-react";
+import { Play, Square, Download } from "lucide-react";
 import type { ShellState } from "@/state/shellSession";
 import { ShellSearchBox, type ShellSearchState } from "./ShellSearchBox";
 
@@ -14,7 +14,7 @@ export function ShellToolbar({
   command, onCommandChange,
   state,
   search, matchCount, currentMatch, onSearchChange, onSearchPrev, onSearchNext,
-  onStart, onStop, onResetTerminal, onDownload,
+  onStart, onStop, onDownload,
 }: {
   containers: { name: string }[];
   container: string;
@@ -30,13 +30,13 @@ export function ShellToolbar({
   onSearchNext: () => void;
   onStart: () => void;
   onStop: () => void;
-  onResetTerminal: () => void;
   onDownload: () => void;
 }) {
   const live = state === "live" || state === "starting";
   return (
     <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-term-border-soft bg-term-panel-2">
       <select
+        aria-label="shell container"
         value={container}
         onChange={(e) => onContainerChange(e.target.value)}
         disabled={live}
@@ -52,6 +52,8 @@ export function ShellToolbar({
         onChange={(e) => onCommandChange(e.target.value)}
         disabled={live}
         placeholder="command"
+        aria-label="shell command"
+        title="Command and arguments; quote arguments containing spaces. Use /bin/sh -c for shell expressions."
         className="w-[140px] h-6 px-1.5 text-[11px] rounded bg-term-bg border border-term-border-soft text-term-fg disabled:opacity-50"
       />
       <div className="flex items-center gap-0.5">
@@ -85,10 +87,6 @@ export function ShellToolbar({
             <Square className="size-3" /> stop
           </button>
         )}
-        <button type="button" onClick={onResetTerminal}
-          className="p-1 text-term-muted hover:text-term-fg" title="reset terminal">
-          <RotateCcw className="size-3.5" />
-        </button>
         <button type="button" onClick={onDownload}
           className="p-1 text-term-muted hover:text-term-fg" title="download scrollback">
           <Download className="size-3.5" />

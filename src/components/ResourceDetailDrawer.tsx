@@ -1,7 +1,6 @@
+import { captureLogSnapshot, logErrorMessage } from "@/state/logStream";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { invoke, Channel } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   Check,
@@ -15,7 +14,6 @@ import {
   Plus,
   RotateCw,
   ScrollText,
-  Sparkles,
   TerminalSquare,
   Container,
   GitCompareArrows,
@@ -28,7 +26,6 @@ import { PinButton } from "@/components/PinButton";
 import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
 import { useUiSettings } from "@/state/uiSettings";
-import { aiResourceUrl } from "@/lib/aiNavigation";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { summarizeSmartYamlDiff } from "@/lib/smartDiff";
 import { cn } from "@/lib/utils";
@@ -129,7 +126,6 @@ export function ResourceDetailDrawer({
   // it doesn't go through pendingAction.
   const [compareOpen, setCompareOpen] = useState(false);
   const { openSession } = useShellDock();
-  const navigate = useNavigate();
   const qc = useQueryClient();
   const resourceKind = resource?.kind as WorkloadKind | undefined;
   const readOnly = useUiSettings((s) => s.readOnly);
@@ -217,11 +213,6 @@ export function ResourceDetailDrawer({
       container: defaultContainer,
       command: ["/bin/sh"],
     });
-  }
-
-  function askLumen() {
-    if (!resource) return;
-    navigate(aiResourceUrl(ctx, resource));
   }
 
   // Reset when drawer opens for a new resource.
@@ -348,33 +339,7 @@ export function ResourceDetailDrawer({
     if (!resource || downloading) return;
     setDownloading(true);
     try {
-      const channel = new Channel<{
-        pod: string;
-        container: string;
-        text: string;
-      }>();
-      const lines: string[] = [];
-      channel.onmessage = (msg) => {
-        if (msg.text) lines.push(msg.text);
-      };
-      const streamId = `download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await invoke("stream_logs", {
-        selector: {
-          namespace: resource.namespace,
-          label_selector: null,
-          pod_name: resource.name,
-          container: null,
-          since_seconds: null,
-          tail_lines: 5000,
-        },
-        streamId,
-        channel,
-        context: ctx || undefined,
-      });
-      // Backend follows logs; for a tail-only download we give the channel
-      // a window to flush the historical 5000 lines, then stop.
-      await new Promise((r) => setTimeout(r, 2000));
-      await invoke("stop_stream", { streamId }).catch(() => {});
+      const lines = await captureLogSnapshot({ namespace: resource.namespace, pod: resource.name, context: ctx });
       const blob = new Blob([lines.join("\n")], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -382,6 +347,8 @@ export function ResourceDetailDrawer({
       a.download = `${resource.namespace}-${resource.name}.log`;
       a.click();
       URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(`Log download failed: ${logErrorMessage(error)}`);
     } finally {
       setDownloading(false);
     }
@@ -448,7 +415,6 @@ export function ResourceDetailDrawer({
           onViewLogs={handleViewLogs}
           onDownloadLogs={handleDownloadLogs}
           onShellExec={openShell}
-          onAskLumen={askLumen}
           onEditYaml={() => setActiveTab("yaml")}
           restartable={restartable}
           scalable={scalable}
@@ -634,7 +600,6 @@ function Header({
   onViewLogs,
   onDownloadLogs,
   onShellExec,
-  onAskLumen,
   onEditYaml,
   restartable,
   scalable,
@@ -663,7 +628,6 @@ function Header({
   onViewLogs: () => void;
   onDownloadLogs: () => void;
   onShellExec: () => void;
-  onAskLumen: () => void;
   onEditYaml: () => void;
   restartable: boolean;
   scalable: boolean;
@@ -758,11 +722,6 @@ function Header({
             namespace: resource.namespace,
             name: resource.name,
           }}
-        />
-        <ActionIcon
-          icon={<Sparkles className="size-3.5" />}
-          label="ask Lumen"
-          onClick={onAskLumen}
         />
         <ActionIcon
           icon={<ScrollText className="size-3.5" />}

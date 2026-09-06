@@ -62,9 +62,9 @@ export function ShellTerminalHost({
       term.write(chunk);
     }
 
-    // Optimistic mount: if the session hasn't started yet, start it now
-    // using the current terminal dims. start() is idempotent.
-    void session.start(term.cols, term.rows);
+    // A replacement may already have run and exited before this host mounts.
+    // Mounting/reopening its terminal must never execute the command again.
+    if (session.getState() === "idle") void session.start(term.cols, term.rows);
 
     // Live output is pushed directly into xterm without notifying React.
     const offOutput = session.subscribeOutput((chunk) => {
