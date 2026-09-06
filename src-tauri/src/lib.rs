@@ -32,6 +32,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::connection::diagnose_connection,
             commands::k8s::list_contexts,
             commands::k8s::set_context,
             commands::k8s::delete_context,

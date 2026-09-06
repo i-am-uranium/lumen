@@ -18,6 +18,7 @@ import {
   Server,
   ShieldAlert,
   Tag,
+  Wrench,
   Trash2,
   X,
 } from "lucide-react";
@@ -38,6 +39,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { LumenPage, PageHeader, PanelHeading, SectionPanel } from "@/components/lumen/page";
 import { MetricCard, type MetricTone } from "@/components/lumen/metric-card";
 import { useClusterStore } from "@/state/cluster";
+import { ConnectionDiagnosticsDialog } from "@/components/ConnectionDiagnosticsDialog";
+import { classifyConnectionError } from "@/lib/connectionDiagnostics";
 
 function pct(n: number | null): string {
   if (n === null) return "—";
@@ -486,7 +489,7 @@ function AlertPanel({ cards }: { cards: FleetCard[] }) {
   );
 }
 
-function FleetErrorState({ error }: { error: unknown }) {
+function FleetErrorState({ error, onDiagnostics }: { error: unknown; onDiagnostics: () => void }) {
   const message = errorMessage(error);
   const isDesktopRuntimeMissing =
     message.includes("invoke") || message.includes("__TAURI_INTERNALS__");
@@ -501,8 +504,11 @@ function FleetErrorState({ error }: { error: unknown }) {
           <p className="mt-1 text-[12px] leading-5 text-danger/80">
             {isDesktopRuntimeMissing
               ? "This view needs the Tauri desktop runtime to read local kubeconfig data."
-              : message}
+              : classifyConnectionError(message).guidance}
           </p>
+          <Button className="mt-3" size="sm" variant="outline" onClick={onDiagnostics}>
+            <Wrench className="size-3.5" /> Diagnose configuration
+          </Button>
         </div>
       </div>
     </div>
@@ -589,6 +595,7 @@ function Card({
   onOpen,
   onConnect,
   onDisconnect,
+  onDiagnose,
   onDelete,
   onAddLabel,
   onRemoveLabel,
@@ -599,6 +606,7 @@ function Card({
   onOpen: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
+  onDiagnose: () => void;
   onDelete: () => void;
   onAddLabel: (label: string) => void;
   onRemoveLabel: (label: string) => void;
@@ -734,7 +742,7 @@ function Card({
       {unreachable ? (
         <div className="flex items-start gap-2 p-2 rounded bg-term-red/10 border border-term-red/30 text-[12px] text-term-red">
           <AlertTriangle className="size-3.5 mt-0.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">{card.error ?? "unreachable"}</span>
+          <span className="truncate">{classifyConnectionError(card.error ?? "unreachable").title}</span>
         </div>
       ) : (
         <>
@@ -809,16 +817,21 @@ function Card({
           </div>
           <div data-testid="fleet-card-connection-actions" className="flex items-center">
             {unreachable ? (
-              <button
-                type="button"
-                onClick={onConnect}
-                disabled={connecting}
-                aria-label={`connect ${context.name}`}
-                className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px]"
-              >
-                <RefreshCw className={cn("size-3", connecting && "animate-spin")} />
-                retry
-              </button>
+              <div className="flex gap-2">
+                <button type="button" onClick={onDiagnose} aria-label={`diagnose ${context.name}`} className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px]">
+                  <Wrench className="size-3" /> diagnose
+                </button>
+                <button
+                  type="button"
+                  onClick={onConnect}
+                  disabled={connecting}
+                  aria-label={`connect ${context.name}`}
+                  className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px]"
+                >
+                  <RefreshCw className={cn("size-3", connecting && "animate-spin")} />
+                  retry
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
@@ -951,6 +964,9 @@ export function FleetView() {
   const [restoreTarget, setRestoreTarget] = useState<DeletedContextSummary | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [diagnosticsContext, setDiagnosticsContext] = useState<string | null>(null);
+  const [probeErrorsByContext, setProbeErrorsByContext] = useState<Record<string, unknown>>({});
   const { data: contexts = [], isLoading, isFetching, refetch, error } = useQuery({
     queryKey: ["k8s", "contexts"],
     queryFn: k8s.listContexts,
@@ -1046,9 +1062,29 @@ export function FleetView() {
     setConnecting((prev) => new Set(prev).add(contextName));
     try {
       const card = await k8s.probeFleetContext(contextName);
+      setProbeErrorsByContext((prev) => {
+        const next = { ...prev };
+        delete next[contextName];
+        return next;
+      });
       setContext(card.context.name);
       setCardsByContext((prev) => ({ ...prev, [contextName]: card }));
       await k8s.setContext(contextName).catch(() => undefined);
+    } catch (err) {
+      setProbeErrorsByContext((prev) => ({ ...prev, [contextName]: err }));
+      setCardsByContext((prev) => {
+        const existing = prev[contextName];
+        if (!existing) return prev;
+        return {
+          ...prev,
+          [contextName]: {
+            ...existing,
+            reachable: false,
+            error: errorMessage(err),
+            fetched_at_ms: Date.now(),
+          },
+        };
+      });
     } finally {
       setConnecting((prev) => {
         const next = new Set(prev);
@@ -1056,6 +1092,11 @@ export function FleetView() {
         return next;
       });
     }
+  }
+
+  function openDiagnostics(contextName: string | null) {
+    setDiagnosticsContext(contextName);
+    setDiagnosticsOpen(true);
   }
 
   async function disconnectContext(contextName: string) {
@@ -1226,7 +1267,7 @@ export function FleetView() {
               }
             />
             {error ? (
-              <FleetErrorState error={error} />
+              <FleetErrorState error={error} onDiagnostics={() => openDiagnostics(null)} />
             ) : isLoading ? (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -1239,8 +1280,11 @@ export function FleetView() {
             ) : (
               <>
                 {sorted.length === 0 ? (
-                  <div className="text-sm text-text-secondary">
-                    no active contexts in kubeconfig.
+                  <div className="rounded-control border border-border-default bg-elevated p-4 text-sm text-text-secondary">
+                    <p>No active contexts were found in the current kubeconfig source.</p>
+                    <Button className="mt-3" size="sm" variant="outline" onClick={() => openDiagnostics(null)}>
+                      <Wrench className="size-3.5" /> Diagnose kubeconfig
+                    </Button>
                   </div>
                 ) : (
                   <div
@@ -1258,6 +1302,7 @@ export function FleetView() {
                         }
                         onConnect={() => connectContext(entry.context.name)}
                         onDisconnect={() => disconnectContext(entry.context.name)}
+                        onDiagnose={() => openDiagnostics(entry.context.name)}
                         onDelete={() => {
                           setDeleteError(null);
                           setDeleteTarget(entry.context);
@@ -1303,6 +1348,23 @@ export function FleetView() {
           onRestore={() => void restoreContext(restoreTarget.name, true)}
         />
       )}
+      <ConnectionDiagnosticsDialog
+        open={diagnosticsOpen}
+        context={diagnosticsContext}
+        observedError={
+          diagnosticsContext
+            ? probeErrorsByContext[diagnosticsContext] ??
+              cardsByContext[diagnosticsContext]?.error ??
+              undefined
+            : error
+        }
+        retrying={diagnosticsContext ? connecting.has(diagnosticsContext) : false}
+        onClose={() => setDiagnosticsOpen(false)}
+        onRetry={() => {
+          if (diagnosticsContext) return connectContext(diagnosticsContext);
+          return rescan();
+        }}
+      />
     </LumenPage>
   );
 }

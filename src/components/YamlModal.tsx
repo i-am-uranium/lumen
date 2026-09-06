@@ -6,6 +6,8 @@ import { k8s, type ApplyOutcome, type WorkloadKind } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { PreflightPreviewDialog } from "@/components/PreflightPreviewDialog";
 import { analyzeYamlPreflight } from "@/lib/preflight";
+import { summarizeSmartYamlDiff } from "@/lib/smartDiff";
+import { useUiSettings } from "@/state/uiSettings";
 
 type EditCapability = {
   /** Namespace of the target. Required because apply_resource pins it server-side. */
@@ -33,18 +35,21 @@ type Props = {
   pinSlot?: React.ReactNode;
   /** The YAML has had sensitive fields removed and must not be applied back. */
   sensitive?: boolean;
+  /** Share the same editor and safety checks inside a resource drawer. */
+  embedded?: boolean;
 };
 
 /** YAML inspector with optional server-side-apply editing. */
 export function YamlModal(props: Props) {
+  const readOnly = useUiSettings((s) => s.readOnly);
   // A target change must discard the draft, validation, confirmations, and
   // in-flight responses even when two clusters have identically named objects.
   const key = JSON.stringify([
-    props.title, props.subtitle, props.sensitive,
+    props.title, props.subtitle, props.sensitive, readOnly,
     props.editable?.context, props.editable?.namespace,
     props.editable?.kind, props.editable?.name,
   ]);
-  return <YamlModalContent key={key} {...props} />;
+  return <YamlModalContent key={key} {...props} editable={readOnly ? undefined : props.editable} />;
 }
 
 function YamlModalContent({
@@ -57,6 +62,7 @@ function YamlModalContent({
   editable,
   pinSlot,
   sensitive = false,
+  embedded = false,
 }: Props) {
   const [mode, setMode] = useState<"read" | "edit">("read");
   const [draft, setDraft] = useState<string>("");
@@ -110,7 +116,7 @@ function YamlModalContent({
     staleTime: 15_000,
   });
   const editCapability = sensitive ? undefined : editable;
-  const canEdit = !editCapability || updateAccess.data?.allowed === true;
+  const canEdit = !!editCapability && updateAccess.data?.allowed === true && !!yaml && !loading && !error;
 
   // Seed the draft when yaml loads / we enter edit mode.
   useEffect(() => {
@@ -134,7 +140,7 @@ function YamlModalContent({
   };
 
   const runApply = async (dry: boolean) => {
-    if (!editable || sensitive || !canEdit || inFlight.current) return;
+    if (!editable || sensitive || useUiSettings.getState().readOnly || !canEdit || inFlight.current) return;
     if (!dry && validatedDraft !== draft) return;
     const submittedDraft = dry ? draft : validatedDraft!;
     const target = { ...editable };
@@ -180,6 +186,7 @@ function YamlModalContent({
   };
 
   const dirty = mode === "edit" && draft !== (yaml ?? "");
+  const smartDiff = dryRunOutput ? summarizeSmartYamlDiff(yaml ?? "", dryRunOutput) : null;
   const applyPreflight = useMemo(() => {
     if (!editCapability) return null;
     return analyzeYamlPreflight({
@@ -196,12 +203,12 @@ function YamlModalContent({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-8"
-      onClick={onClose}
+      className={embedded ? "flex h-full min-h-0 flex-col" : "fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-8"}
+      onClick={embedded ? undefined : onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-term-panel border border-term-border rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col"
+        className={embedded ? "bg-code-surface flex h-full min-h-0 flex-col" : "bg-term-panel border border-term-border rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col"}
       >
         <div className="flex items-center justify-between px-4 h-11 border-b border-term-border-soft shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -267,9 +274,9 @@ function YamlModalContent({
             >
               <Copy className="size-3" /> copy
             </button>
-            <button onClick={onClose} className="text-term-subtle hover:text-term-fg">
+            {!embedded && <button onClick={onClose} aria-label="Close YAML" className="text-term-subtle hover:text-term-fg">
               <X className="size-4" />
-            </button>
+            </button>}
           </div>
         </div>
 
@@ -308,6 +315,12 @@ function YamlModalContent({
               <summary className="px-4 py-2 text-[11px] text-term-green cursor-pointer select-none">
                 dry-run output (click to expand)
               </summary>
+              {smartDiff && <div className="px-4 py-2 text-[11px] text-term-muted">
+                {smartDiff.isNoOp ? "no operationally meaningful changes detected" :
+                  smartDiff.changes.slice(0, 6).map((change) => <div key={`${change.category}-${change.path}`}>
+                    {change.category}: {change.path} ({change.before ?? "empty"} → {change.after ?? "empty"})
+                  </div>)}
+              </div>}
               <pre className="max-h-[220px] overflow-auto p-4 text-[11px] text-term-muted font-mono whitespace-pre bg-term-bg">
                 {dryRunOutput}
               </pre>

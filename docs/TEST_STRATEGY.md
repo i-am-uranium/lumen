@@ -92,3 +92,23 @@ Run the core E2E suite on:
 - Conflicting `resourceVersion` update asks for reload.
 - Kubeconfig exec plugin errors are reported without exposing tokens.
 - Port-forward and shell sessions close on context change, app shutdown, and explicit stop.
+
+## Operator Workflow Regression Coverage
+
+- Namespace resolution: explicit URL, per-context selection, kubeconfig default,
+  failed/missing default lookup, manual selection with denied discovery, and
+  no broad requests or manual refresh while scope is unresolved.
+- Partial workload and triage access: retain successful sources and identify
+  unavailable sources; namespace/context changes discard old selections and
+  streamed events.
+- Connection diagnostics: secret-safe fixed guidance, executable availability,
+  Windows path parsing, and pending/failed inspection and retry lifecycles.
+- Investigation: selected-resource events, failing-container log links,
+  owner/controller evidence, partial exports, and late results from old targets.
+- Both YAML editors: PATCH preflight, exact-draft dry-run, draft invalidation,
+  target changes, and enabling read-only during an in-flight dry-run.
+
+Browser smoke checks can use synthetic Tauri IPC fixtures to inspect layouts
+and route/container selection. These checks complement component tests; they
+do not prove native credential execution or installed-app behavior on macOS,
+Windows, or Linux.

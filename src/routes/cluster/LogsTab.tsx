@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -44,37 +44,32 @@ function selectorFor(kind: WorkloadKind, name: string): string | undefined {
 export function LogsTab() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
-  const loc = useLocation();
   const [sp, setSp] = useSearchParams();
 
-  const [namespace, setNamespace] = useState<string>(sp.get("ns") ?? "");
-  const [kind, setKind] = useState<WorkloadKind>(
-    (sp.get("kind") as WorkloadKind) ?? "deployment",
-  );
-  const [name, setName] = useState<string>(sp.get("name") ?? "");
-  const [container, setContainer] = useState<string | null>(
-    sp.get("c") || null,
-  );
+  // URL is the selection source of truth, including external navigation.
+  const namespace = sp.get("ns") ?? "";
+  const kind = (sp.get("kind") as WorkloadKind) || "deployment";
+  const name = sp.get("name") ?? "";
+  const container = sp.get("c") || null;
+  const previous = kind === "pod" && sp.get("previous") === "true";
+  const startedAt = sp.get("startedAt");
+  const filter = sp.get("grep") ?? "";
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState(sp.get("grep") ?? "");
-
-  // Persist selection in the URL so deep-links from CloudMap work.
-  useEffect(() => {
-    const next = new URLSearchParams();
-    if (namespace) next.set("ns", namespace);
-    if (kind) next.set("kind", kind);
-    if (name) next.set("name", name);
-    if (container) next.set("c", container);
-    if (filter) next.set("grep", filter);
-    setSp(next, { replace: true });
-    // loc.pathname intentionally omitted — setSearchParams is stable.
-  }, [namespace, kind, name, container, filter, setSp, loc.pathname]);
-
-  // Reset container when the workload selection changes — the previously
-  // picked container probably doesn't exist on a different pod.
-  useEffect(() => {
-    setContainer(null);
-  }, [namespace, kind, name]);
+  const updateSelection = useCallback((values: Record<string, string | null>, targetChanged = false) => {
+    setSp((current) => {
+      const next = new URLSearchParams(current);
+      if (targetChanged) {
+        next.delete("c");
+        next.delete("previous");
+        next.delete("startedAt");
+      }
+      for (const [key, value] of Object.entries(values)) {
+        if (value === null) next.delete(key);
+        else next.set(key, value);
+      }
+      return next;
+    }, { replace: true });
+  }, [setSp]);
 
   // Fetch containers when a pod is selected (or the first pod of a workload
   // label selector — we only offer explicit picking in the pod case for
@@ -109,17 +104,16 @@ export function LogsTab() {
     if (namespace || !name || loadingWl) return;
     const exactMatches = workloads.filter((w) => w.name === name);
     if (exactMatches.length === 1) {
-      setNamespace(exactMatches[0].namespace);
-      setName(exactMatches[0].name);
+      updateSelection({ ns: exactMatches[0].namespace, name: exactMatches[0].name });
     }
-  }, [namespace, name, loadingWl, workloads]);
+  }, [namespace, name, loadingWl, workloads, updateSelection]);
 
   const streamId = useMemo(
     () =>
       namespace && name
-        ? `logs-${context}-${namespace}-${kind}-${name}-${container ?? "default"}`
+        ? `logs-${context}-${namespace}-${kind}-${name}-${container ?? "default"}-${previous ? "previous" : "current"}`
         : null,
-    [context, namespace, kind, name, container],
+    [context, namespace, kind, name, container, previous],
   );
 
   const { openStream, closeStream, appendLine, setPaused, toggleMute, streams } =
@@ -169,6 +163,7 @@ export function LogsTab() {
         label_selector: selectorFor(kind, name),
         pod_name: kind === "pod" ? name : null,
         container,
+        previous,
         since_seconds: 600,
         tail_lines: 500,
       },
@@ -188,7 +183,7 @@ export function LogsTab() {
       invoke("stop_stream", { streamId: backendId }).catch(() => {});
       closeStream(streamId);
     };
-  }, [streamId, namespace, kind, name, container, context, openStream, closeStream, appendLine]);
+  }, [streamId, namespace, kind, name, container, previous, context, openStream, closeStream, appendLine]);
 
   // Filtered view.
   const filterLc = filter.trim().toLowerCase();
@@ -288,13 +283,12 @@ export function LogsTab() {
             <select
               value={namespace}
               onChange={(e) => {
-                setNamespace(e.target.value);
-                setName("");
+                updateSelection({ ns: e.target.value, name: "" }, true);
               }}
               className="w-full h-8 px-2 rounded-control bg-elevated border border-border-default text-[12px] text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/45"
             >
               <option value="">— select —</option>
-              {namespaces.map((n) => (
+              {Array.from(new Set([...namespaces, ...(namespace ? [namespace] : [])])).map((n) => (
                 <option key={n} value={n}>
                   {n}
                 </option>
@@ -311,8 +305,7 @@ export function LogsTab() {
                   key={k.value}
                   type="button"
                   onClick={() => {
-                    setKind(k.value);
-                    setName("");
+                    updateSelection({ kind: k.value, name: "" }, true);
                   }}
                   variant="outline"
                   size="sm"
@@ -366,8 +359,7 @@ export function LogsTab() {
               <button
                 key={`${w.namespace}-${w.name}`}
                 onClick={() => {
-                  setNamespace(w.namespace);
-                  setName(w.name);
+                  updateSelection({ ns: w.namespace, name: w.name }, true);
                 }}
                 className={cn(
                   "w-full text-left px-3 py-1.5 text-[12px] flex items-center gap-2 hover:bg-hover transition-colors",
@@ -453,7 +445,7 @@ export function LogsTab() {
                 containersQuery.data.length > 1 && (
                   <select
                     value={container ?? ""}
-                    onChange={(e) => setContainer(e.target.value || null)}
+                    onChange={(e) => updateSelection({ c: e.target.value || null })}
                     className="h-8 px-2 text-[12px] rounded-control bg-elevated border border-border-default text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/45"
                     title="container"
                   >
@@ -471,7 +463,7 @@ export function LogsTab() {
                 <Search className="size-3.5 text-text-muted" />
                 <Input
                   value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
+                  onChange={(e) => updateSelection({ grep: e.target.value })}
                   placeholder="grep..."
                   className="h-7 flex-1 border-0 bg-transparent px-0 text-[12px] shadow-none focus-visible:ring-0"
                 />
@@ -508,6 +500,11 @@ export function LogsTab() {
               </Button>
             </div>
 
+            <div className="px-4 py-2 text-xs text-text-secondary">
+              {context} · {container ?? "default container"} · {previous ? "Previous container logs (retained last instance)" : "Current container logs"}
+              {startedAt && ` · investigation started ${startedAt}`}
+              {kind === "pod" && <Button variant="outline" size="sm" className="ml-2" onClick={() => updateSelection({ previous: previous ? null : "true" })}>{previous ? "current logs" : "previous logs"}</Button>}
+            </div>
             <PodStrip
               pods={pods}
               colorByPod={Object.fromEntries(

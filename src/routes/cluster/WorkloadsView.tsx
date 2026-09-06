@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { useFocusSearch } from "@/lib/focusSearch";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { k8s, type WorkloadKind, type WorkloadSummary } from "@/lib/k8s";
 import { cn } from "@/lib/utils";
 import { useK8sWatch } from "@/hooks/useK8sWatch";
+import { useNamespaceScope } from "@/hooks/useNamespaceScope";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import { useRecentResources } from "@/hooks/useRecentResources";
 import { RESOURCE_KIND_BY_SLUG, listResourceDefinitions, resourceKindLabel } from "@/lib/k8s/resourceRegistry";
@@ -990,13 +991,9 @@ export function WorkloadsView() {
   // persisted value is the fallback for plain navigation back to this
   // section.
   const [searchParams, setSearchParams] = useSearchParams();
-  const persistedNamespace = useUiSettings(
-    (s) => s.selectedNamespaces[context] ?? "",
-  );
-  const setPersistedNamespace = useUiSettings((s) => s.setSelectedNamespace);
-  const [namespace, setNamespace] = useState<string>(
-    () => searchParams.get("ns") ?? persistedNamespace,
-  );
+  const requestedNamespace = searchParams.has("ns") ? searchParams.get("ns") : null;
+  const namespaceScope = useNamespaceScope(context, requestedNamespace);
+  const { namespace, namespaces, discoveryError, isLoading: isNamespaceLoading } = namespaceScope;
   const [search, setSearch] = useState<string>(
     () => searchParams.get("q") ?? "",
   );
@@ -1005,13 +1002,11 @@ export function WorkloadsView() {
   useEffect(() => {
     const current = searchParams.toString();
     if (current === lastSyncedSearchParams.current) return;
-    const nextNamespace = searchParams.get("ns") ?? persistedNamespace;
     const nextSearch = searchParams.get("q") ?? "";
     applyingUrlSearchParams.current = true;
-    setNamespace(nextNamespace);
     setSearch(nextSearch);
     lastSyncedSearchParams.current = current;
-  }, [persistedNamespace, searchParams]);
+  }, [searchParams]);
   useEffect(() => {
     if (applyingUrlSearchParams.current) {
       applyingUrlSearchParams.current = false;
@@ -1023,18 +1018,19 @@ export function WorkloadsView() {
     for (const key of ["question", "task", "aiContext", "kind", "name", "namespace"]) {
       for (const value of searchParams.getAll(key)) next.append(key, value);
     }
-    if (namespace) next.set("ns", namespace);
+    if (!isNamespaceLoading) next.set("ns", namespace);
     if (search) next.set("q", search);
     const nextString = next.toString();
     if (nextString === searchParams.toString()) return;
     lastSyncedSearchParams.current = nextString;
     setSearchParams(next, { replace: true });
-  }, [namespace, search, searchParams, setSearchParams]);
-  // Mirror namespace changes back to the store so the next visit
-  // (same context) picks up where the user left off.
-  useEffect(() => {
-    setPersistedNamespace(context, namespace);
-  }, [context, namespace, setPersistedNamespace]);
+  }, [isNamespaceLoading, namespace, search, searchParams, setSearchParams]);
+  const setNamespace = useCallback((next: string) => {
+    namespaceScope.setNamespace(next);
+    const params = new URLSearchParams(searchParams);
+    params.set("ns", next);
+    setSearchParams(params, { replace: true });
+  }, [namespaceScope, searchParams, setSearchParams]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   // Cmd+/ broadcasts a focus-search event; the workloads view picks it up
   // and selects the toolbar's filter input. Ref-based so the keybinding
@@ -1054,12 +1050,6 @@ export function WorkloadsView() {
   const [pendingBulkAction, setPendingBulkAction] = useState<"delete" | "restart" | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  const { data: namespaces = [] } = useQuery({
-    queryKey: ["k8s", "namespaces", context],
-    queryFn: () => k8s.listNamespaces(context || undefined),
-    staleTime: 60_000,
-  });
-
   const autoRefreshSeconds = useUiSettings((s) => s.workloadsAutoRefreshSeconds);
   const setAutoRefreshSeconds = useUiSettings((s) => s.setWorkloadsAutoRefreshSeconds);
   const refetchInterval = autoRefreshSeconds ? autoRefreshSeconds * 1000 : false;
@@ -1068,6 +1058,7 @@ export function WorkloadsView() {
     queries: kindsToFetch.map((k) => ({
       queryKey: ["k8s", "workloads", context, namespace, k] as const,
       queryFn: () => k8s.listWorkloads(namespace, k, context || undefined),
+      enabled: !isNamespaceLoading,
       staleTime: 5_000,
       refetchInterval,
       refetchIntervalInBackground: false,
@@ -1086,11 +1077,16 @@ export function WorkloadsView() {
       namespace: namespace || undefined,
       context: context || undefined,
     },
+    enabled: !isNamespaceLoading,
   });
 
-  const isLoading = queries.some((q) => q.isLoading);
+  const isLoading = isNamespaceLoading || queries.some((q) => q.isLoading);
   const isFetching = queries.some((q) => q.isFetching);
-  const firstError = queries.find((q) => q.error)?.error as Error | undefined;
+  const failedQueries = queries.filter((q) => q.error);
+  const successfulQueries = queries.filter((q) => q.isSuccess);
+  const firstError = failedQueries[0]?.error as Error | undefined;
+  const isPartial = failedQueries.length > 0 && successfulQueries.length > 0;
+  const totalError = firstError && successfulQueries.length === 0 ? firstError : undefined;
 
   const items = useMemo(() => {
     const merged: WorkloadSummary[] = [];
@@ -1337,7 +1333,10 @@ export function WorkloadsView() {
     navigate(`${base}/${definition?.slug ?? kind}`);
   }
 
-  const refetchAll = () => queries.forEach((q) => q.refetch());
+  const refetchAll = () => {
+    if (isNamespaceLoading) return;
+    queries.forEach((q) => q.refetch());
+  };
 
   // ─── Detail surface ───────────────────────────────────────────────────
 
@@ -1403,7 +1402,7 @@ export function WorkloadsView() {
                 valueSeconds={autoRefreshSeconds}
                 onChange={setAutoRefreshSeconds}
               />
-              <Button onClick={refetchAll} disabled={isFetching}>
+              <Button onClick={refetchAll} disabled={isNamespaceLoading || isFetching}>
                 <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
                 refresh
               </Button>
@@ -1552,9 +1551,20 @@ export function WorkloadsView() {
                 onClear={() => setSelectedKeys(new Set())}
               />
             )}
-            {firstError ? (
+            {Boolean(discoveryError) && (
+              <div className="mb-3 rounded-panel border border-warning/30 bg-[var(--status-warning-soft)] p-3 text-xs text-text-secondary">
+                Namespace discovery is unavailable. You can still enter a namespace you are authorized to access.
+              </div>
+            )}
+            {isPartial && (
+              <div className="mb-3 rounded-panel border border-warning/30 bg-[var(--status-warning-soft)] p-3 text-xs text-text-secondary" role="status">
+                <span className="font-medium text-text-primary">Partial data:</span>{" "}
+                {failedQueries.map((query) => (query.error as Error).message).join("; ")}
+              </div>
+            )}
+            {totalError ? (
               <div className="flex items-center justify-between gap-4 rounded-panel border border-danger/30 bg-[var(--status-error-soft)] p-4 text-sm text-danger">
-                <span className="truncate">{firstError.message}</span>
+                <span className="truncate">Unable to load workloads: {totalError.message}</span>
                 <Button
                   onClick={refetchAll}
                   variant="destructive"

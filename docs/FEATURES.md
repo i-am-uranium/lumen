@@ -9,6 +9,11 @@ through a hosted control plane.
 - Discover kubeconfig contexts and switch between clusters.
 - Show cluster health, Kubernetes version, node readiness, and soft disconnects.
 - Mark production-like contexts clearly so risky actions have stronger context.
+- Inspect the active kubeconfig source and credential-tool availability from
+  connection diagnostics, with separate guidance for authentication, TLS,
+  network, and permission failures. Inspection does not execute credential tools.
+- Handle Windows `KUBECONFIG` drive letters and path-list separators. The loader
+  still uses the first source; multi-file merging is not supported yet.
 
 ## Workload Explorer
 
@@ -18,6 +23,9 @@ through a hosted control plane.
   count, and ownership.
 - Open rich detail drawers with metadata, labels, owner references, events,
   YAML, pod state, metrics, and kind-specific insights.
+- Remember namespaces per context, honor kubeconfig defaults, and enter a known
+  namespace when discovery is denied. Workloads and triage retain successful
+  results while explaining unavailable sources.
 
 ## Logs, Shell, And Port Forwarding
 
@@ -32,10 +40,18 @@ through a hosted control plane.
   diffs.
 - Generate incident reports with sensitive values redacted.
 - Compare resources across clusters when troubleshooting drift.
+- Investigate a selected triage issue with its failing container's current or
+  retained previous logs, related events, and owner/controller snapshots. Export
+  the selected evidence with capture times and unavailable-source notes.
+- Investigation snapshots do not establish historical rollout causality. Event
+  matching uses namespace, kind, and name; UID correlation and log contents are
+  not included in the investigation report.
 
 ## Kubernetes Operations
 
-- Apply YAML with server-side dry-run support where available.
+- Apply YAML only after successful server-side dry-run of the same draft,
+  PATCH permission preflight, and confirmation. Both YAML entry points share
+  these gates and respect the global read-only setting.
 - Delete resources with confirmation and RBAC preflight checks.
 - Manage Helm releases, including install, upgrade, rollback, and uninstall.
 - Browse Argo CD applications, resource trees, history, and sync status.

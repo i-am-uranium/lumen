@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
@@ -15,6 +15,9 @@ import {
   Siren,
   Terminal,
 } from "lucide-react";
+import { NamespacePicker } from "@/components/NamespacePicker";
+import { TriageInvestigation } from "@/components/TriageInvestigation";
+import { useNamespaceScope } from "@/hooks/useNamespaceScope";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import { IncidentReportDialog } from "@/components/IncidentReportDialog";
 import { Button } from "@/components/ui/button";
@@ -32,6 +35,8 @@ import {
   type TriageSeverity,
 } from "@/lib/triage";
 import { cn } from "@/lib/utils";
+
+const EVENT_AVAILABILITY_UNVERIFIED = "Live warning event availability is unverified. Access and ongoing connection health cannot be confirmed.";
 
 const TRIAGE_KINDS: WorkloadKind[] = [
   "pod",
@@ -116,21 +121,39 @@ function matchesSearch(issue: TriageIssue, search: string): boolean {
 export function TriageView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
+  const [sp, setSp] = useSearchParams();
+  const scope = useNamespaceScope(context, sp.get("ns"));
+  const namespace = scope.namespace;
+  const scopeKey = JSON.stringify([context, namespace]);
+  const [selection, setSelection] = useState<{ scopeKey: string; issue: TriageIssue; startedAt: string } | null>(null);
+  const investigation = selection?.scopeKey === scopeKey ? selection : null;
+  const [eventError, setEventError] = useState(false);
+  const [captureStartedAt, setCaptureStartedAt] = useState(() => new Date().toISOString());
+  const [eventScope, setEventScope] = useState(scopeKey);
   const [search, setSearch] = useState("");
   const [activeGroup, setActiveGroup] = useState<TriageGroup | "all">("all");
   const [events, setEvents] = useState<EventLine[]>([]);
-  const [reportOpen, setReportOpen] = useState(false);
+  const [reportScope, setReportScope] = useState<string | null>(null);
   const [drawerResource, setDrawerResource] = useState<{
+    scopeKey: string;
     kind: string;
     namespace: string;
     name: string;
   } | null>(null);
 
+  useEffect(() => {
+    setCaptureStartedAt(new Date().toISOString());
+    setSelection(null);
+    setDrawerResource(null);
+    setReportScope(null);
+  }, [scopeKey]);
+
   const workloadQueries = useQueries({
     queries: TRIAGE_KINDS.map((kind) => ({
-      queryKey: ["k8s", "triage-workloads", context, "", kind] as const,
-      queryFn: () => k8s.listWorkloads("", kind, context || undefined),
+      queryKey: ["k8s", "triage-workloads", context, namespace, kind] as const,
+      queryFn: () => k8s.listWorkloads(namespace, kind, context || undefined),
       staleTime: 5_000,
+      enabled: !scope.isLoading,
     })),
   });
   const nodesQuery = useQuery({
@@ -140,36 +163,39 @@ export function TriageView() {
   });
 
   const queryKeysForWatch = useMemo(
-    () => TRIAGE_KINDS.map((kind) => ["k8s", "triage-workloads", context, "", kind]),
-    [context],
+    () => TRIAGE_KINDS.map((kind) => ["k8s", "triage-workloads", context, namespace, kind]),
+    [context, namespace],
   );
   useK8sWatch({
     queryKeys: queryKeysForWatch,
     command: "watch_workloads",
-    args: { context: context || undefined },
+    args: { context: context || undefined, namespace: namespace || null },
+    enabled: !scope.isLoading,
   });
 
   useEffect(() => {
     setEvents([]);
-    const streamId = `triage-events-${context || "current"}`;
+    setEventScope(scopeKey);
+    setEventError(false);
+    if (scope.isLoading) return;
+    let active = true;
+    const streamId = `triage-events-${crypto.randomUUID()}`;
     const channel = new Channel<EventLine>();
     channel.onmessage = (line) => {
-      if (line.type_ !== "Warning") return;
+      if (!active || line.type_ !== "Warning") return;
       setEvents((prev) => [line, ...prev].slice(0, 80));
     };
     Promise.resolve(invoke("stream_events", {
-      namespace: null,
-      streamId,
-      channel,
-      context: context || undefined,
-    })).catch(() => {
-      // The regular query error surfaces cover workload/node failures. Event
-      // streaming is opportunistic here; EventsView remains the full stream.
-    });
+      namespace: namespace || null, streamId, channel, context: context || undefined,
+    })).then(() => {
+      if (!active) void Promise.resolve(invoke("stop_stream", { streamId })).catch(() => {});
+    }).catch(() => { if (active) setEventError(true); });
     return () => {
-      Promise.resolve(invoke("stop_stream", { streamId })).catch(() => {});
+      active = false;
+      void Promise.resolve(invoke("stop_stream", { streamId })).catch(() => {});
     };
-  }, [context]);
+  }, [context, namespace, scopeKey, scope.isLoading]);
+  const scopedEvents = useMemo(() => eventScope === scopeKey ? events : [], [eventScope, scopeKey, events]);
 
   const workloads = useMemo(
     () => workloadQueries.flatMap((query) => query.data ?? []),
@@ -181,9 +207,9 @@ export function TriageView() {
         context,
         workloads,
         nodes: nodesQuery.data ?? [],
-        events,
+        events: scopedEvents.map((event) => ({ ...event, namespace: namespace || null })),
       }),
-    [context, workloads, nodesQuery.data, events],
+    [context, workloads, nodesQuery.data, scopedEvents, namespace],
   );
   const filteredIssues = useMemo(
     () =>
@@ -204,19 +230,29 @@ export function TriageView() {
     [activeGroup, filteredIssues, issues, search],
   );
 
-  const isLoading = workloadQueries.some((query) => query.isLoading) || nodesQuery.isLoading;
+  const isLoading = scope.isLoading || workloadQueries.some((query) => query.isPending) || nodesQuery.isPending;
+  const eventAvailability = eventError
+    ? "Live warning events unavailable: stream startup failed."
+    : EVENT_AVAILABILITY_UNVERIFIED;
   const isFetching = workloadQueries.some((query) => query.isFetching) || nodesQuery.isFetching;
-  const firstError =
-    (workloadQueries.find((query) => query.error)?.error as Error | undefined) ??
-    (nodesQuery.error as Error | null);
+  const unavailable = [
+    ...workloadQueries.flatMap((query, index) => query.isError ? [TRIAGE_KINDS[index]] : []),
+    ...(nodesQuery.isError ? ["nodes"] : []),
+    ...(eventError ? ["live warning events"] : []),
+    ...(scope.discoveryError ? ["namespace discovery"] : []),
+  ];
+  const totalFailure = !scope.isLoading && workloadQueries.every((query) => query.isError) && issues.length === 0;
+  const partial = unavailable.length > 0;
 
   const refetchAll = useCallback(() => {
+    if (scope.isLoading) return;
     workloadQueries.forEach((query) => void query.refetch());
     void nodesQuery.refetch();
-  }, [nodesQuery, workloadQueries]);
+  }, [nodesQuery, workloadQueries, scope.isLoading]);
 
   function openResource(resource: TriageResourceRef) {
     setDrawerResource({
+      scopeKey,
       kind: resource.kind,
       namespace: resource.namespace ?? "",
       name: resource.name,
@@ -231,12 +267,19 @@ export function TriageView() {
         icon={<Siren className="size-3.5" aria-hidden="true" />}
         description={
           <>
-            {context} · {issues.length} active issue{issues.length === 1 ? "" : "s"} from
-            workloads, nodes, and live warning events
+            {context} · {namespace || "all namespaces"} · {issues.length} active issue{issues.length === 1 ? "" : "s"} from
+            workload and node checks, plus received warning events
           </>
         }
         actions={
           <div className="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
+            <NamespacePicker value={namespace} namespaces={scope.namespaces} onChange={(next) => {
+              scope.setNamespace(next);
+              setSp((current) => { const params = new URLSearchParams(current); params.set("ns", next); return params; }, { replace: true });
+              setSelection(null);
+              setDrawerResource(null);
+              setReportScope(null);
+            }} />
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-muted" />
               <Input
@@ -246,15 +289,15 @@ export function TriageView() {
                 className="w-[300px] pl-8 text-xs"
               />
             </div>
-            <Button onClick={refetchAll} disabled={isFetching}>
+            <Button onClick={refetchAll} disabled={isFetching || scope.isLoading}>
               <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
               refresh
             </Button>
             <Button
               type="button"
               variant="outline"
-              onClick={() => setReportOpen(true)}
-              disabled={!context}
+              onClick={() => setReportScope(scopeKey)}
+              disabled={!context || isLoading}
             >
               <FileDown className="size-3.5" />
               export report
@@ -263,30 +306,36 @@ export function TriageView() {
         }
       />
 
+      <div role="status" className="rounded-panel border border-border-default p-3 text-sm text-text-secondary">
+        {eventAvailability} Counts reflect received events only; zero does not establish that no warnings exist.
+      </div>
+      {nodesQuery.isPending && <p role="status" className="text-sm text-text-secondary">Node checks pending. Available workload issues remain visible; report export waits for the request to settle.</p>}
+      {partial && <div role="status" className="rounded-panel border border-warning/40 bg-warning-soft p-3 text-sm text-text-secondary">Partial data: {unavailable.join(", ")} unavailable. Counts cover successful sources only.</div>}
+      {investigation && <TriageInvestigation context={context} issue={investigation.issue} startedAt={investigation.startedAt} onClose={() => setSelection(null)} />}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <TriageMetric
           label="Critical"
           value={counts.critical}
-          tone={counts.critical ? "error" : "success"}
-          sub={counts.critical ? "Node or severe restart risk" : "No critical issues"}
+          tone={counts.critical ? "error" : "muted"}
+          sub={counts.critical ? "Node or severe restart risk" : partial || isLoading ? "Available sources only" : "None in completed checks"}
         />
         <TriageMetric
           label="High"
           value={counts.high}
-          tone={counts.high ? "warning" : "success"}
-          sub={counts.high ? "Failed or unstable resources" : "No high issues"}
+          tone={counts.high ? "warning" : "muted"}
+          sub={counts.high ? "Failed or unstable resources" : partial || isLoading ? "Available sources only" : "None in completed checks"}
         />
         <TriageMetric
           label="Medium"
           value={counts.medium}
-          tone={counts.medium ? "info" : "success"}
-          sub={counts.medium ? "Pending, degraded, or warnings" : "No medium issues"}
+          tone={counts.medium ? "info" : "muted"}
+          sub={counts.medium ? "Pending, degraded, or warnings" : partial || isLoading ? "Available sources only" : "None in completed checks"}
         />
         <TriageMetric
-          label="Warnings"
-          value={events.length}
-          tone={events.length ? "warning" : "muted"}
-          sub="Live event buffer"
+          label="Warnings received"
+          value={scopedEvents.length}
+          tone={scopedEvents.length ? "warning" : "muted"}
+          sub={eventError ? "Stream startup unavailable" : "Received only; completeness unverified"}
         />
         <TriageMetric
           label="Resources"
@@ -321,12 +370,12 @@ export function TriageView() {
           </div>
         </div>
 
-        {firstError ? (
-          <ErrorState message={firstError.message} onRetry={refetchAll} />
-        ) : isLoading ? (
+        {totalFailure ? (
+          <ErrorState message="Workload sources unavailable for this scope." onRetry={refetchAll} />
+        ) : isLoading && filteredIssues.length === 0 ? (
           <LoadingState />
         ) : filteredIssues.length === 0 ? (
-          <EmptyState hasIssues={issues.length > 0} onClear={() => {
+          <EmptyState partial={partial} hasIssues={issues.length > 0} onClear={() => {
             setSearch("");
             setActiveGroup("all");
           }} />
@@ -338,6 +387,7 @@ export function TriageView() {
                 ctx={context}
                 issue={issue}
                 onOpenResource={openResource}
+                onInvestigate={() => setSelection({ scopeKey, issue, startedAt: new Date().toISOString() })}
               />
             ))}
           </div>
@@ -346,20 +396,33 @@ export function TriageView() {
 
       <ResourceDetailDrawer
         ctx={context}
-        resource={drawerResource}
+        resource={drawerResource?.scopeKey === scopeKey ? drawerResource : null}
         onClose={() => setDrawerResource(null)}
       />
       <IncidentReportDialog
-        open={reportOpen}
-        onClose={() => setReportOpen(false)}
+        key={scopeKey}
+        open={reportScope === scopeKey}
+        onClose={() => setReportScope(null)}
         loading={isLoading}
-        error={firstError ?? null}
+        error={totalFailure ? new Error("Workload sources unavailable") : null}
         input={{
           clusterContext: context,
-          namespace: null,
-          selectedResource: drawerResource,
+          namespace: namespace || null,
+          selectedResource: null,
           triageIssues: reportIssues,
-          warningEvents: events,
+          warningEvents: scopedEvents,
+          investigation: {
+            startedAt: captureStartedAt,
+            sources: [
+              ...unavailable.map((name) => `${name}: unavailable`),
+              nodesQuery.isPending ? "Node checks: pending" : nodesQuery.isSuccess ? `Node checks: captured ${new Date(nodesQuery.dataUpdatedAt).toISOString()}` : "Node checks: unavailable",
+              eventAvailability,
+            ],
+            observations: [
+              "Triage counts cover completed checks and received events only.",
+              "Zero received events does not establish that no warnings exist. The event buffer may be incomplete, including when stream startup succeeds.",
+            ],
+          },
           rolloutEntries: [],
         }}
       />
@@ -422,10 +485,12 @@ function IssueCard({
   ctx,
   issue,
   onOpenResource,
+  onInvestigate,
 }: {
   ctx: string;
   issue: TriageIssue;
   onOpenResource: (resource: TriageResourceRef) => void;
+  onInvestigate: () => void;
 }) {
   const logs = logsPath(ctx, issue.resource);
   const resourceLabel = `${issue.resource.kind}/${issue.resource.name}`;
@@ -460,6 +525,7 @@ function IssueCard({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {(issue.resource.namespace || issue.resource.kind === "node") && <Button size="sm" onClick={onInvestigate} aria-label={`investigate ${resourceLabel}`}>investigate</Button>}
           <Button
             type="button"
             variant="outline"
@@ -529,12 +595,15 @@ function LoadingState() {
 }
 
 function EmptyState({
+  partial,
   hasIssues,
   onClear,
 }: {
+  partial: boolean;
   hasIssues: boolean;
   onClear: () => void;
 }) {
+  if (partial && !hasIssues) return <p className="text-sm text-text-secondary">No issues found in available sources. Unavailable sources have not been assessed.</p>;
   if (hasIssues) {
     return (
       <div className="flex items-center justify-between gap-4 rounded-panel border border-border-default bg-surface p-4 text-sm text-text-secondary">
@@ -548,12 +617,11 @@ function EmptyState({
   return (
     <div className="rounded-panel border border-border-default bg-surface p-6">
       <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
-        <CheckCircle2 className="size-4 text-success" />
-        No active triage issues
+        <CheckCircle2 className="size-4 text-text-muted" />
+        No active triage issues in completed checks
       </div>
       <p className="mt-2 text-sm text-text-secondary">
-        Cluster looks quiet from workloads, nodes, and streamed warnings. Keep this page open
-        during rollout windows to catch new Warning events as they arrive.
+        No issues were found in completed workload and node checks. Warning stream availability remains unverified; zero received events does not establish that no warnings exist.
       </p>
     </div>
   );
