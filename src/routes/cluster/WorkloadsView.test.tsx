@@ -14,6 +14,8 @@ import {
 } from "./WorkloadsView";
 import { LegacyAssistantRedirect } from "@/components/LegacyAssistantRedirect";
 import { k8s, type WorkloadSummary } from "@/lib/k8s";
+import { useK8sWatch } from "@/hooks/useK8sWatch";
+import { useUiSettings } from "@/state/uiSettings";
 
 vi.mock("@/hooks/useK8sWatch", () => ({
   useK8sWatch: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock("@/lib/k8s", async () => {
     ...actual,
     k8s: {
       ...actual.k8s,
+      listContexts: vi.fn(),
       listNamespaces: vi.fn(),
       listWorkloads: vi.fn(),
     },
@@ -198,7 +201,14 @@ function LocationProbe() {
   return <output aria-label="current route">{location.pathname + location.search}</output>;
 }
 
-function renderWorkloads(items: WorkloadSummary[], initialEntry = "/cluster/dev/workloads/pod") {
+function renderWorkloads(
+  items: WorkloadSummary[],
+  initialEntry = "/cluster/dev/workloads/pod",
+  contexts: ReturnType<typeof k8s.listContexts> = Promise.resolve([
+    { name: "dev", cluster: "dev", user: "me", namespace: "payments", is_current: true, is_prod: false },
+  ]),
+) {
+  vi.mocked(k8s.listContexts).mockReturnValue(contexts);
   vi.mocked(k8s.listNamespaces).mockResolvedValue([]);
   vi.mocked(k8s.listWorkloads).mockImplementation(async (_ns, kind) =>
     items.filter((w) => w.kind === kind),
@@ -241,6 +251,7 @@ function statCard(label: string): HTMLElement {
 describe("WorkloadsView actionable stat cards", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useUiSettings.setState({ selectedNamespaces: {} });
   });
 
   it("filters to restarting pods when the Restarts card is clicked and exposes the toggle via aria-pressed", async () => {
@@ -341,6 +352,61 @@ describe("WorkloadsView actionable stat cards", () => {
     await waitFor(() => {
       expect(screen.getByTestId("nodes-route")).toBeInTheDocument();
     });
+  });
+});
+
+describe("WorkloadsView namespace scope and partial access", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useUiSettings.setState({ selectedNamespaces: {} });
+  });
+
+  it("resolves the kubeconfig default before the first workload fetch", async () => {
+    let resolveContexts!: (value: Awaited<ReturnType<typeof k8s.listContexts>>) => void;
+    vi.mocked(k8s.listNamespaces).mockResolvedValue([]);
+    vi.mocked(k8s.listWorkloads).mockResolvedValue([]);
+    const contexts = new Promise<Awaited<ReturnType<typeof k8s.listContexts>>>((resolve) => { resolveContexts = resolve; });
+    renderWorkloads([], "/cluster/dev/workloads/pod", contexts);
+
+    expect(k8s.listWorkloads).not.toHaveBeenCalled();
+    resolveContexts([
+      { name: "dev", cluster: "dev", user: "me", namespace: "payments", is_current: true, is_prod: false },
+    ]);
+
+    await waitFor(() => expect(k8s.listWorkloads).toHaveBeenCalledWith("payments", "pod", "dev"));
+  });
+
+  it("uses the same explicit namespace for list and watch calls", async () => {
+    renderWorkloads([], "/cluster/dev/workloads/pod?ns=payments");
+
+    await waitFor(() => expect(k8s.listWorkloads).toHaveBeenCalledWith("payments", "pod", "dev"));
+    expect(vi.mocked(useK8sWatch)).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true,
+      args: { namespace: "payments", context: "dev" },
+    }));
+  });
+
+  it("retains successful pod rows and reports partial data when deployments are forbidden", async () => {
+    vi.mocked(k8s.listContexts).mockResolvedValue([
+      { name: "dev", cluster: "dev", user: "me", namespace: "payments", is_current: true, is_prod: false },
+    ]);
+    vi.mocked(k8s.listNamespaces).mockResolvedValue(["payments"]);
+    vi.mocked(k8s.listWorkloads).mockImplementation(async (_namespace, kind) => {
+      if (kind === "deployment") throw new Error("deployments is forbidden");
+      return kind === "pod" ? [workload({ kind: "pod", namespace: "payments", name: "api-pod" })] : [];
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/cluster/dev/workloads?ns=payments"]}>
+          <Routes><Route path="/cluster/:ctx/workloads/:kind?" element={<WorkloadsView />} /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("api-pod")).toBeInTheDocument();
+    expect(screen.getByText(/partial data/i)).toBeInTheDocument();
+    expect(screen.getByText(/deployments is forbidden/i)).toBeInTheDocument();
   });
 });
 
