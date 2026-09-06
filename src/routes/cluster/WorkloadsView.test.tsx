@@ -376,6 +376,29 @@ describe("WorkloadsView namespace scope and partial access", () => {
     await waitFor(() => expect(k8s.listWorkloads).toHaveBeenCalledWith("payments", "pod", "dev"));
   });
 
+  it("keeps refresh disabled while namespace default resolution is pending", () => {
+    const contexts = new Promise<Awaited<ReturnType<typeof k8s.listContexts>>>(() => {});
+    renderWorkloads([], "/cluster/dev/workloads/pod", contexts);
+
+    const refresh = screen.getByRole("button", { name: /refresh/i });
+    expect(refresh).toBeDisabled();
+    fireEvent.click(refresh);
+    expect(k8s.listWorkloads).not.toHaveBeenCalled();
+  });
+
+  it("does not persist or query all namespaces after default resolution fails", async () => {
+    renderWorkloads(
+      [],
+      "/cluster/dev/workloads/pod",
+      Promise.reject(new Error("kubeconfig unreadable")),
+    );
+
+    await screen.findByText(/namespace discovery is unavailable/i);
+    expect(k8s.listWorkloads).not.toHaveBeenCalled();
+    expect(useUiSettings.getState().selectedNamespaces).not.toHaveProperty("dev");
+    expect(screen.getByLabelText("current route")).toHaveTextContent("/cluster/dev/workloads/pod");
+  });
+
   it("uses the same explicit namespace for list and watch calls", async () => {
     renderWorkloads([], "/cluster/dev/workloads/pod?ns=payments");
 

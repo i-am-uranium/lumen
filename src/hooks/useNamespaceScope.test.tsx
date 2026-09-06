@@ -88,6 +88,40 @@ describe("useNamespaceScope", () => {
     expect(useUiSettings.getState().selectedNamespaces.dev).toBe("orders");
   });
 
+  it("keeps failed default resolution gated until the user explicitly selects a scope", async () => {
+    vi.mocked(k8s.listContexts).mockRejectedValue(new Error("kubeconfig unreadable"));
+    const { result } = renderHook(() => useNamespaceScope("dev"), { wrapper });
+
+    await waitFor(() => expect(result.current.discoveryError).toBeInstanceOf(Error));
+    expect(result.current.isLoading).toBe(true);
+    expect(useUiSettings.getState().selectedNamespaces).not.toHaveProperty("dev");
+
+    act(() => result.current.setNamespace("payments"));
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.namespace).toBe("payments");
+  });
+
+  it("keeps a missing context gated instead of treating it as all namespaces", async () => {
+    vi.mocked(k8s.listContexts).mockResolvedValue([]);
+    const { result } = renderHook(() => useNamespaceScope("missing"), { wrapper });
+
+    await waitFor(() => expect(result.current.discoveryError).toBeInstanceOf(Error));
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.namespace).toBe("");
+    expect(useUiSettings.getState().selectedNamespaces).not.toHaveProperty("missing");
+  });
+
+  it("uses the Kubernetes default namespace when kubeconfig omits one", async () => {
+    vi.mocked(k8s.listContexts).mockResolvedValue([
+      { name: "dev", cluster: "dev", user: "me", namespace: null, is_current: true, is_prod: false },
+    ]);
+    const { result } = renderHook(() => useNamespaceScope("dev"), { wrapper });
+
+    await waitFor(() => expect(result.current.namespace).toBe("default"));
+    expect(result.current.isLoading).toBe(false);
+  });
+
   it("preserves a manually selected namespace in the discovered choices", async () => {
     const { result } = renderHook(() => useNamespaceScope("dev", "custom"), { wrapper });
 

@@ -40,13 +40,21 @@ export function useNamespaceScope(
     staleTime: 60_000,
   });
 
-  const contextDefault = contextsQuery.data?.find((item) => item.name === context)?.namespace ?? "";
+  const contextEntry = contextsQuery.data?.find((item) => item.name === context);
+  const contextDefault = contextEntry ? contextEntry.namespace ?? "default" : "";
+  const contextDefaultResolved = contextsQuery.isSuccess && Boolean(contextEntry);
+  const missingContextError =
+    needsContextDefault && contextsQuery.isSuccess && !contextEntry
+      ? new Error(`Context ${context} was not found while resolving its namespace.`)
+      : null;
   const namespace = hasUrlOverride
     ? requestedNamespace
     : hasPersistedNamespace
       ? persistedNamespace
       : contextDefault;
-  const isLoading = needsContextDefault && contextsQuery.isPending;
+  // This is a resolution gate, not only a network loading flag. A failed or
+  // missing context must stay gated until the user makes an explicit choice.
+  const isLoading = needsContextDefault && !contextDefaultResolved;
 
   useEffect(() => {
     if (!context || !hasUrlOverride) return;
@@ -54,9 +62,9 @@ export function useNamespaceScope(
   }, [context, hasUrlOverride, requestedNamespace, setSelectedNamespace]);
 
   useEffect(() => {
-    if (!context || !needsContextDefault || contextsQuery.isPending || contextsQuery.error) return;
+    if (!context || !needsContextDefault || !contextDefaultResolved) return;
     setSelectedNamespace(context, contextDefault);
-  }, [context, contextDefault, contextsQuery.error, contextsQuery.isPending, needsContextDefault, setSelectedNamespace]);
+  }, [context, contextDefault, contextDefaultResolved, needsContextDefault, setSelectedNamespace]);
 
   const setNamespace = useCallback(
     (next: string) => setSelectedNamespace(context, next),
@@ -71,7 +79,7 @@ export function useNamespaceScope(
     namespace,
     setNamespace,
     namespaces,
-    discoveryError: namespacesQuery.error ?? contextsQuery.error,
+    discoveryError: namespacesQuery.error ?? contextsQuery.error ?? missingContextError,
     isLoading,
   };
 }

@@ -1333,7 +1333,10 @@ export function WorkloadsView() {
     navigate(`${base}/${definition?.slug ?? kind}`);
   }
 
-  const refetchAll = () => queries.forEach((q) => q.refetch());
+  const refetchAll = () => {
+    if (isNamespaceLoading) return;
+    queries.forEach((q) => q.refetch());
+  };
 
   // ─── Detail surface ───────────────────────────────────────────────────
 
@@ -1399,7 +1402,7 @@ export function WorkloadsView() {
                 valueSeconds={autoRefreshSeconds}
                 onChange={setAutoRefreshSeconds}
               />
-              <Button onClick={refetchAll} disabled={isFetching}>
+              <Button onClick={refetchAll} disabled={isNamespaceLoading || isFetching}>
                 <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
                 refresh
               </Button>
