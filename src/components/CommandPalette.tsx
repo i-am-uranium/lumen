@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { navigateFocused } from "@/state/panes";
@@ -46,7 +46,6 @@ import {
 } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
-import { useShortcut } from "@/lib/shortcuts";
 
 export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
   listResourceDefinitions().map((definition) => definition.kind);
@@ -60,6 +59,7 @@ function present<T>(value: T | undefined): value is T {
 export function CommandPalette() {
   const { paletteOpen, setPaletteOpen } = useUi();
   const [q, setQ] = useState("");
+  const previousFocus = useRef<HTMLElement | null>(null);
   const qc = useQueryClient();
   const {
     contextName: currentCtx,
@@ -149,7 +149,6 @@ export function CommandPalette() {
   }, [normalizedQuery, contexts, namespaces, deployments, allResources]);
 
   // Cmd+K (or whatever the user remapped openPalette to via Settings).
-  useShortcut("openPalette", () => setPaletteOpen(!paletteOpen));
 
   function close() {
     setPaletteOpen(false);
@@ -229,7 +228,19 @@ export function CommandPalette() {
 
   return (
     <Dialog open={paletteOpen} onOpenChange={setPaletteOpen}>
-      <DialogContent className="p-0 max-w-xl overflow-hidden rounded-[8px] bg-term-panel border-term-border text-term-fg shadow-[var(--mds-shadow-whisper)]">
+      <DialogContent
+        className="p-0 max-w-xl overflow-hidden rounded-[8px] bg-term-panel border-term-border text-term-fg shadow-[var(--mds-shadow-whisper)]"
+        onOpenAutoFocus={() => {
+          previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          // This dialog opens from a global shortcut, so it has no Radix trigger.
+          if (previousFocus.current?.isConnected) {
+            event.preventDefault();
+            previousFocus.current.focus();
+          }
+        }}
+      >
         <Command
           shouldFilter={false}
           className="bg-transparent [&_[cmdk-input-wrapper]]:border-term-border [&_[cmdk-input-wrapper]]:border-b"
