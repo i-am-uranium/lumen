@@ -1,7 +1,11 @@
+pub(crate) mod sources;
 use crate::error::{AppError, AppResult};
 use crate::k8s::types::ContextInfo;
 use kube::config::{Kubeconfig, NamedAuthInfo, NamedCluster, NamedContext};
 use serde::{Deserialize, Serialize};
+pub use sources::{
+    load_paths, load_snapshot, source_paths, ConfigDefinition, ConfigSnapshot, ConfigSource,
+};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,6 +27,8 @@ struct DeletedContext {
     context: NamedContext,
     cluster: Option<NamedCluster>,
     auth_info: Option<NamedAuthInfo>,
+    #[serde(default)]
+    source_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,6 +42,7 @@ pub struct DeletedContextSummary {
     pub expires_at_ms: i64,
     pub days_remaining: i64,
     pub has_conflict: bool,
+    pub source_path: Option<PathBuf>,
 }
 
 pub fn default_path() -> PathBuf {
@@ -80,14 +87,13 @@ pub fn list_contexts_from(cfg: &Kubeconfig) -> Vec<ContextInfo> {
 }
 
 pub fn load() -> AppResult<Kubeconfig> {
-    let path = default_path();
-    if !path.exists() {
-        return Err(AppError::Kubeconfig(format!(
-            "no kubeconfig at {}",
-            path.display()
-        )));
+    let snapshot = load_snapshot()?;
+    if !snapshot.sources.iter().any(|source| source.exists) {
+        return Err(AppError::Kubeconfig(
+            "no kubeconfig source was found".into(),
+        ));
     }
-    Kubeconfig::read_from(&path).map_err(|e| AppError::Kubeconfig(e.to_string()))
+    Ok(snapshot.config)
 }
 
 fn trash_path(app: &AppHandle) -> AppResult<PathBuf> {
@@ -112,7 +118,8 @@ fn read_raw(path: &Path) -> AppResult<String> {
 
 fn read_config_raw(path: &Path) -> AppResult<Kubeconfig> {
     let raw = read_raw(path)?;
-    serde_yaml::from_str(&raw).map_err(|e| AppError::Kubeconfig(e.to_string()))
+    serde_yaml::from_str(&raw)
+        .map_err(|_| AppError::Kubeconfig(format!("invalid kubeconfig source {}", path.display())))
 }
 
 fn write_config_raw(path: &Path, cfg: &Kubeconfig) -> AppResult<()> {
@@ -132,13 +139,40 @@ fn atomic_write(
     tmp_extension: &str,
     err: fn(String) -> AppError,
 ) -> AppResult<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| err(format!("create dir: {e}")))?;
     }
-    let tmp = path.with_extension(tmp_extension);
-    std::fs::write(&tmp, bytes).map_err(|e| err(format!("write temp: {e}")))?;
-    std::fs::rename(&tmp, path).map_err(|e| err(format!("rename temp: {e}")))?;
-    Ok(())
+    let tmp = path.with_extension(format!(
+        "{tmp_extension}.{}.{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&tmp)
+        .map_err(|e| err(format!("create private temp: {e}")))?;
+    let result = (|| {
+        file.write_all(bytes)
+            .map_err(|e| err(format!("write temp: {e}")))?;
+        file.sync_all()
+            .map_err(|e| err(format!("sync temp: {e}")))?;
+        drop(file);
+        std::fs::rename(&tmp, path).map_err(|e| err(format!("rename temp: {e}")))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 fn load_trash(path: &Path) -> AppResult<TrashStore> {
@@ -162,9 +196,113 @@ fn prune_expired(trash: &mut TrashStore, now: i64) {
 }
 
 pub fn delete_context(app: &AppHandle, name: &str) -> AppResult<()> {
-    delete_context_with_backup(&default_path(), &trash_path(app)?, name, now_ms())
+    delete_from_sources(&source_paths(), &trash_path(app)?, name, now_ms())
 }
 
+fn reject_symlink_edit(path: &Path) -> AppResult<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(AppError::Conflict("this kubeconfig source is a symbolic link; edit the original file explicitly before deleting or restoring contexts".into()));
+    }
+    Ok(())
+}
+
+fn delete_from_sources(
+    paths: &[PathBuf],
+    trash_path: &Path,
+    name: &str,
+    now: i64,
+) -> AppResult<()> {
+    let snapshot = load_paths(paths)?;
+    let owner = snapshot.owner(name)?;
+    reject_symlink_edit(&owner)?;
+    let mut config = read_config_raw(&owner)?;
+    let mut deleted = deleted_context_from(&config, name, now)?;
+    deleted.source_path = Some(owner.clone());
+    config.contexts.retain(|context| context.name != name);
+    if config.current_context.as_deref() == Some(name) {
+        config.current_context = config.contexts.first().map(|context| context.name.clone());
+    }
+    // Include even shadowed contexts: deleting one file must not damage references in another.
+    let mut referenced_clusters = BTreeSet::new();
+    let mut referenced_users = BTreeSet::new();
+    for source in snapshot.sources.iter().filter(|source| source.exists) {
+        let raw = read_config_raw(&source.path)?;
+        for context in raw.contexts {
+            if source.path == owner && context.name == name {
+                continue;
+            }
+            if let Some(context) = context.context {
+                referenced_clusters.insert(context.cluster);
+                if let Some(user) = context.user {
+                    referenced_users.insert(user);
+                }
+            }
+        }
+    }
+    if let Some(cluster) = &deleted.cluster {
+        if referenced_clusters.contains(&cluster.name) {
+            deleted.cluster = None;
+        } else {
+            config.clusters.retain(|value| value.name != cluster.name);
+        }
+    }
+    if let Some(user) = &deleted.auth_info {
+        if referenced_users.contains(&user.name) {
+            deleted.auth_info = None;
+        } else {
+            config.auth_infos.retain(|value| value.name != user.name);
+        }
+    }
+    if !snapshot.unchanged() {
+        return Err(AppError::Conflict(
+            "kubeconfig changed while deleting; rescan and retry".into(),
+        ));
+    }
+    let mut trash = load_trash(trash_path)?;
+    prune_expired(&mut trash, now);
+    trash.entries.retain(|entry| entry.name != name);
+    trash.entries.push(deleted);
+    save_trash(trash_path, &trash)?;
+    write_config_raw(&owner, &config)
+}
+
+fn restore_from_sources(
+    paths: &[PathBuf],
+    trash_path: &Path,
+    name: &str,
+    overwrite: bool,
+    now: i64,
+) -> AppResult<()> {
+    let trash = load_trash(trash_path)?;
+    let entry = trash
+        .entries
+        .iter()
+        .find(|entry| entry.name == name && entry.expires_at_ms > now)
+        .ok_or_else(|| AppError::NotFound(format!("deleted context '{name}' not found")))?;
+    let fallback = paths.first().cloned().unwrap_or_else(default_path);
+    let owner = entry.source_path.as_deref().unwrap_or(&fallback);
+    reject_symlink_edit(owner)?;
+    let snapshot = load_paths(paths)?;
+    // Overwrite never changes a definition owned by a different source.
+    for source in snapshot
+        .sources
+        .iter()
+        .filter(|source| source.exists && source.path != owner)
+    {
+        let config = read_config_raw(&source.path)?;
+        if !restore_conflicts(&config, entry).is_empty() {
+            return Err(AppError::Conflict("restoring would conflict with another kubeconfig source; resolve that definition first".into()));
+        }
+    }
+    if !snapshot.unchanged() {
+        return Err(AppError::Conflict(
+            "kubeconfig changed; rescan and retry".into(),
+        ));
+    }
+    restore_deleted_context_from(owner, trash_path, name, overwrite, now)
+}
+
+#[cfg(test)]
 fn delete_context_with_backup(
     kube_path: &Path,
     trash_path: &Path,
@@ -191,9 +329,19 @@ fn delete_context_with_backup(
 }
 
 pub fn list_deleted_contexts(app: &AppHandle) -> AppResult<Vec<DeletedContextSummary>> {
-    list_deleted_contexts_from(&default_path(), &trash_path(app)?, now_ms())
+    let config = load_snapshot()?.config;
+    let path = trash_path(app)?;
+    let mut trash = load_trash(&path)?;
+    prune_expired(&mut trash, now_ms());
+    save_trash(&path, &trash)?;
+    Ok(trash
+        .entries
+        .iter()
+        .map(|entry| deleted_summary(entry, Some(&config), now_ms()))
+        .collect())
 }
 
+#[cfg(test)]
 fn list_deleted_contexts_from(
     kube_path: &Path,
     trash_path: &Path,
@@ -218,8 +366,8 @@ fn list_deleted_contexts_from(
 }
 
 pub fn restore_deleted_context(app: &AppHandle, name: &str, overwrite: bool) -> AppResult<()> {
-    restore_deleted_context_from(
-        &default_path(),
+    restore_from_sources(
+        &source_paths(),
         &trash_path(app)?,
         name,
         overwrite,
@@ -247,6 +395,7 @@ fn restore_deleted_context_from(
             "deleted context '{name}' not found"
         )));
     };
+    let kube_path = entry.source_path.as_deref().unwrap_or(kube_path);
     if !kube_path.exists() {
         return Err(AppError::Kubeconfig(format!(
             "no kubeconfig at {}",
@@ -308,6 +457,7 @@ fn deleted_context_from(cfg: &Kubeconfig, name: &str, now: i64) -> AppResult<Del
         context,
         cluster,
         auth_info,
+        source_path: None,
     })
 }
 
@@ -326,6 +476,7 @@ fn deleted_summary(
         deleted_at_ms: entry.deleted_at_ms,
         expires_at_ms: entry.expires_at_ms,
         days_remaining: ((entry.expires_at_ms - now).max(0) + 86_399_999) / 86_400_000,
+        source_path: entry.source_path.clone(),
         has_conflict: cfg
             .map(|cfg| !restore_conflicts(cfg, entry).is_empty())
             .unwrap_or(false),
@@ -368,20 +519,6 @@ fn remove_restore_conflicts(cfg: &mut Kubeconfig, entry: &DeletedContext) {
         cfg.auth_infos
             .retain(|existing| existing.name != auth_info.name);
     }
-}
-
-#[allow(dead_code)]
-pub fn delete_context_without_backup(name: &str) -> AppResult<()> {
-    let path = default_path();
-    if !path.exists() {
-        return Err(AppError::Kubeconfig(format!(
-            "no kubeconfig at {}",
-            path.display()
-        )));
-    }
-    let mut cfg = read_config_raw(&path)?;
-    delete_context_from(&mut cfg, name)?;
-    write_config_raw(&path, &cfg)
 }
 
 pub fn delete_context_from(cfg: &mut Kubeconfig, name: &str) -> AppResult<()> {
@@ -634,5 +771,102 @@ users:
             Some(PathBuf::from("/tmp/a"))
         );
         assert_eq!(first_config_path(" ; ", true), None);
+    }
+}
+
+#[cfg(test)]
+mod source_edit_tests {
+    use super::*;
+
+    fn files(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("lumen-source-edits-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        (root.join("first"), root.join("second"), root.join("trash"))
+    }
+
+    #[test]
+    fn deletion_restores_original_owner_and_preserves_cross_file_references() {
+        let (a, b, trash) = files("owners");
+        let first = "contexts: [{name: first, context: {cluster: shared, user: shared}}]\n";
+        let second = "contexts: [{name: second, context: {cluster: shared, user: shared}}]\nclusters: [{name: shared, cluster: {server: https://fixture.invalid, certificate-authority: ca.pem}}]\nusers: [{name: shared, user: {tokenFile: token}}]\n";
+        std::fs::write(&a, first).unwrap();
+        std::fs::write(&b, second).unwrap();
+        delete_from_sources(&[a.clone(), b.clone()], &trash, "second", 100).unwrap();
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), first);
+        let remaining = read_config_raw(&b).unwrap();
+        assert!(remaining.contexts.is_empty());
+        assert_eq!(remaining.clusters.len(), 1);
+        assert_eq!(remaining.auth_infos.len(), 1);
+        assert_eq!(
+            load_trash(&trash).unwrap().entries[0].source_path.as_ref(),
+            Some(&b)
+        );
+        restore_from_sources(&[a.clone(), b.clone()], &trash, "second", false, 101).unwrap();
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), first);
+        assert_eq!(read_config_raw(&b).unwrap().contexts[0].name, "second");
+        assert_eq!(
+            read_config_raw(&b).unwrap().clusters[0]
+                .cluster
+                .as_ref()
+                .unwrap()
+                .certificate_authority
+                .as_deref(),
+            Some("ca.pem")
+        );
+    }
+
+    #[test]
+    fn separate_cluster_and_user_sources_are_never_written() {
+        let (a, b, trash) = files("separate");
+        let credentials = "clusters: [{name: shared, cluster: {server: https://fixture.invalid}}]\nusers: [{name: shared, user: {tokenFile: token}}]\n";
+        std::fs::write(&a, credentials).unwrap();
+        std::fs::write(
+            &b,
+            "contexts: [{name: second, context: {cluster: shared, user: shared}}]\n",
+        )
+        .unwrap();
+        delete_from_sources(&[a.clone(), b.clone()], &trash, "second", 100).unwrap();
+        restore_from_sources(&[a.clone(), b], &trash, "second", false, 101).unwrap();
+        assert_eq!(std::fs::read_to_string(a).unwrap(), credentials);
+    }
+
+    #[test]
+    fn ambiguous_deletion_and_cross_source_restore_overwrite_are_rejected() {
+        let (a, b, trash) = files("duplicates");
+        let config = "contexts: [{name: duplicated, context: {cluster: shared}}]\n";
+        std::fs::write(&a, config).unwrap();
+        std::fs::write(&b, config).unwrap();
+        assert!(matches!(
+            delete_from_sources(&[a.clone(), b.clone()], &trash, "duplicated", 100),
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), config);
+        delete_from_sources(std::slice::from_ref(&a), &trash, "duplicated", 100).unwrap();
+        assert!(matches!(
+            restore_from_sources(&[a, b], &trash, "duplicated", true, 101),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_and_backup_writes_keep_credentials_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let (a, _, trash) = files("permissions");
+        std::fs::write(&a, "contexts: [{name: dev, context: {cluster: c}}]").unwrap();
+        std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o600)).unwrap();
+        delete_from_sources(std::slice::from_ref(&a), &trash, "dev", 100).unwrap();
+        for path in [&a, &trash] {
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        restore_from_sources(std::slice::from_ref(&a), &trash, "dev", false, 101).unwrap();
+        assert_eq!(
+            std::fs::metadata(a).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

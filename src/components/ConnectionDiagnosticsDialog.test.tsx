@@ -24,6 +24,23 @@ describe("ConnectionDiagnosticsDialog", () => {
     return { promise, resolve, reject };
   }
 
+  it("shows ordered sources, winning definitions and ignored duplicates", async () => {
+    vi.mocked(diagnoseConnection).mockResolvedValue({
+      context: "dev", config_path: "/configs/second", status: "ready_to_retry",
+      credential_executable: null, credential_executable_available: null,
+      message: "Configuration inspection passed.", single_source_only: false,
+      sources: [{ path: "/configs/first", exists: true }, { path: "/configs/missing", exists: false }, { path: "/configs/second", exists: true }],
+      context_sources: { context: "/configs/second", cluster: "/configs/first" },
+      duplicate_definitions: [{ kind: "cluster", name: "shared", source: "/configs/second", shadowed: true }],
+    });
+    render(<ConnectionDiagnosticsDialog open context="dev" retrying={false} onClose={() => undefined} onRetry={() => undefined} />);
+    expect(await screen.findByText(/first definition wins/)).toBeInTheDocument();
+    expect(screen.getByText(/missing · skipped/)).toBeInTheDocument();
+    expect(screen.getByText("Duplicate definitions ignored")).toBeInTheDocument();
+    expect(screen.getByText(/cluster “shared” in/)).toBeInTheDocument();
+    expect(screen.queryByText(/first path only/)).not.toBeInTheDocument();
+  });
+
   it("renders safe permission guidance and retries after remediation", async () => {
     vi.mocked(diagnoseConnection).mockResolvedValue({
       context: "dev",
@@ -65,7 +82,7 @@ describe("ConnectionDiagnosticsDialog", () => {
       <ConnectionDiagnosticsDialog open context={null} retrying={false} onClose={() => undefined} onRetry={() => undefined} />,
     );
     expect(await screen.findByText(/No kubeconfig file was found/i)).toBeInTheDocument();
-    expect(screen.getByText(/first path only/i)).toBeInTheDocument();
+    expect(screen.queryByText(/first path only/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/connection successful/i)).not.toBeInTheDocument();
   });
 
