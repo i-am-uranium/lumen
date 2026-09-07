@@ -87,13 +87,7 @@ pub fn list_contexts_from(cfg: &Kubeconfig) -> Vec<ContextInfo> {
 }
 
 pub fn load() -> AppResult<Kubeconfig> {
-    let snapshot = load_snapshot()?;
-    if !snapshot.sources.iter().any(|source| source.exists) {
-        return Err(AppError::Kubeconfig(
-            "no kubeconfig source was found".into(),
-        ));
-    }
-    Ok(snapshot.config)
+    Ok(load_snapshot()?.config)
 }
 
 fn trash_path(app: &AppHandle) -> AppResult<PathBuf> {
@@ -112,8 +106,11 @@ fn now_ms() -> i64 {
 }
 
 fn read_raw(path: &Path) -> AppResult<String> {
-    std::fs::read_to_string(path)
-        .map_err(|e| AppError::Kubeconfig(format!("read {}: {e}", path.display())))
+    let bytes = std::fs::read(path)
+        .map_err(|e| AppError::Kubeconfig(format!("read {}: {e}", path.display())))?;
+    sources::decode_source(&bytes).ok_or_else(|| {
+        AppError::Kubeconfig(format!("invalid kubeconfig encoding {}", path.display()))
+    })
 }
 
 fn read_config_raw(path: &Path) -> AppResult<Kubeconfig> {
@@ -279,7 +276,8 @@ fn restore_from_sources(
         .iter()
         .find(|entry| entry.name == name && entry.expires_at_ms > now)
         .ok_or_else(|| AppError::NotFound(format!("deleted context '{name}' not found")))?;
-    let fallback = paths.first().cloned().unwrap_or_else(default_path);
+    let fallback = std::path::absolute(paths.first().cloned().unwrap_or_else(default_path))
+        .map_err(|_| AppError::Kubeconfig("cannot resolve restore source path".into()))?;
     let owner = entry.source_path.as_deref().unwrap_or(&fallback);
     reject_symlink_edit(owner)?;
     let snapshot = load_paths(paths)?;
@@ -746,14 +744,12 @@ users:
     }
 
     #[test]
-    fn load_returns_kubeconfig_error_when_missing() {
-        std::env::set_var("KUBECONFIG", "/definitely/does/not/exist");
-        let err = load().unwrap_err();
-        match err {
-            AppError::Kubeconfig(_) => {}
-            other => panic!("expected Kubeconfig, got {other:?}"),
-        }
-        std::env::remove_var("KUBECONFIG");
+    fn missing_sources_yield_empty_contexts_without_environment_mutation() {
+        let path = temp_file("missing-source");
+        let _ = std::fs::remove_file(&path);
+        let snapshot = load_paths(&[path]).unwrap();
+        assert!(list_contexts_from(&snapshot.config).is_empty());
+        assert!(load_paths(&[]).unwrap().config.contexts.is_empty());
     }
 
     #[test]

@@ -89,6 +89,32 @@ fn resolve_references(config: &mut Kubeconfig, directory: &Path) {
     }
 }
 
+/// Match kube-rs file decoding, including kubeconfigs produced by Windows tools.
+pub(super) fn decode_source(bytes: &[u8]) -> Option<String> {
+    fn utf16(bytes: &[u8], little_endian: bool) -> Option<String> {
+        let chunks = bytes.chunks_exact(2);
+        if !chunks.remainder().is_empty() {
+            return None;
+        }
+        let words = chunks.map(|pair| {
+            if little_endian {
+                u16::from_le_bytes([pair[0], pair[1]])
+            } else {
+                u16::from_be_bytes([pair[0], pair[1]])
+            }
+        });
+        char::decode_utf16(words)
+            .collect::<Result<String, _>>()
+            .ok()
+    }
+    match bytes {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, true),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, false),
+        [0xef, 0xbb, 0xbf, rest @ ..] => String::from_utf8(rest.to_vec()).ok(),
+        _ => String::from_utf8(bytes.to_vec()).ok(),
+    }
+}
+
 pub fn load_paths(paths: &[PathBuf]) -> AppResult<ConfigSnapshot> {
     let mut config = Kubeconfig::default();
     let mut sources = Vec::new();
@@ -118,10 +144,10 @@ pub fn load_paths(paths: &[PathBuf]) -> AppResult<ConfigSnapshot> {
                 )))
             }
         };
-        let raw = std::str::from_utf8(&bytes).map_err(|_| {
+        let raw = decode_source(&bytes).ok_or_else(|| {
             AppError::Kubeconfig(format!("invalid kubeconfig source {}", path.display()))
         })?;
-        let mut next = Kubeconfig::from_yaml(raw).map_err(|_| {
+        let mut next = Kubeconfig::from_yaml(&raw).map_err(|_| {
             AppError::Kubeconfig(format!("invalid kubeconfig source {}", path.display()))
         })?;
         if next.current_context.as_deref() == Some("") {
@@ -283,6 +309,36 @@ mod source_regressions {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn utf16_and_utf8_bom_sources_load_and_can_be_read_for_owner_edits() {
+        let root = directory("encodings");
+        let yaml = "contexts: [{name: 日本, context: {cluster: c}}]";
+        let little: Vec<_> = [0xff, 0xfe]
+            .into_iter()
+            .chain(yaml.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let big: Vec<_> = [0xfe, 0xff]
+            .into_iter()
+            .chain(yaml.encode_utf16().flat_map(u16::to_be_bytes))
+            .collect();
+        let utf8: Vec<_> = [0xef, 0xbb, 0xbf].into_iter().chain(yaml.bytes()).collect();
+        for (index, bytes) in [little, big, utf8].into_iter().enumerate() {
+            let path = root.join(index.to_string());
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(
+                load_paths(std::slice::from_ref(&path))
+                    .unwrap()
+                    .config
+                    .contexts[0]
+                    .name,
+                "日本"
+            );
+            assert_eq!(read_config_raw(&path).unwrap().contexts[0].name, "日本");
+        }
+        assert!(decode_source(&[0xff, 0xfe, 0x00]).is_none());
+        assert!(decode_source(&[0xff, 0xfe, 0x00, 0xd8]).is_none());
     }
 
     #[test]

@@ -241,10 +241,8 @@ fn inspect_paths(
             credential_executable_available: Some(available),
             message: if available {
                 "Configuration inspection passed. Retry to test actual cluster access."
-            } else if Path::new(command).components().count() > 1
-                && !Path::new(command).is_absolute()
-            {
-                "The credential executable is not available relative to its kubeconfig source. Update the configured command, then retry."
+            } else if Path::new(command).components().count() > 1 {
+                "The credential executable is not available at its configured path, resolved relative to its kubeconfig source. Update the command or file permissions, then retry."
             } else {
                 "The credential executable is not available on the app PATH. Install it or update PATH, then retry."
             }
@@ -309,6 +307,30 @@ mod tests {
             std::env::temp_dir().join(format!("lumen-diagnostic-{}-{name}", std::process::id()));
         std::fs::write(&path, contents).unwrap();
         path
+    }
+
+    #[test]
+    fn diagnostics_use_all_sources_and_only_serialize_safe_provenance() {
+        let credentials = fixture("merged-credentials", "clusters: [{name: c, cluster: {server: https://example.invalid}}]\nusers: [{name: u, user: {token: never-expose-this}}]\n");
+        let contexts = fixture(
+            "merged-context",
+            "contexts: [{name: dev, context: {cluster: c, user: u}}]\n",
+        );
+        let result = inspect_paths(
+            &[credentials.clone(), contexts.clone()],
+            Some("dev"),
+            None,
+            Path::new("."),
+            false,
+            None,
+        );
+        assert_eq!(result.status, DiagnosticStatus::ReadyToRetry);
+        assert_eq!(result.context_sources["context"], contexts);
+        assert_eq!(result.context_sources["user"], credentials);
+        assert_eq!(result.sources.len(), 2);
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("never-expose-this"));
     }
 
     #[test]
