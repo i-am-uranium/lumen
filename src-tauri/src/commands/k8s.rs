@@ -130,6 +130,132 @@ async fn get_dynamic_resource(
 
 // ─── Contexts & namespaces ────────────────────────────────────────────────
 
+// Mutation IPCs never fall back to a globally selected context. The policy and
+// client share one effective kubeconfig snapshot, even if files change later.
+async fn mutation_target(
+    state: &AppState,
+    context: Option<&str>,
+    dry_run: bool,
+) -> AppResult<(String, kube::config::Kubeconfig, String)> {
+    let context = context
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| {
+            crate::error::AppError::PermissionDenied(
+                "An explicit context is required for mutations".into(),
+            )
+        })?
+        .to_owned();
+    let (config, identity) = crate::protection::load_target(&context).inspect_err(|_| {
+        let _ = state.protection.lock(&context, "");
+    })?;
+    state
+        .protection
+        .require_mutation(&context, &identity, dry_run)?;
+    Ok((context, config, identity))
+}
+
+async fn mutation_client(
+    state: &AppState,
+    context: Option<&str>,
+    dry_run: bool,
+) -> AppResult<(String, kube::Client, String, kube::config::Kubeconfig)> {
+    let (context, config, identity) = mutation_target(state, context, dry_run).await?;
+    let target = mutation_client_from_config(state, context, config, identity, dry_run).await?;
+    require_current_target(&state.protection, &target.0, &target.2, dry_run)?;
+    Ok(target)
+}
+
+async fn mutation_client_from_config(
+    state: &AppState,
+    context: String,
+    config: kube::config::Kubeconfig,
+    identity: String,
+    dry_run: bool,
+) -> AppResult<(String, kube::Client, String, kube::config::Kubeconfig)> {
+    state
+        .protection
+        .require_mutation(&context, &identity, dry_run)?;
+    let options = kube::config::KubeConfigOptions {
+        context: Some(context.clone()),
+        ..Default::default()
+    };
+    let client_config = kube::Config::from_custom_kubeconfig(config.clone(), &options)
+        .await
+        .map_err(|e| crate::error::AppError::Kubeconfig(e.to_string()))?;
+    let client = kube::Client::try_from(client_config)
+        .map_err(|e| crate::error::AppError::K8s(e.to_string()))?;
+    // Client setup may invoke an authentication helper. Recheck expiry/lock
+    // immediately before returning the client to the mutating operation.
+    state
+        .protection
+        .require_mutation(&context, &identity, dry_run)?;
+    Ok((context, client, identity, config))
+}
+
+fn require_current_target(
+    policy: &crate::protection::ContextProtectionPolicy,
+    context: &str,
+    identity: &str,
+    dry_run: bool,
+) -> AppResult<()> {
+    let current = context_identity(context).inspect_err(|_| {
+        let _ = policy.lock(context, "");
+    })?;
+    if current != identity {
+        let _ = policy.lock(context, &current);
+        return Err(AppError::PermissionDenied("Context configuration changed before the operation started. Review the context and try again.".into()));
+    }
+    policy.require_mutation(context, identity, dry_run)
+}
+
+fn context_identity(context: &str) -> AppResult<String> {
+    crate::protection::load_target(context).map(|(_, identity)| identity)
+}
+
+#[tauri::command]
+pub async fn get_context_protection(
+    context: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::protection::ContextProtection> {
+    let identity = context_identity(&context).inspect_err(|_| {
+        let _ = state.protection.lock(&context, "");
+    })?;
+    state.protection.status(&context, &identity)
+}
+#[tauri::command]
+pub async fn set_context_protection(
+    context: String,
+    protected: bool,
+    state: State<'_, AppState>,
+) -> AppResult<crate::protection::ContextProtection> {
+    let identity = context_identity(&context)?;
+    let result = state
+        .protection
+        .set_protected(&context, protected, &identity);
+    state.attachments.close_context(&context).await;
+    result
+}
+#[tauri::command]
+pub async fn unlock_context(
+    context: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::protection::ContextProtection> {
+    state
+        .protection
+        .unlock(&context, &context_identity(&context)?)
+}
+#[tauri::command]
+pub async fn lock_context(
+    context: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::protection::ContextProtection> {
+    // Close sessions even if kubeconfig was removed/corrupted since they opened.
+    state.attachments.close_context(&context).await;
+    state
+        .protection
+        .lock(&context, &context_identity(&context).unwrap_or_default())
+}
+
 #[tauri::command]
 pub async fn list_contexts() -> AppResult<Vec<ContextInfo>> {
     let kc = kubeconfig::load()?;
@@ -153,6 +279,8 @@ pub async fn delete_context(
     state: State<'_, AppState>,
 ) -> AppResult<()> {
     kubeconfig::delete_context(&app, &name)?;
+    let _ = state.protection.lock(&name, "");
+    state.attachments.close_context(&name).await;
     state.k8s.invalidate(&name).await;
     metrics::invalidate_context(&name);
     Ok(())
@@ -173,6 +301,8 @@ pub async fn restore_deleted_context(
     state: State<'_, AppState>,
 ) -> AppResult<()> {
     kubeconfig::restore_deleted_context(&app, &name, overwrite)?;
+    let _ = state.protection.lock(&name, "");
+    state.attachments.close_context(&name).await;
     state.k8s.invalidate(&name).await;
     metrics::invalidate_context(&name);
     Ok(())
@@ -1844,9 +1974,7 @@ pub async fn provision_team_access(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<rbac_admin::TeamAccessResult> {
-    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
-    let client = state.k8s.client_for(&ctx).await?;
-    let kc = kubeconfig::load()?;
+    let (ctx, client, _, kc) = mutation_client(&state, context.as_deref(), false).await?;
     rbac_admin::provision(&client, &ctx, &kc, request).await
 }
 
@@ -1857,7 +1985,7 @@ pub async fn revoke_team_access(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<rbac_admin::CreatedObject>> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     rbac_admin::revoke(&client, &member_id, namespaces).await
 }
 
@@ -1877,9 +2005,7 @@ pub async fn renew_team_token(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<rbac_admin::TeamAccessResult> {
-    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
-    let client = state.k8s.client_for(&ctx).await?;
-    let kc = kubeconfig::load()?;
+    let (ctx, client, _, kc) = mutation_client(&state, context.as_deref(), false).await?;
     rbac_admin::renew_token(&client, &ctx, &kc, &member_id, ttl_hours).await
 }
 
@@ -1889,9 +2015,7 @@ pub async fn rotate_team_token(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<rbac_admin::TeamAccessResult> {
-    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
-    let client = state.k8s.client_for(&ctx).await?;
-    let kc = kubeconfig::load()?;
+    let (ctx, client, _, kc) = mutation_client(&state, context.as_deref(), false).await?;
     rbac_admin::rotate_long_lived_token(&client, &ctx, &kc, &member_id).await
 }
 
@@ -1917,7 +2041,7 @@ pub async fn restart_workload(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::rollout_restart(&client, &namespace, kind, &name).await
 }
 
@@ -1930,7 +2054,7 @@ pub async fn scale_workload(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::scale(&client, &namespace, kind, &name, replicas).await
 }
 
@@ -1965,7 +2089,7 @@ pub async fn set_workload_image(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::set_workload_image(&client, &namespace, kind, &name, &container, &image).await
 }
 
@@ -1976,7 +2100,7 @@ pub async fn delete_pod(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::delete_pod(&client, &namespace, &name).await
 }
 
@@ -1988,7 +2112,7 @@ pub async fn trigger_cronjob(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<String> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::trigger_cronjob(&client, &namespace, &name).await
 }
 
@@ -1998,7 +2122,7 @@ pub async fn cordon_node(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::cordon_node(&client, &name).await
 }
 
@@ -2008,7 +2132,7 @@ pub async fn uncordon_node(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::uncordon_node(&client, &name).await
 }
 
@@ -2018,7 +2142,7 @@ pub async fn drain_node(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<act::DrainSummary> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::drain_node(&client, &name).await
 }
 
@@ -2030,7 +2154,7 @@ pub async fn delete_resource(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     act::delete_resource(&client, &namespace, kind, &name).await
 }
 
@@ -2160,7 +2284,7 @@ pub async fn apply_resource(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<act::ApplyOutcome> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), dry_run).await?;
     act::apply_resource(&client, &namespace, kind, &name, &yaml, dry_run).await
 }
 
@@ -2226,10 +2350,22 @@ pub async fn helm_install(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
+    let (ctx, config, identity) =
+        mutation_target(&state, context.as_deref(), request.dry_run).await?;
+    let snapshot = helm_cli::ConfigSnapshot::new(&config)?;
+    state
+        .protection
+        .require_mutation(&ctx, &identity, request.dry_run)?;
     let cancel = register_helm_stream(&state, &stream_id).await;
+    let policy = state.protection.clone();
     tokio::spawn(async move {
-        let _ = helm_cli::install(&ctx, request, channel, cancel).await;
+        if let Err(error) = require_current_target(&policy, &ctx, &identity, request.dry_run) {
+            let _ = channel.send(helm_cli::HelmEvent::Error {
+                message: error.to_string(),
+            });
+            return;
+        }
+        let _ = helm_cli::install(&ctx, snapshot, request, channel, cancel).await;
     });
     Ok(())
 }
@@ -2242,10 +2378,22 @@ pub async fn helm_upgrade(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
+    let (ctx, config, identity) =
+        mutation_target(&state, context.as_deref(), request.dry_run).await?;
+    let snapshot = helm_cli::ConfigSnapshot::new(&config)?;
+    state
+        .protection
+        .require_mutation(&ctx, &identity, request.dry_run)?;
     let cancel = register_helm_stream(&state, &stream_id).await;
+    let policy = state.protection.clone();
     tokio::spawn(async move {
-        let _ = helm_cli::upgrade(&ctx, request, channel, cancel).await;
+        if let Err(error) = require_current_target(&policy, &ctx, &identity, request.dry_run) {
+            let _ = channel.send(helm_cli::HelmEvent::Error {
+                message: error.to_string(),
+            });
+            return;
+        }
+        let _ = helm_cli::upgrade(&ctx, snapshot, request, channel, cancel).await;
     });
     Ok(())
 }
@@ -2258,10 +2406,22 @@ pub async fn helm_rollback(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
+    let (ctx, config, identity) =
+        mutation_target(&state, context.as_deref(), request.dry_run).await?;
+    let snapshot = helm_cli::ConfigSnapshot::new(&config)?;
+    state
+        .protection
+        .require_mutation(&ctx, &identity, request.dry_run)?;
     let cancel = register_helm_stream(&state, &stream_id).await;
+    let policy = state.protection.clone();
     tokio::spawn(async move {
-        let _ = helm_cli::rollback(&ctx, request, channel, cancel).await;
+        if let Err(error) = require_current_target(&policy, &ctx, &identity, request.dry_run) {
+            let _ = channel.send(helm_cli::HelmEvent::Error {
+                message: error.to_string(),
+            });
+            return;
+        }
+        let _ = helm_cli::rollback(&ctx, snapshot, request, channel, cancel).await;
     });
     Ok(())
 }
@@ -2274,10 +2434,19 @@ pub async fn helm_uninstall(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let ctx = state.k8s.resolve_context(context.as_deref()).await?;
+    let (ctx, config, identity) = mutation_target(&state, context.as_deref(), false).await?;
+    let snapshot = helm_cli::ConfigSnapshot::new(&config)?;
+    state.protection.require_mutation(&ctx, &identity, false)?;
     let cancel = register_helm_stream(&state, &stream_id).await;
+    let policy = state.protection.clone();
     tokio::spawn(async move {
-        let _ = helm_cli::uninstall(&ctx, request, channel, cancel).await;
+        if let Err(error) = require_current_target(&policy, &ctx, &identity, false) {
+            let _ = channel.send(helm_cli::HelmEvent::Error {
+                message: error.to_string(),
+            });
+            return;
+        }
+        let _ = helm_cli::uninstall(&ctx, snapshot, request, channel, cancel).await;
     });
     Ok(())
 }
@@ -2308,8 +2477,19 @@ pub async fn start_pod_attach(
     context: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<String> {
-    let client = client_for(&state, context.as_deref()).await?;
-    attach::start(client, state.attachments.clone(), request, channel).await
+    let (ctx, client, identity, _) = mutation_client(&state, context.as_deref(), false).await?;
+    attach::start(
+        client,
+        state.attachments.clone(),
+        request,
+        channel,
+        attach::SessionProtection {
+            context: ctx,
+            identity,
+            policy: state.protection.clone(),
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2556,7 +2736,7 @@ pub async fn sync_argocd_application(
     options: argocd::SyncOptions,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     argocd::sync_application(&client, &namespace, &name, &options).await
 }
 
@@ -2568,7 +2748,7 @@ pub async fn refresh_argocd_application(
     hard: bool,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     argocd::refresh_application(&client, &namespace, &name, hard).await
 }
 
@@ -2579,7 +2759,7 @@ pub async fn terminate_argocd_operation(
     name: String,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     argocd::terminate_operation(&client, &namespace, &name).await
 }
 
@@ -2669,6 +2849,235 @@ pub async fn cancel_pipeline_run(
     name: String,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let client = client_for(&state, context.as_deref()).await?;
+    let (_, client, _, _) = mutation_client(&state, context.as_deref(), false).await?;
     tekton::cancel_pipeline_run(&client, &namespace, &name).await
+}
+
+#[cfg(test)]
+mod protection_entrypoint_tests {
+    /// Every cluster write IPC belongs here; adding an IPC requires classifying it.
+    const MUTATIONS: &[&str] = &[
+        "provision_team_access",
+        "revoke_team_access",
+        "renew_team_token",
+        "rotate_team_token",
+        "restart_workload",
+        "scale_workload",
+        "set_workload_image",
+        "delete_pod",
+        "trigger_cronjob",
+        "cordon_node",
+        "uncordon_node",
+        "drain_node",
+        "delete_resource",
+        "apply_resource",
+        "helm_install",
+        "helm_upgrade",
+        "helm_rollback",
+        "helm_uninstall",
+        "start_pod_attach",
+        "sync_argocd_application",
+        "refresh_argocd_application",
+        "terminate_argocd_operation",
+        "cancel_pipeline_run",
+    ];
+    #[test]
+    fn all_cluster_mutation_entrypoints_require_native_authorization() {
+        let source = include_str!("k8s.rs");
+        for name in MUTATIONS {
+            let marker = format!("pub async fn {name}(");
+            let body = source
+                .split_once(&marker)
+                .unwrap()
+                .1
+                .split("\n}")
+                .next()
+                .unwrap();
+            assert!(
+                body.contains("mutation_client(") || body.contains("mutation_target("),
+                "{name} has no native mutation guard"
+            );
+        }
+    }
+
+    #[test]
+    fn every_registered_kubernetes_ipc_has_an_explicit_policy_classification() {
+        let read_or_local = &[
+            "list_contexts",
+            "set_context",
+            "delete_context",
+            "list_deleted_contexts",
+            "restore_deleted_context",
+            "list_namespaces",
+            "list_fleet",
+            "probe_fleet_context",
+            "disconnect_context",
+            "reconnect_all",
+            "list_nodes",
+            "metrics_explorer_snapshot",
+            "cloud_map",
+            "network_debug_snapshot",
+            "security_scan",
+            "check_access",
+            "list_workloads",
+            "get_resource",
+            "get_rbac_details",
+            "get_storage_details",
+            "get_resource_insights",
+            "stream_events",
+            "watch_nodes",
+            "watch_workloads",
+            "stop_stream",
+            "stream_logs",
+            "list_pods_for",
+            "list_pods_on_node",
+            "list_crds",
+            "list_cr_instances",
+            "get_cr_yaml",
+            "list_team_access",
+            "list_events_for",
+            "detect_trivy",
+            "scan_image",
+            "list_manual_cronjob_runs",
+            "start_port_forward",
+            "list_port_forwards",
+            "stop_port_forward",
+            "list_pod_containers",
+            "list_helm_releases",
+            "get_helm_release",
+            "list_helm_history",
+            "helm_search_repo",
+            "helm_show_values",
+            "get_pod_details",
+            "detect_argocd",
+            "list_argocd_applications",
+            "get_argocd_application",
+            "detect_argocd_application_sets",
+            "list_argocd_application_sets",
+            "get_argocd_application_set",
+            "list_argocd_app_projects",
+            "get_argocd_app_project",
+            "detect_tekton",
+            "list_pipeline_runs",
+            "get_pipeline_run",
+        ];
+        let policy_and_session_controls = &[
+            "get_context_protection",
+            "set_context_protection",
+            "unlock_context",
+            "lock_context",
+            "pod_attach_stdin",
+            "pod_attach_resize",
+            "pod_attach_close",
+        ];
+        let classified: std::collections::BTreeSet<&str> = MUTATIONS
+            .iter()
+            .chain(read_or_local.iter())
+            .chain(policy_and_session_controls.iter())
+            .copied()
+            .collect();
+        let source = include_str!("../lib.rs");
+        let registered: std::collections::BTreeSet<&str> = source
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("commands::k8s::")
+                    .map(|name| name.trim_end_matches(','))
+            })
+            .collect();
+        assert_eq!(
+            registered, classified,
+            "Every new IPC needs a mutation-policy audit"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_guard_blocks_api_writes_and_allows_server_dry_run() {
+        use wiremock::{
+            matchers::{method, path, query_param},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        let config: kube::config::Kubeconfig = serde_yaml::from_str(&format!("apiVersion: v1\nkind: Config\nclusters:\n- name: target\n  cluster:\n    server: {}\ncontexts:\n- name: prod\n  context:\n    cluster: target\ncurrent-context: prod\n", server.uri())).unwrap();
+        let folder = std::env::temp_dir().join(format!(
+            "lumen-native-guard-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let state = super::AppState::with_config_dir(folder.clone());
+        let identity = crate::protection::identity_from_config(&config, "prod").unwrap();
+        state
+            .protection
+            .set_protected("prod", true, &identity)
+            .unwrap();
+        assert!(matches!(
+            super::mutation_client_from_config(
+                &state,
+                "prod".into(),
+                config.clone(),
+                identity.clone(),
+                false
+            )
+            .await,
+            Err(crate::error::AppError::PermissionDenied(_))
+        ));
+        assert!(server.received_requests().await.unwrap().is_empty());
+        Mock::given(method("PATCH")).and(path("/api/v1/namespaces/default/configmaps/example")).and(query_param("dryRun", "All"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"apiVersion":"v1", "kind":"ConfigMap", "metadata":{"name":"example", "namespace":"default"}, "data":{"hello":"world"}}))).expect(1).mount(&server).await;
+        let (_, client, _, _) = super::mutation_client_from_config(
+            &state,
+            "prod".into(),
+            config.clone(),
+            identity.clone(),
+            true,
+        )
+        .await
+        .unwrap();
+        let result = crate::k8s::actions::apply_resource(
+            &client,
+            "default",
+            crate::k8s::types::WorkloadKind::ConfigMap,
+            "example",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: example\ndata:\n  hello: world\n",
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(result.dry_run);
+        state.protection.unlock("prod", &identity).unwrap();
+        assert!(super::mutation_client_from_config(
+            &state,
+            "prod".into(),
+            config.clone(),
+            identity.clone(),
+            false
+        )
+        .await
+        .is_ok());
+        state.protection.lock("prod", &identity).unwrap();
+        assert!(super::mutation_client_from_config(
+            &state,
+            "prod".into(),
+            config,
+            identity.clone(),
+            false
+        )
+        .await
+        .is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[tokio::test]
+    async fn mutation_cannot_use_legacy_current_context() {
+        let state = super::AppState::new();
+        *state.k8s.current_context.write().await = Some("prod".into());
+        assert!(matches!(
+            super::mutation_target(&state, None, false).await,
+            Err(crate::error::AppError::PermissionDenied(_))
+        ));
+        assert!(super::mutation_target(&state, Some(" "), false)
+            .await
+            .is_err());
+    }
 }
