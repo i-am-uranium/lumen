@@ -109,6 +109,23 @@ jobs:
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  windows:
+    name: windows compile
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+      - name: Check native Windows application
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --lib
+
   kind:
     name: kind integration
     runs-on: ubuntu-latest
