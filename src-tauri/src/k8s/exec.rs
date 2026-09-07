@@ -41,7 +41,32 @@ pub enum AttachEvent {
     },
 }
 
+#[derive(Clone)]
+pub struct SessionProtection {
+    pub context: String,
+    pub identity: String,
+    pub policy: Arc<crate::protection::ContextProtectionPolicy>,
+}
+impl SessionProtection {
+    fn authorize(&self) -> AppResult<()> {
+        let (_, current) = crate::protection::load_target(&self.context).inspect_err(|_| {
+            let _ = self.policy.lock(&self.context, "");
+        })?;
+        if current != self.identity {
+            // Observing replacement revokes the grant, even if the old config
+            // is subsequently restored.
+            let _ = self.policy.lock(&self.context, &current);
+            return Err(AppError::PermissionDenied(
+                "Exec context configuration changed; open a new session".into(),
+            ));
+        }
+        self.policy
+            .require_mutation(&self.context, &self.identity, false)
+    }
+}
+
 struct Session {
+    protection: SessionProtection,
     stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
     resize_tx: mpsc::UnboundedSender<(u16, u16)>,
     cancel: CancellationToken,
@@ -70,6 +95,10 @@ impl AttachRegistry {
         let sess = map
             .get(id)
             .ok_or_else(|| AppError::K8s(format!("attach session {id} not found")))?;
+        if let Err(error) = sess.protection.authorize() {
+            sess.cancel.cancel();
+            return Err(error);
+        }
         sess.stdin_tx
             .send(bytes)
             .map_err(|e| AppError::K8s(format!("stdin queue closed: {e}")))
@@ -80,6 +109,10 @@ impl AttachRegistry {
         let sess = map
             .get(id)
             .ok_or_else(|| AppError::K8s(format!("attach session {id} not found")))?;
+        if let Err(error) = sess.protection.authorize() {
+            sess.cancel.cancel();
+            return Err(error);
+        }
         sess.resize_tx
             .send((cols, rows))
             .map_err(|e| AppError::K8s(format!("resize queue closed: {e}")))
@@ -89,6 +122,18 @@ impl AttachRegistry {
         if let Some(s) = self.take(id).await {
             s.cancel.cancel();
         }
+    }
+
+    pub async fn close_context(&self, context: &str) {
+        let mut map = self.sessions.write().await;
+        map.retain(|_, session| {
+            if session.protection.context == context {
+                session.cancel.cancel();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     pub async fn close_all(&self) {
@@ -115,6 +160,7 @@ pub async fn start(
     registry: Arc<AttachRegistry>,
     req: StartAttachRequest,
     channel: Channel<AttachEvent>,
+    protection: SessionProtection,
 ) -> AppResult<String> {
     if req.command.is_empty() {
         return Err(AppError::K8s("attach command cannot be empty".into()));
@@ -137,6 +183,7 @@ pub async fn start(
     }
 
     let api: Api<Pod> = Api::namespaced(client, &req.namespace);
+    protection.authorize()?;
     let mut attached = api
         .exec(&req.pod, &req.command, &ap)
         .await
@@ -150,6 +197,7 @@ pub async fn start(
         .insert(
             id.clone(),
             Session {
+                protection: protection.clone(),
                 stdin_tx,
                 resize_tx,
                 cancel: cancel.clone(),
@@ -228,31 +276,76 @@ pub async fn start(
             })
         });
 
+        // The watchdog runs independently so a blocked socket write cannot
+        // postpone expiry or keep an already-locked exec session alive.
+        let watch_cancel = cancel_task.clone();
+        let watch_protection = protection.clone();
+        let watchdog = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    _ = watch_cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        if watch_protection.authorize().is_err() { watch_cancel.cancel(); break; }
+                    }
+                }
+            }
+        });
         loop {
             tokio::select! {
+                biased;
                 _ = cancel_task.cancelled() => break,
                 bytes = stdin_rx.recv() => {
                     let Some(bytes) = bytes else { break };
+                    if protection.authorize().is_err() { cancel_task.cancel(); break; }
                     if let Some(sin) = stdin.as_mut() {
-                        if sin.write_all(&bytes).await.is_err() { break; }
-                        if sin.flush().await.is_err() { break; }
+                        let write = async { sin.write_all(&bytes).await?; sin.flush().await };
+                        tokio::select! {
+                            _ = cancel_task.cancelled() => break,
+                            result = write => if result.is_err() { break; },
+                        }
                     }
                 }
                 sz = resize_rx.recv() => {
                     let Some((c, r)) = sz else { break };
                     if let Some(sink) = resize_sink.as_mut() {
-                        let _ = sink.send(TerminalSize { width: c, height: r }).await;
+                        tokio::select! {
+                            _ = cancel_task.cancelled() => break,
+                            _ = sink.send(TerminalSize { width: c, height: r }) => {},
+                        }
                     }
                 }
             }
         }
 
+        // Cancellation must tear down the websocket instead of waiting for a
+        // remote shell to exit (which may never happen).
+        if cancel_task.is_cancelled() {
+            watchdog.abort();
+            attached.abort();
+            if let Some(t) = stdout_task.take() {
+                t.abort();
+            }
+            if let Some(t) = stderr_task.take() {
+                t.abort();
+            }
+            let _ = channel_for_task.send(AttachEvent::Closed {
+                message: Some("Session closed: context locked or configuration changed".into()),
+                exit_code: None,
+            });
+            registry_clone.take(&id_clone).await;
+            return;
+        }
         let exit_status = if let Some(fut) = status_fut {
-            fut.await
+            tokio::select! {
+                status = fut => status,
+                _ = cancel_task.cancelled() => { attached.abort(); None },
+            }
         } else {
             None
         };
         let join_result = attached.join().await;
+        watchdog.abort();
 
         if let Some(t) = stdout_task.take() {
             t.abort();
@@ -348,5 +441,40 @@ mod tests {
     fn handles_unparseable_exit_code_message() {
         let s = status_failure_with_cause("ExitCode", "not-an-integer");
         assert_eq!(parse_exit_code(&s), None);
+    }
+    #[tokio::test]
+    async fn locking_context_closes_only_its_sessions() {
+        let registry = super::AttachRegistry::new();
+        let policy = std::sync::Arc::new(crate::protection::ContextProtectionPolicy::unavailable());
+        let first = tokio_util::sync::CancellationToken::new();
+        let second = tokio_util::sync::CancellationToken::new();
+        for (id, context, cancel) in [
+            ("one", "prod", first.clone()),
+            ("two", "dev", second.clone()),
+        ] {
+            let (stdin_tx, _) = tokio::sync::mpsc::unbounded_channel();
+            let (resize_tx, _) = tokio::sync::mpsc::unbounded_channel();
+            registry
+                .insert(
+                    id.into(),
+                    super::Session {
+                        stdin_tx,
+                        resize_tx,
+                        cancel,
+                        protection: super::SessionProtection {
+                            context: context.into(),
+                            identity: String::new(),
+                            policy: policy.clone(),
+                        },
+                    },
+                )
+                .await;
+        }
+        registry.close_context("prod").await;
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+        assert!(registry.write_stdin("one", vec![b'x']).await.is_err());
+        assert_eq!(registry.sessions.read().await.len(), 1);
+        registry.close_all().await;
     }
 }

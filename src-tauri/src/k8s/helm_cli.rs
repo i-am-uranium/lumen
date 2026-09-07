@@ -8,8 +8,8 @@
 //!
 //! Each command streams stdout/stderr to a Tauri Channel so the UI can show
 //! progress on long operations (chart download, hook waits). The underlying
-//! `helm` process inherits Lumen's KUBECONFIG and we pass `--kube-context`
-//! explicitly to keep the active-context flow consistent.
+//! `helm` process receives a private captured kubeconfig and explicit context
+//! so it executes against the configuration authorized for that operation.
 //!
 //! `helm` must be on PATH; if it isn't we surface an actionable error
 //! pointing at https://helm.sh/docs/intro/install/ rather than a generic
@@ -79,9 +79,52 @@ pub struct HelmUninstallRequest {
     pub keep_history: bool,
 }
 
-fn helm_command(context: &str) -> AppResult<Command> {
+/// Private immutable kubeconfig for one Helm operation. Its lifetime covers the
+/// subprocess and its permissions prevent exposing embedded credentials.
+pub struct ConfigSnapshot(std::path::PathBuf);
+impl ConfigSnapshot {
+    pub fn new(config: &kube::config::Kubeconfig) -> AppResult<Self> {
+        use std::io::Write;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let name = format!(
+            "lumen-helm-config-{}-{}-{}.yaml",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let path = std::env::temp_dir().join(name);
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let snapshot = Self(path);
+        file.write_all(
+            serde_yaml::to_string(config)
+                .map_err(|e| AppError::Internal(e.to_string()))?
+                .as_bytes(),
+        )
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+        Ok(snapshot)
+    }
+}
+impl Drop for ConfigSnapshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn helm_command(context: &str, snapshot: &ConfigSnapshot) -> AppResult<Command> {
     let mut cmd = Command::new("helm");
-    cmd.arg("--kube-context").arg(context);
+    cmd.arg("--kube-context")
+        .arg(context)
+        .arg("--kubeconfig")
+        .arg(&snapshot.0);
     cmd.kill_on_drop(true);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -90,11 +133,12 @@ fn helm_command(context: &str) -> AppResult<Command> {
 
 pub async fn install(
     context: &str,
+    snapshot: ConfigSnapshot,
     req: HelmInstallRequest,
     channel: Channel<HelmEvent>,
     cancel: CancellationToken,
 ) -> AppResult<()> {
-    let mut cmd = helm_command(context)?;
+    let mut cmd = helm_command(context, &snapshot)?;
     cmd.arg("install")
         .arg(&req.release)
         .arg(&req.chart)
@@ -117,11 +161,12 @@ pub async fn install(
 
 pub async fn upgrade(
     context: &str,
+    snapshot: ConfigSnapshot,
     req: HelmUpgradeRequest,
     channel: Channel<HelmEvent>,
     cancel: CancellationToken,
 ) -> AppResult<()> {
-    let mut cmd = helm_command(context)?;
+    let mut cmd = helm_command(context, &snapshot)?;
     cmd.arg("upgrade")
         .arg(&req.release)
         .arg(&req.chart)
@@ -147,11 +192,12 @@ pub async fn upgrade(
 
 pub async fn rollback(
     context: &str,
+    snapshot: ConfigSnapshot,
     req: HelmRollbackRequest,
     channel: Channel<HelmEvent>,
     cancel: CancellationToken,
 ) -> AppResult<()> {
-    let mut cmd = helm_command(context)?;
+    let mut cmd = helm_command(context, &snapshot)?;
     cmd.arg("rollback")
         .arg(&req.release)
         .arg(req.revision.to_string())
@@ -168,11 +214,12 @@ pub async fn rollback(
 
 pub async fn uninstall(
     context: &str,
+    snapshot: ConfigSnapshot,
     req: HelmUninstallRequest,
     channel: Channel<HelmEvent>,
     cancel: CancellationToken,
 ) -> AppResult<()> {
-    let mut cmd = helm_command(context)?;
+    let mut cmd = helm_command(context, &snapshot)?;
     cmd.arg("uninstall")
         .arg(&req.release)
         .arg("--namespace")
@@ -481,5 +528,37 @@ mod tests {
         assert!(parse_search_output("not json").is_err());
         // Object instead of array — shape mismatch.
         assert!(parse_search_output("{}").is_err());
+    }
+    #[test]
+    fn helm_uses_private_snapshot_and_cleans_it_up() {
+        let config = kube::config::Kubeconfig::default();
+        let snapshot = super::ConfigSnapshot::new(&config).unwrap();
+        let path = snapshot.0.clone();
+        assert!(path.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let command = super::helm_command("prod", &snapshot).unwrap();
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "--kube-context",
+                "prod",
+                "--kubeconfig",
+                path.to_str().unwrap()
+            ]
+        );
+        drop(snapshot);
+        assert!(!path.exists());
     }
 }

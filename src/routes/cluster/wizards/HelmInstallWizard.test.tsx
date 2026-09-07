@@ -1,0 +1,21 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { beforeEach, expect, it, vi } from "vitest";
+import { HelmInstallWizard } from "./HelmInstallWizard";
+import { publishProtection } from "@/hooks/useMutationCapability";
+import { useUiSettings } from "@/state/uiSettings";
+vi.mock("@/lib/contextProtection", async (original) => ({ ...await original<any>(), contextProtection: { get: async (context: string) => ({ context, protected: true, unlocked_until_ms: null, can_mutate: false }) } }));
+vi.mock("@/lib/k8s", () => ({ k8s: { listNamespaces: async () => ["default"], helmSearchRepo: async () => [] } }));
+vi.mock("@/components/HelmActionDialog", () => ({ HelmActionDialog: ({ action, context }: any) => <div role="status">{context}: {action.request.dry_run ? "dry-run" : "WRITE"}</div> }));
+beforeEach(() => { useUiSettings.setState({ readOnly: false }); publishProtection("prod", { context: "prod", protected: true, unlocked_until_ms: null, can_mutate: false }); });
+it("can prepare and run a Helm preview on locked prod without enabling install", async () => {
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter initialEntries={["/cluster/prod/helm/install"]}><Routes><Route path="/cluster/:ctx/helm/install" element={<HelmInstallWizard />} /></Routes></MemoryRouter></QueryClientProvider>);
+  fireEvent.change(screen.getByPlaceholderText("my-release"), { target: { value: "api" } });
+  fireEvent.change(screen.getByPlaceholderText("bitnami/redis or oci://registry/foo"), { target: { value: "bitnami/redis" } });
+  expect(screen.getByRole("button", { name: /^install$/i })).toBeDisabled();
+  const dryRun = screen.getByRole("button", { name: /dry.run/i });
+  expect(dryRun).toBeEnabled();
+  fireEvent.click(dryRun);
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("prod: dry-run"));
+});

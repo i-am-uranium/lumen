@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -770,6 +771,7 @@ export function CloudMap() {
 
       {selected && (
         <InspectorPanel
+          key={`${context}:${selected.id}`}
           context={context}
           node={selected}
           edges={data?.edges ?? []}
@@ -892,6 +894,7 @@ function InspectorPanel({
   onClose: () => void;
 }) {
   const navigate = useNavigate();
+  const capability = useMutationCapability(context);
   const qc = useQueryClient();
   const byId = useMemo(() => {
     const m = new Map<string, MapNode>();
@@ -904,14 +907,14 @@ function InspectorPanel({
   const canLogs = LOG_KINDS.includes(node.kind) && !!node.namespace;
   const canYaml = YAML_KINDS.includes(node.kind) && !!node.namespace;
   const canEvents = EVENTS_KINDS.includes(node.kind) && !!node.namespace;
-  const canRestart = RESTART_KINDS.includes(node.kind) && !!node.namespace;
-  const canScale =
+  const canRestart = capability.canMutate && RESTART_KINDS.includes(node.kind) && !!node.namespace;
+  const canScale = capability.canMutate &&
     SCALE_KINDS.includes(node.kind) &&
     !!node.namespace &&
     typeof node.replicas === "number";
-  const canDelete = node.kind === "pod" && !!node.namespace;
+  const canDelete = capability.canMutate && node.kind === "pod" && !!node.namespace;
   const canForward = FORWARD_KINDS.includes(node.kind) && !!node.namespace;
-  const canAttach = node.kind === "pod" && !!node.namespace;
+  const canAttach = capability.canMutate && node.kind === "pod" && !!node.namespace;
   const canAsk = true;
   const workloadKind = toWorkloadKind(node.kind);
 
@@ -979,7 +982,7 @@ function InspectorPanel({
   };
 
   const runPending = async () => {
-    if (!pending || !workloadKind || !node.namespace) return;
+    if (!capability.canMutate || !pending || !workloadKind || !node.namespace) return;
     setActionBusy(true);
     try {
       if (pending.kind === "restart") {
@@ -1175,9 +1178,10 @@ function InspectorPanel({
 
       {pending && (
         <ConfirmAction
+          context={context}
           node={node}
           pending={pending}
-          busy={actionBusy}
+          busy={actionBusy || !capability.canMutate}
           onCancel={() => setPending(null)}
           onConfirm={runPending}
         />
@@ -1342,12 +1346,14 @@ function ScaleControl({
 }
 
 function ConfirmAction({
+  context,
   node,
   pending,
   busy,
   onCancel,
   onConfirm,
 }: {
+  context: string;
   node: MapNode;
   pending: PendingAction;
   busy: boolean;
@@ -1368,6 +1374,7 @@ function ConfirmAction({
         : `Deletes pod '${node.name}'. The owning controller will recreate it unless this is a bare pod — in which case the pod is gone for good.`;
   return (
     <ConfirmActionDialog
+      context={context}
       open
       title={`${title} · ${node.name}`}
       description={body}

@@ -52,3 +52,17 @@ describe("ConfirmActionDialog", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
+
+it("invalidates an acknowledgement when the context changes even for the same resource", async () => {
+  const onConfirm = vi.fn();
+  const onCancel = vi.fn();
+  const props = { open: true, title: "delete pod", description: "Deletes this pod", target: "ns/api", confirmLabel: "delete", onConfirm, onCancel };
+  const { rerender } = render(<ConfirmActionDialog {...props} context="dev" />);
+  await userEvent.type(screen.getByRole("textbox"), "ns/api");
+  expect(screen.getByRole("button", { name: "delete" })).toBeEnabled();
+  rerender(<ConfirmActionDialog {...props} context="prod" />);
+  expect(screen.getByRole("button", { name: "delete" })).toBeDisabled();
+  expect(onCancel).toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "delete" }));
+  expect(onConfirm).not.toHaveBeenCalled();
+});

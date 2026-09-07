@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -27,7 +28,6 @@ import {
 import { cn } from "@/lib/utils";
 import { HelmActionDialog } from "@/components/HelmActionDialog";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
-import { useUiSettings } from "@/state/uiSettings";
 
 type HelmAction =
   | { kind: "rollback"; release: string; namespace: string; revision: number; wait: boolean }
@@ -79,7 +79,7 @@ export function HelmBrowser() {
   const { ctx = "" } = useParams();
   const navigate = useNavigate();
   const context = decodeURIComponent(ctx);
-  const readOnly = useUiSettings((s) => s.readOnly);
+  const readOnly = !useMutationCapability(context).canMutate;
   const releases = useQuery({
     queryKey: ["k8s", "helm", context],
     queryFn: () => k8s.listHelmReleases(context || undefined),
@@ -90,7 +90,6 @@ export function HelmBrowser() {
   const [selected, setSelected] = useState<HelmReleaseSummary | null>(null);
 
   const goInstall = () => {
-    if (readOnly) return;
     navigate(`/cluster/${encodeURIComponent(context)}/helm/install`);
   };
 
@@ -119,15 +118,10 @@ export function HelmBrowser() {
           <div className="flex items-center gap-1">
             <button
               onClick={goInstall}
-              disabled={readOnly}
-              title={
-                readOnly
-                  ? "install disabled — read-only mode is on"
-                  : "install a chart"
-              }
+              title="Preview or install a chart"
               className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {readOnly ? <Lock className="size-3" /> : <Plus className="size-3" />}
+              <Plus className="size-3" />
               install
             </button>
             <button
@@ -304,20 +298,14 @@ function ReleaseDetail({
         <div className="mt-2 flex items-center gap-1.5">
           <button
             onClick={() => {
-              if (readOnly) return;
               navigate(
                 `/cluster/${encodeURIComponent(context)}/helm/upgrade/${encodeURIComponent(summary.name)}?ns=${encodeURIComponent(summary.namespace)}`,
               );
             }}
-            disabled={readOnly}
-            className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
-            title={
-              readOnly
-                ? "upgrade disabled — read-only mode is on"
-                : "helm upgrade this release"
-            }
+            className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px]"
+            title="Preview or upgrade this release"
           >
-            {readOnly ? <Lock className="size-3" /> : <Upload className="size-3" />}
+            <Upload className="size-3" />
             upgrade
           </button>
           <button
@@ -334,7 +322,7 @@ function ReleaseDetail({
             className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-red !border-term-red/40 disabled:opacity-50 disabled:cursor-not-allowed"
             title={
               readOnly
-                ? "uninstall disabled — read-only mode is on"
+                ? "uninstall disabled — changes are blocked"
                 : "helm uninstall this release"
             }
           >
@@ -421,6 +409,7 @@ function ReleaseDetail({
       )}
       {confirmAction && (
         <ConfirmActionDialog
+          context={context}
           open
           title={
             confirmAction.kind === "uninstall"
@@ -435,6 +424,7 @@ function ReleaseDetail({
           target={`${confirmAction.namespace}/${confirmAction.release}`}
           confirmLabel={confirmAction.kind === "uninstall" ? "uninstall" : "rollback"}
           intent={confirmAction.kind === "uninstall" ? "danger" : "warning"}
+          busy={readOnly}
           onCancel={() => setConfirmAction(null)}
           onConfirm={() => {
             setAction(confirmAction);
@@ -524,7 +514,7 @@ function HistoryPane({
                   className="term-btn !min-h-[26px] !py-1 !px-2 !text-[11px] !text-term-amber !border-term-amber/40 disabled:opacity-50 disabled:cursor-not-allowed"
                   title={
                     readOnly
-                      ? "rollback disabled — read-only mode is on"
+                      ? "rollback disabled — changes are blocked"
                       : `helm rollback ${name} ${r.revision}`
                   }
                 >

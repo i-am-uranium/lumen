@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import React, {
   memo,
   useCallback,
@@ -973,7 +974,7 @@ export function WorkloadsView() {
   const otherHidden = useUiSettings((s) => s.hiddenColumns["workloads-other"]);
   const podOrder = useUiSettings((s) => s.columnOrder["workloads-pod"]);
   const otherOrder = useUiSettings((s) => s.columnOrder["workloads-other"]);
-  const readOnly = useUiSettings((s) => s.readOnly);
+  const readOnly = !useMutationCapability(context).canMutate;
   const podVisible = useMemo(
     () => laidOutColumns(POD_COLUMNS, podOrder, podHidden),
     [podOrder, podHidden],
@@ -1545,7 +1546,7 @@ export function WorkloadsView() {
                 restartableCount={selectedRestartableItems.length}
                 skippedRestartCount={selectedSkipRestartCount}
                 readOnly={readOnly}
-                busy={bulkBusy}
+                busy={readOnly || bulkBusy}
                 onRestart={() => setPendingBulkAction("restart")}
                 onDelete={() => setPendingBulkAction("delete")}
                 onClear={() => setSelectedKeys(new Set())}
@@ -1668,17 +1669,20 @@ export function WorkloadsView() {
         onClose={() => setDrawerResource(null)}
       />
       <PreflightPreviewDialog
+        context={context}
         open={pendingBulkAction === "delete"}
         title="preflight delete selected workloads"
         description={`This will delete ${selectedItems.length} selected workload${selectedItems.length === 1 ? "" : "s"} from ${context}. The action is sent to Kubernetes for each selected resource.`}
         impact={bulkDeletePreflight}
+        targetDetails={selectedItems.map((item) => `${item.namespace || "cluster scope"}/${item.kind}/${item.name}`).sort()}
         confirmText={`${selectedItems.length} selected`}
         confirmLabel="delete"
-        busy={bulkBusy}
+        busy={readOnly || bulkBusy}
         onCancel={() => setPendingBulkAction(null)}
         onConfirm={handleBulkDelete}
       />
       <PreflightPreviewDialog
+        context={context}
         open={pendingBulkAction === "restart"}
         title="preflight restart selected workloads"
         description={
@@ -1687,9 +1691,10 @@ export function WorkloadsView() {
             : `This will trigger rolling restarts for ${selectedRestartableItems.length} selected controller workload${selectedRestartableItems.length === 1 ? "" : "s"}.`
         }
         impact={bulkRestartPreflight}
+        targetDetails={selectedRestartableItems.map((item) => `${item.namespace || "cluster scope"}/${item.kind}/${item.name}`).sort()}
         confirmText={`${selectedRestartableItems.length} restartable`}
         confirmLabel="restart"
-        busy={bulkBusy}
+        busy={readOnly || bulkBusy}
         onCancel={() => setPendingBulkAction(null)}
         onConfirm={handleBulkRestart}
       />
@@ -1804,7 +1809,7 @@ function BulkActionBar({
           variant="secondary"
           disabled={busy || readOnly || restartableCount === 0}
           onClick={onRestart}
-          title={readOnly ? "Read-only mode is enabled" : undefined}
+          title={readOnly ? "Changes blocked — check context protection and global read-only" : undefined}
         >
           <RotateCw className="size-3.5" />
           Restart
@@ -1815,7 +1820,7 @@ function BulkActionBar({
           variant="destructive"
           disabled={busy || readOnly}
           onClick={onDelete}
-          title={readOnly ? "Read-only mode is enabled" : undefined}
+          title={readOnly ? "Changes blocked — check context protection and global read-only" : undefined}
         >
           <Trash2 className="size-3.5" />
           Delete

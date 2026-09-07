@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { SearchAddon } from "@xterm/addon-search";
 import { useShellSession } from "@/hooks/useShellSession";
@@ -22,6 +23,10 @@ export function ShellPanel({
   onStartSelection: (container: string, command: string[]) => void;
 }) {
   const snapshot = useShellSession(session);
+  const capability = useMutationCapability(session.context);
+  useEffect(() => {
+    if (!capability.canMutate && (capability.status || capability.error || capability.globalReadOnly) && (session.getState() === "live" || session.getState() === "starting")) session.close();
+  }, [capability.canMutate, capability.status, capability.error, capability.globalReadOnly, session]);
   const [search, setSearch] = useState<ShellSearchState>({ query: "", caseSensitive: false });
   const [matchCount, setMatchCount] = useState(0);
   const [currentMatch, setCurrentMatch] = useState(0);
@@ -66,6 +71,7 @@ export function ShellPanel({
 
   function onStart() {
     try {
+      if (!capability.canMutate) throw new Error(capability.reason);
       const args = parseCommand(command);
       if (!container) throw new Error("Select a container.");
       setStartError(null);
@@ -107,6 +113,7 @@ export function ShellPanel({
         <span className={cn("ml-1 size-2 rounded-full", stateDot)} title={snapshot.state} />
       </div>
       <ShellToolbar
+        mutationBlocked={!capability.canMutate}
         containers={containerOptions}
         container={container}
         onContainerChange={setContainer}
@@ -123,6 +130,7 @@ export function ShellPanel({
         onStop={onStop}
         onDownload={onDownload}
       />
+      {!capability.canMutate && <div role="status" className="px-3 py-2 text-[11px] text-warning">{session.context} · {capability.reason}</div>}
       {startError && <div role="alert" className="px-3 py-2 text-[11px] text-term-red">{startError}</div>}
       <Suspense
         fallback={
@@ -131,7 +139,7 @@ export function ShellPanel({
           </div>
         }
       >
-        <ShellTerminalHost session={session} searchAddonRef={searchAddonRef} />
+        {capability.canMutate && <ShellTerminalHost session={session} searchAddonRef={searchAddonRef} />}
       </Suspense>
     </div>
   );

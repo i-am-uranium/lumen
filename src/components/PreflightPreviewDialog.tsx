@@ -1,3 +1,4 @@
+import { useConfirmationTarget } from "@/hooks/useConfirmationTarget";
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,8 @@ import { cn } from "@/lib/utils";
 
 type Props = {
   open: boolean;
+  context?: string;
+  targetDetails?: string[];
   title: string;
   description?: string;
   impact: PreflightImpact | null;
@@ -35,6 +38,8 @@ const confirmClasses: Record<PreflightRiskLevel, string> = {
 
 export function PreflightPreviewDialog({
   open,
+  context: explicitContext,
+  targetDetails,
   title,
   description,
   impact,
@@ -51,20 +56,22 @@ export function PreflightPreviewDialog({
   const risk = impact?.riskLevel ?? "medium";
   const targetMatches = typed === confirmText;
   const highRiskMatches = !impact?.requiresExplicitConfirm || highRiskTyped === "HIGH RISK";
-  const canConfirm = !!impact && targetMatches && highRiskMatches && !busy;
+  const { context, valid } = useConfirmationTarget(open && !!impact, JSON.stringify([confirmText, impact?.targetLabel, targetDetails]), explicitContext, impact?.namespace ?? undefined, onCancel);
+  const canConfirm = valid && !!impact && targetMatches && highRiskMatches && !busy;
   const warningRows = impact?.warnings ?? [];
   const diffRows = impact?.diffs ?? [];
   const facts = useMemo(() => {
     if (!impact) return [];
     return [
+      ["context", context || "unavailable"],
       ["action", impact.actionType],
-      ["target", impact.targetLabel],
+      ["target", targetDetails?.join(" · ") || impact.targetLabel],
       ["namespace", impact.namespace || "cluster scope"],
       ["resources", String(impact.affectedResourceCount)],
       ["pod churn", impact.podChurn.summary],
       ["service/endpoints", formatServiceRisk(impact.serviceRisk)],
     ];
-  }, [impact]);
+  }, [impact, context, targetDetails]);
 
   useEffect(() => {
     if (!open) return;
@@ -271,7 +278,7 @@ export function PreflightPreviewDialog({
             variant="outline"
             size="sm"
             disabled={!canConfirm}
-            onClick={onConfirm}
+            onClick={() => { if (canConfirm) onConfirm(); }}
             className={confirmClasses[risk]}
           >
             {busy ? "working..." : confirmLabel}

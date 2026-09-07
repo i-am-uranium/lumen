@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { useMemo, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -33,7 +34,6 @@ import {
 } from "@/components/ui/data-table";
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
-import { useUiSettings } from "@/state/uiSettings";
 
 /**
  * Tekton PipelineRuns view.
@@ -60,7 +60,7 @@ export function TektonView() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
   const qc = useQueryClient();
-  const readOnly = useUiSettings((s) => s.readOnly);
+  const readOnly = !useMutationCapability(context).canMutate;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedKey = searchParams.get("run") ?? null;
@@ -397,7 +397,7 @@ function PipelineRunDetailPanel({
   const [busy, setBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
 
-  const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const lockedTitle = readOnly ? " (changes blocked)" : "";
   // Cancel only makes sense for runs the controller is still
   // reconciling. Pending counts as "running" here too — the user may
   // want to cancel before any TaskRun fires up.
@@ -490,13 +490,14 @@ function PipelineRunDetailPanel({
       )}
 
       <ConfirmActionDialog
+        context={context}
         open={confirmCancel}
         title="cancel pipeline run"
         description={`This patches .spec.status to "Cancelled" on ${run.name}. Tekton stops scheduling new TaskRuns and signals running pods to terminate. TaskRuns that have already completed are not affected.`}
         target={`${run.namespace}/${run.name}`}
         confirmLabel="cancel run"
         intent="warning"
-        busy={busy}
+        busy={busy || readOnly}
         onCancel={() => setConfirmCancel(false)}
         onConfirm={performCancel}
       />

@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -228,7 +229,7 @@ function Row({
   // `busy` reflects an in-flight server action on this row; `readOnly` is the
   // global app-level switch. Combine them so the buttons disable for either,
   // and reach for `readOnly` first when picking the tooltip.
-  const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const lockedTitle = readOnly ? " (changes blocked)" : "";
   const disabled = busy || readOnly;
   const favLabel = favorited
     ? `Unfavorite node ${n.name}`
@@ -354,7 +355,7 @@ export function NodesView() {
   });
   const nodes = data ?? [];
 
-  const readOnly = useUiSettings((s) => s.readOnly);
+  const readOnly = !useMutationCapability(context).canMutate;
   const hiddenNodeColumns = useUiSettings((s) => s.hiddenColumns.nodes);
   const nodeColumnOrder = useUiSettings((s) => s.columnOrder.nodes);
   const visibleCols = useMemo(
@@ -574,6 +575,7 @@ export function NodesView() {
       />
       {pendingAction && (
         <ConfirmActionDialog
+          context={context}
           open
           title={
             pendingAction.kind === "cordon"
@@ -592,7 +594,7 @@ export function NodesView() {
           target={pendingAction.nodeName}
           confirmLabel={pendingAction.kind}
           intent={pendingAction.kind === "drain" ? "danger" : "warning"}
-          busy={actionBusyNode === pendingAction.nodeName}
+          busy={readOnly || actionBusyNode === pendingAction.nodeName}
           onCancel={() => setPendingAction(null)}
           onConfirm={performPendingAction}
         />

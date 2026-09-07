@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ContextProtectionBar } from "@/components/ContextProtectionBar";
 import { PortForwardsChip } from "@/components/PortForwardsChip";
 import { buildAlertInbox } from "@/lib/alertInbox";
 import { k8s, type WorkloadKind } from "@/lib/k8s";
@@ -1098,8 +1099,9 @@ export function ClusterWorkspace() {
         </div>
       </aside>
 
-      <div className="flex-1 min-w-0 min-h-0">
-        <Outlet />
+      <div className="flex flex-1 min-w-0 min-h-0 flex-col">
+        <ContextProtectionBar context={context} />
+        <div className="min-h-0 flex-1"><Outlet key={context} /></div>
       </div>
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
         <DialogContent className="max-w-md border-border-default bg-surface text-text-primary">

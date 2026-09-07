@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod error;
 pub mod k8s;
+pub mod protection;
 pub mod state;
 
 use state::AppState;
@@ -28,11 +29,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            app.manage(AppState::new());
+            app.manage(AppState::with_config_dir(app.path().app_config_dir()?));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::connection::diagnose_connection,
+            commands::k8s::get_context_protection,
+            commands::k8s::set_context_protection,
+            commands::k8s::unlock_context,
+            commands::k8s::lock_context,
             commands::k8s::list_contexts,
             commands::k8s::set_context,
             commands::k8s::delete_context,

@@ -15,6 +15,9 @@ export type ConnectionDiagnostic = {
   credential_executable_available: boolean | null;
   message: string;
   single_source_only: boolean;
+  sources?: { path: string; exists: boolean }[];
+  context_sources?: Record<string, string>;
+  duplicate_definitions?: { kind: string; name: string; source: string; shadowed: boolean }[];
 };
 
 export type ConnectionFailureStatus =
