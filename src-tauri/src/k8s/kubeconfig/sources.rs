@@ -92,11 +92,11 @@ fn resolve_references(config: &mut Kubeconfig, directory: &Path) {
 /// Match kube-rs file decoding, including kubeconfigs produced by Windows tools.
 pub(super) fn decode_source(bytes: &[u8]) -> Option<String> {
     fn utf16(bytes: &[u8], little_endian: bool) -> Option<String> {
-        let chunks = bytes.chunks_exact(2);
-        if !chunks.remainder().is_empty() {
+        let (chunks, remainder) = bytes.as_chunks::<2>();
+        if !remainder.is_empty() {
             return None;
         }
-        let words = chunks.map(|pair| {
+        let words = chunks.iter().map(|pair| {
             if little_endian {
                 u16::from_le_bytes([pair[0], pair[1]])
             } else {
