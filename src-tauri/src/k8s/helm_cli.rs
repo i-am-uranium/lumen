@@ -8,8 +8,8 @@
 //!
 //! Each command streams stdout/stderr to a Tauri Channel so the UI can show
 //! progress on long operations (chart download, hook waits). The underlying
-//! `helm` process inherits Lumen's KUBECONFIG and we pass `--kube-context`
-//! explicitly to keep the active-context flow consistent.
+//! `helm` process receives a private captured kubeconfig and explicit context
+//! so it executes against the configuration authorized for that operation.
 //!
 //! `helm` must be on PATH; if it isn't we surface an actionable error
 //! pointing at https://helm.sh/docs/intro/install/ rather than a generic

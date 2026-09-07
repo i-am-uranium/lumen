@@ -9,11 +9,12 @@ through a hosted control plane.
 - Discover kubeconfig contexts and switch between clusters.
 - Show cluster health, Kubernetes version, node readiness, and soft disconnects.
 - Mark production-like contexts clearly so risky actions have stronger context.
-- Inspect the active kubeconfig source and credential-tool availability from
+- Inspect kubeconfig sources, definition precedence, and credential-tool availability from
   connection diagnostics, with separate guidance for authentication, TLS,
   network, and permission failures. Inspection does not execute credential tools.
-- Handle Windows `KUBECONFIG` drive letters and path-list separators. The loader
-  still uses the first source; multi-file merging is not supported yet.
+- Merge all `KUBECONFIG` sources using Kubernetes first-definition-wins rules,
+  including Windows path-list separators and source-relative credential paths.
+  Context deletion and restoration retain source ownership.
 
 ## Workload Explorer
 
@@ -49,6 +50,9 @@ through a hosted control plane.
 
 ## Kubernetes Operations
 
+- Protect selected contexts independently, with explicit ten-minute unlocks,
+  persistent per-pane status, and native enforcement for cluster changes and
+  pod shells. Protection survives restart; unlocks do not.
 - Apply YAML only after successful server-side dry-run of the same draft,
   PATCH permission preflight, and confirmation. Both YAML entry points share
   these gates and respect the global read-only setting.
@@ -56,6 +60,9 @@ through a hosted control plane.
 - Manage Helm releases, including install, upgrade, rollback, and uninstall.
 - Browse Argo CD applications, resource trees, history, and sync status.
 - Inspect Tekton pipelines, pipeline runs, task runs, and status details.
+
+See [protected contexts and kubeconfig sources](OPERATOR_SAFETY.md) for operation
+and configuration details.
 
 ## Security Defaults
 

@@ -1281,7 +1281,7 @@ export function FleetView() {
               <>
                 {sorted.length === 0 ? (
                   <div className="rounded-control border border-border-default bg-elevated p-4 text-sm text-text-secondary">
-                    <p>No active contexts were found in the current kubeconfig source.</p>
+                    <p>No active contexts were found in the configured kubeconfig sources.</p>
                     <Button className="mt-3" size="sm" variant="outline" onClick={() => openDiagnostics(null)}>
                       <Wrench className="size-3.5" /> Diagnose kubeconfig
                     </Button>
