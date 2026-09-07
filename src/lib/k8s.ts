@@ -1,4 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { assertContextMutation } from "@/lib/contextProtection";
+import { useUiSettings } from "@/state/uiSettings";
 import type { NetworkDebugSnapshot } from "./networkDebugger";
 import type {
   ChangeHistoryAction,
@@ -6,6 +8,29 @@ import type {
   ChangeHistoryTarget,
 } from "@/lib/changeHistory";
 import { useChangeHistoryStore } from "@/state/changeHistory";
+
+// All cluster writes and interactive execution cross this single UI guard.
+// Native code is the final authority and checks again before the side effect.
+const mutationCommands = new Set([
+  "provision_team_access", "revoke_team_access", "renew_team_token", "rotate_team_token",
+  "restart_workload", "scale_workload", "set_workload_image", "delete_pod",
+  "cordon_node", "uncordon_node", "drain_node", "trigger_cronjob", "delete_resource",
+  "apply_resource", "helm_install", "helm_upgrade", "helm_rollback", "helm_uninstall",
+  "start_pod_attach", "sync_argocd_application", "terminate_argocd_operation",
+  "refresh_argocd_application", "cancel_pipeline_run",
+]);
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const preview = command === "apply_resource" && args?.dryRun === true ||
+    (command === "helm_install" || command === "helm_upgrade") && (args?.request as { dry_run?: boolean } | undefined)?.dry_run === true;
+  if (mutationCommands.has(command) && (typeof args?.context !== "string" || !args.context.trim())) throw new Error("An explicit target context is required for this action.");
+  if (mutationCommands.has(command) && !preview) {
+    await assertContextMutation(typeof args?.context === "string" ? args.context : undefined);
+  }
+  if ((command === "pod_attach_stdin" || command === "pod_attach_resize") && useUiSettings.getState().readOnly) {
+    throw new Error("Global read-only mode is enabled.");
+  }
+  return tauriInvoke<T>(command, args);
+}
 
 export type ContextInfo = {
   name: string;

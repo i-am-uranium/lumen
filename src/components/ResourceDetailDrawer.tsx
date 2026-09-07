@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { captureLogSnapshot, logErrorMessage } from "@/state/logStream";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,7 +22,6 @@ import { toast } from "sonner";
 import { PinButton } from "@/components/PinButton";
 import { LogsViewer } from "./logs/LogsViewer";
 import { useShellDock } from "@/hooks/useShellDock";
-import { useUiSettings } from "@/state/uiSettings";
 import { k8s, type ContainerInfo, type WorkloadKind } from "@/lib/k8s";
 import { YamlModal } from "@/components/YamlModal";
 import { cn } from "@/lib/utils";
@@ -123,7 +123,7 @@ export function ResourceDetailDrawer({
   const { openSession } = useShellDock();
   const qc = useQueryClient();
   const resourceKind = resource?.kind as WorkloadKind | undefined;
-  const readOnly = useUiSettings((s) => s.readOnly);
+  const readOnly = !useMutationCapability(ctx).canMutate;
   // Capability flags fold the global read-only switch in. Header uses these
   // for both disabled state and tooltips, so a single `false` propagates
   // cleanly without touching downstream code paths.
@@ -454,19 +454,21 @@ export function ResourceDetailDrawer({
       </DrawerPanel>
       {resource && (
         <PreflightPreviewDialog
+          context={ctx}
           open={deleteConfirmOpen}
           title={`preflight delete ${resource.kind}`}
           description={`This will delete ${resource.kind}/${resource.name} from ${resource.namespace || "cluster scope"} in ${ctx}. The action is sent to Kubernetes immediately after confirmation.`}
           impact={deletePreflight}
           confirmText={`${resource.namespace || "cluster"}/${resource.name}`}
           confirmLabel="delete"
-          busy={deleting}
+          busy={readOnly || deleting}
           onCancel={() => setDeleteConfirmOpen(false)}
           onConfirm={handleDelete}
         />
       )}
       {resource && pendingAction && (
         <PreflightPreviewDialog
+          context={ctx}
           open
           title={
             pendingAction.kind === "restart"
@@ -497,7 +499,7 @@ export function ResourceDetailDrawer({
                   ? "set image"
                   : "scale"
           }
-          busy={actionBusy}
+          busy={readOnly || actionBusy}
           onCancel={() => setPendingAction(null)}
           onConfirm={handleResourceAction}
         />
@@ -506,7 +508,7 @@ export function ResourceDetailDrawer({
         <Suspense fallback={null}>
           <SetImageDialog
             resource={resource}
-            busy={actionBusy}
+            busy={readOnly || actionBusy}
             onCancel={() => setSetImageOpen(false)}
             onSubmit={(container, image) => {
               setSetImageOpen(false);
@@ -804,7 +806,7 @@ function Header({
             icon={<Container className="size-3.5" />}
             label={
               readOnly
-                ? "set image (read-only mode)"
+                ? "set image (changes blocked)"
                 : "set image (rolling update)"
             }
             disabled={actionBusy || readOnly}
@@ -832,7 +834,7 @@ function Header({
           }
           label={
             readOnly
-              ? "delete (read-only mode)"
+              ? "delete (changes blocked)"
               : canDelete.data?.allowed === false
                 ? "delete denied by RBAC"
                 : deleteTitle

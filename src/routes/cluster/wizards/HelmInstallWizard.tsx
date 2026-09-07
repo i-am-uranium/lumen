@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -11,7 +12,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { k8s } from "@/lib/k8s";
-import { useUiSettings } from "@/state/uiSettings";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,7 +58,8 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
   const context = decodeURIComponent(ctx);
   const releaseName = decodeURIComponent(releaseParam);
   const initialNamespace = searchParams.get("ns") ?? "";
-  const readOnly = useUiSettings((s) => s.readOnly);
+  const capability = useMutationCapability(context);
+  const readOnly = !capability.canMutate;
 
   const namespaces = useQuery({
     queryKey: ["k8s", "namespaces", context],
@@ -114,8 +115,8 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
       toast.error(errors.join("; "));
       return;
     }
-    if (readOnly) {
-      toast.error("read-only mode is on — disable it in Settings to run helm writes");
+    if (readOnly && !dryRun) {
+      toast.error(capability.reason);
       return;
     }
     if (mode === "install") {
@@ -190,8 +191,8 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
               variant="outline"
               size="sm"
               onClick={() => startRun(true)}
-              disabled={errors.length > 0 || readOnly}
-              title={readOnly ? "read-only mode is on" : "render manifest without applying"}
+              disabled={errors.length > 0}
+              title="render manifest without applying"
             >
               dry run
             </Button>
@@ -199,7 +200,7 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
               size="sm"
               onClick={() => startRun(false)}
               disabled={errors.length > 0 || readOnly}
-              title={readOnly ? "read-only mode is on" : undefined}
+              title={readOnly ? capability.reason : undefined}
             >
               {readOnly && <Lock className="size-3.5" />}
               {mode === "install" ? "install" : "upgrade"}
@@ -335,7 +336,7 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
 
           {readOnly && (
             <div className="rounded-panel border border-warning/40 bg-warning-soft p-3 text-[11px] text-warning">
-              read-only mode is on — install / upgrade are disabled.
+              {capability.reason}. You can still prepare and dry-run this release.
             </div>
           )}
         </div>
@@ -380,12 +381,14 @@ function HelmWizard({ mode }: { mode: WizardMode }) {
       {pendingPreviewAction &&
         (pendingPreviewAction.kind === "install" || pendingPreviewAction.kind === "upgrade") && (
           <PreflightPreviewDialog
+            context={context}
             open
             title={`preflight helm ${pendingPreviewAction.kind}`}
             description="This preview is local and conservative. Use dry run to inspect the rendered manifest before executing."
             impact={helmPreflight}
             confirmText={`${pendingPreviewAction.request.namespace || "default"}/${pendingPreviewAction.request.release}`}
             confirmLabel={pendingPreviewAction.kind}
+            busy={readOnly}
             onCancel={() => setPendingPreviewAction(null)}
             onConfirm={() => {
               setPendingAction(pendingPreviewAction);

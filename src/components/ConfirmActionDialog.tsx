@@ -1,3 +1,4 @@
+import { useConfirmationTarget } from "@/hooks/useConfirmationTarget";
 import { AlertTriangle, X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,8 @@ type Props = {
   title: string;
   description: string;
   target: string;
+  context?: string;
+  namespace?: string;
   confirmLabel: string;
   busy?: boolean;
   intent?: Intent;
@@ -30,6 +33,8 @@ export function ConfirmActionDialog({
   title,
   description,
   target,
+  context: explicitContext,
+  namespace,
   confirmLabel,
   busy = false,
   intent = "danger",
@@ -40,7 +45,8 @@ export function ConfirmActionDialog({
   const [typed, setTyped] = useState("");
   const titleId = useId();
   const descId = useId();
-  const matches = typed === confirmText;
+  const { context, valid } = useConfirmationTarget(open, JSON.stringify([target, confirmText]), explicitContext, namespace, onCancel);
+  const matches = valid && typed === confirmText;
 
   useEffect(() => {
     if (open) setTyped("");
@@ -90,7 +96,7 @@ export function ConfirmActionDialog({
           </p>
           <div className="rounded-control border border-border-default bg-shell p-3">
             <div className="text-[10px] uppercase tracking-wider text-text-muted">
-              target
+              target{context ? ` · context ${context}` : ""}{namespace !== undefined ? ` · namespace ${namespace || "cluster scope"}` : ""}
             </div>
             <div className="mt-1 max-h-32 overflow-auto break-all font-mono text-[12px] text-text-primary">
               {target}
@@ -117,7 +123,7 @@ export function ConfirmActionDialog({
               variant="outline"
               size="sm"
               disabled={busy || !matches}
-              onClick={onConfirm}
+              onClick={() => { if (matches && !busy) onConfirm(); }}
               className={intentClasses[intent]}
             >
               {busy ? "working..." : confirmLabel}

@@ -1,3 +1,5 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -39,6 +41,8 @@ export function RbacBindingWizard() {
   const { ctx = "" } = useParams();
   const navigate = useNavigate();
   const context = decodeURIComponent(ctx);
+  const capability = useMutationCapability(context);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const { data: namespaces = [] } = useQuery({
     queryKey: ["k8s", "namespaces", context],
@@ -64,6 +68,7 @@ export function RbacBindingWizard() {
   );
 
   async function apply(dryRun: boolean) {
+    if (!dryRun && !capability.canMutate) { toast.error(capability.reason); return; }
     if (errors.length > 0) {
       toast.error(errors.join("; "));
       return;
@@ -101,6 +106,7 @@ export function RbacBindingWizard() {
 
   return (
     <LumenPage>
+      <ConfirmActionDialog open={confirmOpen} context={context} namespace={spec.namespace} title="Apply resource" description="Apply this manifest to the selected context." target={spec.name} confirmLabel="apply" busy={busy || !capability.canMutate} onCancel={() => setConfirmOpen(false)} onConfirm={() => { setConfirmOpen(false); void apply(false); }} />
       <PageHeader
         eyebrow="wizards"
         title="New RBAC binding"
@@ -132,8 +138,8 @@ export function RbacBindingWizard() {
             </Button>
             <Button
               size="sm"
-              onClick={() => void apply(false)}
-              disabled={busy || errors.length > 0}
+              onClick={() => setConfirmOpen(true)}
+              disabled={busy || errors.length > 0 || !capability.canMutate}
             >
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
               apply

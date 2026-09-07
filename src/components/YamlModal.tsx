@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Copy, Eye, FlaskConical, Pencil, ShieldOff, X } from "lucide-react";
@@ -64,6 +65,7 @@ function YamlModalContent({
   sensitive = false,
   embedded = false,
 }: Props) {
+  const capability = useMutationCapability(editable?.context);
   const [mode, setMode] = useState<"read" | "edit">("read");
   const [draft, setDraft] = useState<string>("");
   const [dryRunOutput, setDryRunOutput] = useState<string | null>(null);
@@ -141,7 +143,7 @@ function YamlModalContent({
 
   const runApply = async (dry: boolean) => {
     if (!editable || sensitive || useUiSettings.getState().readOnly || !canEdit || inFlight.current) return;
-    if (!dry && validatedDraft !== draft) return;
+    if (!dry && (!capability.canMutate || validatedDraft !== draft)) return;
     const submittedDraft = dry ? draft : validatedDraft!;
     const target = { ...editable };
     const request = ++operation.current;
@@ -343,7 +345,8 @@ function YamlModalContent({
             </button>
             <button
               onClick={() => setApplyConfirmOpen(true)}
-              disabled={busy || !dirty || !canEdit || validatedDraft !== draft}
+              disabled={busy || !dirty || !canEdit || validatedDraft !== draft || !capability.canMutate}
+              title={!capability.canMutate ? capability.reason : undefined}
               className="term-btn term-btn-primary !min-h-[30px] !text-[11px] disabled:opacity-50"
             >
               <Check className="size-3" /> {busy ? "applying…" : "apply"}
@@ -352,13 +355,14 @@ function YamlModalContent({
         )}
         {editCapability && (
           <PreflightPreviewDialog
+            context={editable?.context}
             open={applyConfirmOpen}
             title={`preflight apply ${editCapability.kind}`}
             description={`This server-side apply can create or update ${editCapability.kind}/${editCapability.name} in ${editCapability.namespace || "cluster scope"}. The current draft passed server dry-run. Field ownership conflicts will block apply.`}
             impact={applyPreflight}
             confirmText={`${editCapability.namespace || "cluster"}/${editCapability.name}`}
             confirmLabel="apply"
-            busy={busy}
+            busy={busy || !capability.canMutate}
             onCancel={() => setApplyConfirmOpen(false)}
             onConfirm={() => {
               setApplyConfirmOpen(false);
