@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
-    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-separator": "^1.1.8",
@@ -44,12 +44,12 @@
     "cmdk": "^1.1.1",
     "lucide-react": "^1.40.0",
     "next-themes": "^0.4.6",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "react-router-dom": "^7.14.2",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
-    "zustand": "^5.0.12"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.4",
@@ -59,14 +59,14 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^25.6.0",
-    "@types/react": "^19.1.8",
+    "@types/react": "^19.2.18",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.10",
     "tailwindcss": "^4.2.4",
-    "typescript": "~6.0.3",
+    "typescript": "~7.0.2",
     "vite": "^8.0.10",
     "vitest": "^4.1.5"
   }

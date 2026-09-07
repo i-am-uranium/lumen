@@ -288,3 +288,33 @@ pub async fn list_history(
     out.sort_by_key(|s| s.revision);
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_helm_release_fixture() {
+        // Synthetic Helm gzip/base64 payload encoded independently with Python's stdlib.
+        let payload = "H4sIAAAAAAAC/1WOPQ+CMBCG/wq5GYjC1tXZ1YnlQq96kV6bthAN4b/bojG6XZ7361YQtAQKDD/SHAjqHUSPY6HTbEmaRDFlYaEQ2QmovgYW40CtEBOmOWanJj+5J2nYahhvGFJRLSXUmLDc/zvN2/NTCse2a/tM0PvLF3btAbZS6cTwtfSEPMQj5s0uc4vCprynco4/OVUtx0HuLFpVpz14Rj8IbC8eWpo/7gAAAA==";
+        let release = decode_release_blob(payload).unwrap();
+        let summary = summarize(&release);
+        assert_eq!(summary.name, "fixture");
+        assert_eq!(summary.namespace, "lumen-test");
+        assert_eq!(summary.revision, 3);
+        assert_eq!(summary.status, "deployed");
+        assert_eq!(summary.chart_name, "fixture-chart");
+        assert_eq!(summary.chart_version, "1.2.3");
+        assert_eq!(summary.app_version, "2.0");
+        assert_eq!(release.config["replicas"], 2);
+        assert_eq!(release.manifest, "apiVersion: v1\nkind: ConfigMap\n");
+    }
+
+    #[test]
+    fn rejects_malformed_helm_base64() {
+        let error = decode_release_blob("%%%invalid%%%").unwrap_err();
+        assert!(
+            matches!(error, AppError::Internal(message) if message.starts_with("helm outer base64:"))
+        );
+    }
+}
