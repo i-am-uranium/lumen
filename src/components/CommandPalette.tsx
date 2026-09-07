@@ -46,7 +46,6 @@ import {
 } from "lucide-react";
 import { useThemeStore, type ThemeMode } from "@/state/theme";
 import { useUiSettings } from "@/state/uiSettings";
-import { useShortcut } from "@/lib/shortcuts";
 
 export const COMMAND_PALETTE_RESOURCE_KINDS: WorkloadKind[] =
   listResourceDefinitions().map((definition) => definition.kind);
@@ -149,7 +148,6 @@ export function CommandPalette() {
   }, [normalizedQuery, contexts, namespaces, deployments, allResources]);
 
   // Cmd+K (or whatever the user remapped openPalette to via Settings).
-  useShortcut("openPalette", () => setPaletteOpen(!paletteOpen));
 
   function close() {
     setPaletteOpen(false);

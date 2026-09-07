@@ -2,7 +2,7 @@ import { startTransition, useCallback, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
-import { CommandPalette } from "@/components/CommandPalette";
+import { CommandPaletteHost } from "@/components/CommandPaletteHost";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ActivityDrawer } from "@/components/ActivityDrawer";
 import { SplitView } from "@/components/SplitView";
@@ -420,7 +420,7 @@ function Shell() {
         </div>
         <StatusBar />
         <ShellDock />
-        <CommandPalette />
+        <CommandPaletteHost />
       </div>
     </>
   );
