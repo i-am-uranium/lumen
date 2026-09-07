@@ -64,7 +64,7 @@ pub fn list_contexts_from(cfg: &Kubeconfig) -> Vec<ContextInfo> {
     let current = cfg.current_context.clone().unwrap_or_default();
     cfg.contexts
         .iter()
-        .map(|NamedContext { name, context }| {
+        .map(|NamedContext { name, context, .. }| {
             let ctx = context.clone().unwrap_or_default();
             let is_prod = name.to_lowercase().contains("prod");
             ContextInfo {
@@ -504,6 +504,7 @@ users:
                 .iter()
                 .find(|c| c.name == "prod-eks")
                 .and_then(|c| c.context.clone()),
+            ..Default::default()
         });
 
         delete_context_from(&mut cfg, "prod-eks").unwrap();
@@ -552,6 +553,32 @@ users:
     }
 
     #[test]
+    fn delete_and_restore_preserve_unknown_kubeconfig_fields() {
+        let kube_path = temp_file("unknown-fields-kube.yaml");
+        let trash_path = temp_file("unknown-fields-trash.json");
+        let _ = std::fs::remove_file(&trash_path);
+        let mut config: serde_yaml::Value = serde_yaml::from_str(SAMPLE).unwrap();
+        config["custom-root"] = "root-value".into();
+        for collection in ["contexts", "clusters", "users"] {
+            config[collection][1]["custom-entry"] = collection.into();
+        }
+        std::fs::write(&kube_path, serde_yaml::to_string(&config).unwrap()).unwrap();
+
+        delete_context_with_backup(&kube_path, &trash_path, "prod-eks", NOW).unwrap();
+        restore_deleted_context_from(&kube_path, &trash_path, "prod-eks", false, NOW).unwrap();
+
+        let restored: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&kube_path).unwrap()).unwrap();
+        assert_eq!(restored["custom-root"], config["custom-root"]);
+        for collection in ["contexts", "clusters", "users"] {
+            assert_eq!(
+                restored[collection][1]["custom-entry"],
+                config[collection][1]["custom-entry"]
+            );
+        }
+    }
+
+    #[test]
     fn restore_deleted_context_requires_overwrite_on_conflict() {
         let kube_path = temp_file("conflict-kube.yaml");
         let trash_path = temp_file("conflict-trash.json");
@@ -562,6 +589,7 @@ users:
         cfg.contexts.push(NamedContext {
             name: "prod-eks".into(),
             context: None,
+            ..Default::default()
         });
         write_config_raw(&kube_path, &cfg).unwrap();
 

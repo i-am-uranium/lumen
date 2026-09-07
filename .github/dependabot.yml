@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      kubernetes:
+        patterns:
+          - kube
+          - k8s-openapi
 
   - package-ecosystem: npm
     directory: /
