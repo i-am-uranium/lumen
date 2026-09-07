@@ -1,7 +1,7 @@
 use crate::k8s::kubeconfig;
-use kube::config::Kubeconfig;
 use serde::Serialize;
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +22,9 @@ pub struct ConnectionDiagnostic {
     pub credential_executable_available: Option<bool>,
     pub message: String,
     pub single_source_only: bool,
+    pub sources: Vec<kubeconfig::ConfigSource>,
+    pub context_sources: BTreeMap<String, PathBuf>,
+    pub duplicate_definitions: Vec<kubeconfig::ConfigDefinition>,
 }
 
 fn is_executable_file(path: &Path, _windows: bool) -> bool {
@@ -84,14 +87,54 @@ fn executable_available(
         })
 }
 
-fn inspect_path(
-    path: &Path,
+fn inspect_paths(
+    paths: &[PathBuf],
     selected_context: Option<&str>,
     executable_path: Option<&str>,
     working_dir: &Path,
     windows: bool,
     path_ext: Option<&str>,
 ) -> ConnectionDiagnostic {
+    let inspected = kubeconfig::load_paths(paths);
+    let sources = inspected
+        .as_ref()
+        .map(|snapshot| snapshot.sources.clone())
+        .unwrap_or_else(|_| {
+            paths
+                .iter()
+                .map(|path| kubeconfig::ConfigSource {
+                    path: path.clone(),
+                    exists: path.exists(),
+                })
+                .collect()
+        });
+    let context_sources = inspected
+        .as_ref()
+        .ok()
+        .map(|snapshot| {
+            snapshot.context_sources(
+                selected_context
+                    .or(snapshot.config.current_context.as_deref())
+                    .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
+    let duplicate_definitions: Vec<_> = inspected
+        .as_ref()
+        .map(|snapshot| {
+            snapshot
+                .definitions
+                .iter()
+                .filter(|d| d.shadowed)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let path = context_sources
+        .get("context")
+        .cloned()
+        .or_else(|| paths.first().cloned())
+        .unwrap_or_default();
     let base = |status, message: &str| ConnectionDiagnostic {
         context: selected_context.map(str::to_owned),
         config_path: path.display().to_string(),
@@ -99,24 +142,19 @@ fn inspect_path(
         credential_executable: None,
         credential_executable_available: None,
         message: message.to_owned(),
-        single_source_only: true,
+        single_source_only: false,
+        sources: sources.clone(),
+        context_sources: context_sources.clone(),
+        duplicate_definitions: duplicate_definitions.clone(),
     };
-
-    if !path.is_file() {
-        return base(
-            DiagnosticStatus::MissingConfig,
-            "No kubeconfig file was found. Create or copy one at the shown path, then rescan.",
-        );
+    let snapshot = match inspected {
+        Ok(snapshot) => snapshot,
+        Err(_) => return base(DiagnosticStatus::InvalidConfig, "A kubeconfig source could not be read or parsed. Check the listed files and their permissions, then rescan."),
+    };
+    if !sources.iter().any(|source| source.exists) {
+        return base(DiagnosticStatus::MissingConfig, "No kubeconfig file was found. Create or copy one at a listed path, or update KUBECONFIG, then rescan.");
     }
-    let config = match Kubeconfig::read_from(path) {
-        Ok(config) => config,
-        Err(_) => {
-            return base(
-                DiagnosticStatus::InvalidConfig,
-                "The kubeconfig could not be parsed. Validate its YAML and required fields, then rescan.",
-            )
-        }
-    };
+    let config = snapshot.config;
     let context_name = selected_context
         .map(str::to_owned)
         .or_else(|| config.current_context.clone());
@@ -206,12 +244,15 @@ fn inspect_path(
             } else if Path::new(command).components().count() > 1
                 && !Path::new(command).is_absolute()
             {
-                "The relative credential executable is not available from the app working directory used by the Kubernetes client. Update the configured command or launch environment, then retry."
+                "The credential executable is not available relative to its kubeconfig source. Update the configured command, then retry."
             } else {
                 "The credential executable is not available on the app PATH. Install it or update PATH, then retry."
             }
             .to_owned(),
-            single_source_only: true,
+            single_source_only: false,
+            sources,
+            context_sources,
+            duplicate_definitions,
         };
     }
     ConnectionDiagnostic {
@@ -225,17 +266,36 @@ fn inspect_path(
 
 #[tauri::command]
 pub async fn diagnose_connection(context: Option<String>) -> ConnectionDiagnostic {
-    let path = kubeconfig::default_path();
+    let paths = kubeconfig::source_paths();
     let executable_path = std::env::var("PATH").ok();
     let path_ext = std::env::var("PATHEXT").ok();
     let working_dir = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    inspect_path(
-        &path,
+    inspect_paths(
+        &paths,
         context.as_deref(),
         executable_path.as_deref(),
         &working_dir,
         cfg!(windows),
         path_ext.as_deref(),
+    )
+}
+
+#[cfg(test)]
+fn inspect_path(
+    path: &Path,
+    selected_context: Option<&str>,
+    executable_path: Option<&str>,
+    working_dir: &Path,
+    windows: bool,
+    path_ext: Option<&str>,
+) -> ConnectionDiagnostic {
+    inspect_paths(
+        &[path.to_owned()],
+        selected_context,
+        executable_path,
+        working_dir,
+        windows,
+        path_ext,
     )
 }
 

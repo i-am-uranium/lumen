@@ -102,7 +102,17 @@ export function ConnectionDiagnosticsDialog({ open, context, observedError, retr
                 <dt className="text-text-muted">Config source</dt><dd className="break-all font-mono">{diagnostic.config_path}</dd>
                 {diagnostic.credential_executable && <><dt className="text-text-muted">Credential tool</dt><dd className="font-mono">{diagnostic.credential_executable} ({diagnostic.credential_executable_available ? "available" : "missing"})</dd></>}
               </dl>
-              {diagnostic.single_source_only && <p className="text-xs text-text-muted">This version inspects the first path only; kubeconfig source merging is not yet supported.</p>}
+              {diagnostic.sources && <div className="space-y-1 text-xs">
+                <h3 className="font-semibold">Kubeconfig sources · first definition wins</h3>
+                <ol className="space-y-1">
+                  {diagnostic.sources.map((source, index) => <li key={source.path} className="break-all font-mono">{index + 1}. {source.path} <span className="font-sans text-text-muted">{source.exists ? "loaded" : "missing · skipped"}</span></li>)}
+                </ol>
+              </div>}
+              {Object.entries(diagnostic.context_sources ?? {}).map(([kind, source]) => <p key={kind} className="break-all text-xs text-text-secondary">{kind} definition: <span className="font-mono">{source}</span></p>)}
+              {(diagnostic.duplicate_definitions?.length ?? 0) > 0 && <div className="text-xs text-warning">
+                <h3 className="font-semibold">Duplicate definitions ignored</h3>
+                {diagnostic.duplicate_definitions!.map((definition, index) => <p key={`${definition.kind}-${definition.name}-${index}`} className="break-all">{definition.kind} “{definition.name}” in {definition.source}</p>)}
+              </div>}
             </div>
           )}
         </div>
