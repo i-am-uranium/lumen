@@ -11,6 +11,16 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
+// Config and recovery history form one read-modify-write transaction. Keep pruning,
+// deletion and restoration serialized so a stale snapshot cannot erase a backup.
+static CONFIG_EDITS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_config_edits() -> AppResult<std::sync::MutexGuard<'static, ()>> {
+    CONFIG_EDITS
+        .lock()
+        .map_err(|_| AppError::Internal("kubeconfig edit lock is unavailable".into()))
+}
+
 const TRASH_FILE: &str = "deleted-kube-contexts.json";
 const TRASH_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
@@ -209,6 +219,7 @@ fn delete_from_sources(
     name: &str,
     now: i64,
 ) -> AppResult<()> {
+    let _edit = lock_config_edits()?;
     let snapshot = load_paths(paths)?;
     let owner = snapshot.owner(name)?;
     reject_symlink_edit(&owner)?;
@@ -270,6 +281,7 @@ fn restore_from_sources(
     overwrite: bool,
     now: i64,
 ) -> AppResult<()> {
+    let _edit = lock_config_edits()?;
     let trash = load_trash(trash_path)?;
     let entry = trash
         .entries
@@ -327,15 +339,26 @@ fn delete_context_with_backup(
 }
 
 pub fn list_deleted_contexts(app: &AppHandle) -> AppResult<Vec<DeletedContextSummary>> {
-    let config = load_snapshot()?.config;
-    let path = trash_path(app)?;
-    let mut trash = load_trash(&path)?;
-    prune_expired(&mut trash, now_ms());
-    save_trash(&path, &trash)?;
+    list_deleted_from_sources(&source_paths(), &trash_path(app)?, now_ms())
+}
+
+fn list_deleted_from_sources(
+    paths: &[PathBuf],
+    path: &Path,
+    now: i64,
+) -> AppResult<Vec<DeletedContextSummary>> {
+    let _edit = lock_config_edits()?;
+    let config = load_paths(paths)?.config;
+    let mut trash = load_trash(path)?;
+    let before = trash.entries.len();
+    prune_expired(&mut trash, now);
+    if trash.entries.len() != before {
+        save_trash(path, &trash)?;
+    }
     Ok(trash
         .entries
         .iter()
-        .map(|entry| deleted_summary(entry, Some(&config), now_ms()))
+        .map(|entry| deleted_summary(entry, Some(&config), now))
         .collect())
 }
 
@@ -345,22 +368,7 @@ fn list_deleted_contexts_from(
     trash_path: &Path,
     now: i64,
 ) -> AppResult<Vec<DeletedContextSummary>> {
-    let mut trash = load_trash(trash_path)?;
-    let before = trash.entries.len();
-    prune_expired(&mut trash, now);
-    if trash.entries.len() != before {
-        save_trash(trash_path, &trash)?;
-    }
-    let cfg = if kube_path.exists() {
-        Some(read_config_raw(kube_path)?)
-    } else {
-        None
-    };
-    Ok(trash
-        .entries
-        .iter()
-        .map(|entry| deleted_summary(entry, cfg.as_ref(), now))
-        .collect())
+    list_deleted_from_sources(&[kube_path.to_owned()], trash_path, now)
 }
 
 pub fn restore_deleted_context(app: &AppHandle, name: &str, overwrite: bool) -> AppResult<()> {
@@ -779,6 +787,92 @@ mod source_edit_tests {
             std::env::temp_dir().join(format!("lumen-source-edits-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         (root.join("first"), root.join("second"), root.join("trash"))
+    }
+
+    #[test]
+    fn unchanged_listing_does_not_create_or_rewrite_recovery_history() {
+        let (config, _, trash) = files("readonly-list");
+        std::fs::write(&config, "contexts: []").unwrap();
+        let _ = std::fs::remove_file(&trash);
+        assert!(
+            list_deleted_from_sources(std::slice::from_ref(&config), &trash, 100)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !trash.exists(),
+            "listing must not create a missing history file"
+        );
+        let original = "{\"entries\":[]}";
+        std::fs::write(&trash, original).unwrap();
+        list_deleted_from_sources(&[config], &trash, 100).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(trash).unwrap(),
+            original,
+            "unchanged history must remain byte-for-byte untouched"
+        );
+    }
+
+    #[test]
+    fn concurrent_deletions_and_pruning_preserve_every_recovery_backup() {
+        let (config, _, trash) = files("concurrent-history");
+        let count = 16;
+        let contexts = (0..count)
+            .map(|index| format!("{{name: context-{index}, context: {{cluster: c}}}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        std::fs::write(&config, format!("contexts: [{contexts}]")).unwrap();
+        let mut expired =
+            deleted_context_from(&read_config_raw(&config).unwrap(), "context-0", 0).unwrap();
+        expired.name = "expired-history".into();
+        expired.expires_at_ms = 1;
+        save_trash(
+            &trash,
+            &TrashStore {
+                entries: vec![expired],
+            },
+        )
+        .unwrap();
+        let start = std::sync::Barrier::new(count + 1);
+        std::thread::scope(|scope| {
+            for index in 0..count {
+                let config = &config;
+                let trash = &trash;
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    delete_from_sources(
+                        std::slice::from_ref(config),
+                        trash,
+                        &format!("context-{index}"),
+                        100,
+                    )
+                    .unwrap();
+                });
+            }
+            let config = &config;
+            let trash = &trash;
+            let start = &start;
+            scope.spawn(move || {
+                start.wait();
+                for _ in 0..count {
+                    list_deleted_from_sources(std::slice::from_ref(config), trash, 100).unwrap();
+                }
+            });
+        });
+        assert!(read_config_raw(&config).unwrap().contexts.is_empty());
+        let history = load_trash(&trash).unwrap();
+        assert_eq!(history.entries.len(), count);
+        for index in 0..count {
+            assert!(history
+                .entries
+                .iter()
+                .any(|entry| entry.name == format!("context-{index}")));
+        }
+        assert!(history
+            .entries
+            .iter()
+            .all(|entry| entry.name != "expired-history"));
     }
 
     #[test]
