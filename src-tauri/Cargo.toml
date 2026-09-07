@@ -38,7 +38,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 serde_yaml = "0.9"
 http = "1"
 flate2 = "1"
-base64 = "0.22"
+base64 = "0.23"
 tauri-plugin-updater = "2.10.1"
 
 [dev-dependencies]
