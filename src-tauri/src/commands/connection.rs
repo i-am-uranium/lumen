@@ -24,7 +24,7 @@ pub struct ConnectionDiagnostic {
     pub single_source_only: bool,
 }
 
-fn is_executable_file(path: &Path, windows: bool) -> bool {
+fn is_executable_file(path: &Path, _windows: bool) -> bool {
     let Ok(metadata) = path.metadata() else {
         return false;
     };
@@ -32,7 +32,7 @@ fn is_executable_file(path: &Path, windows: bool) -> bool {
         return false;
     }
     #[cfg(unix)]
-    if !windows {
+    if !_windows {
         use std::os::unix::fs::PermissionsExt;
         return metadata.permissions().mode() & 0o111 != 0;
     }
