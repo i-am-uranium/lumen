@@ -13,6 +13,7 @@ export function ShellToolbar({
   containers, container, onContainerChange,
   command, onCommandChange,
   state,
+  mutationBlocked = false,
   search, matchCount, currentMatch, onSearchChange, onSearchPrev, onSearchNext,
   onStart, onStop, onDownload,
 }: {
@@ -22,6 +23,7 @@ export function ShellToolbar({
   command: string;
   onCommandChange: (c: string) => void;
   state: ShellState;
+  mutationBlocked?: boolean;
   search: ShellSearchState;
   matchCount: number;
   currentMatch: number;
@@ -77,7 +79,7 @@ export function ShellToolbar({
       />
       <div className="flex items-center gap-0.5 ml-auto">
         {!live ? (
-          <button type="button" onClick={onStart}
+          <button type="button" onClick={onStart} disabled={mutationBlocked}
             className="px-2 py-0.5 rounded text-[10px] border border-term-green/40 bg-term-green/15 text-term-green flex items-center gap-1">
             <Play className="size-3" /> start
           </button>

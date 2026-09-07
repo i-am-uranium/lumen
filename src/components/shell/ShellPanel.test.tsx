@@ -1,3 +1,4 @@
+import { publishProtection } from "@/hooks/useMutationCapability";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ShellPanel } from "./ShellPanel";
@@ -65,4 +66,12 @@ describe("shell selection", () => {
     expect(k8s.startPodAttach).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent(/quote/i);
   });
+});
+
+vi.mock("@/lib/contextProtection", async (original) => ({
+  ...await original<typeof import("@/lib/contextProtection")>(),
+  contextProtection: { get: async (context: string) => ({ context, protected: false, unlocked_until_ms: null, can_mutate: true }) },
+}));
+beforeEach(() => {
+  for (const context of ["dev", "prod"]) publishProtection(context, { context, protected: false, unlocked_until_ms: null, can_mutate: true });
 });

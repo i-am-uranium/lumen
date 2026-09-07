@@ -1,3 +1,4 @@
+import { publishProtection } from "@/hooks/useMutationCapability";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -297,4 +298,27 @@ spec:
       "dev",
     );
   });
+});
+
+vi.mock("@/lib/contextProtection", async (original) => ({
+  ...await original<typeof import("@/lib/contextProtection")>(),
+  contextProtection: { get: async (context: string) => ({ context, protected: false, unlocked_until_ms: null, can_mutate: true }) },
+}));
+beforeEach(() => {
+  for (const context of ["dev", "prod"]) publishProtection(context, { context, protected: false, unlocked_until_ms: null, can_mutate: true });
+});
+
+it("keeps YAML drafting and server dry-run available while the protected context blocks apply", async () => {
+  const { contextProtection } = await import("@/lib/contextProtection");
+  const locked = { context: "dev", protected: true, unlocked_until_ms: null, can_mutate: false };
+  const statusSpy = vi.spyOn(contextProtection, "get").mockResolvedValue(locked);
+  publishProtection("dev", locked);
+  renderEditableYamlModal();
+  await userEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "kind: ConfigMap\nmetadata:\n  name: app\ndata: {x: one}" } });
+  await userEvent.click(screen.getByRole("button", { name: /^dry-run$/i }));
+  await waitFor(() => expect(k8s.applyResource).toHaveBeenCalledWith("default", "configmap", "app", expect.any(String), true, "dev"));
+  expect(screen.getByRole("button", { name: /^apply$/i })).toBeDisabled();
+  expect(screen.getByRole("textbox")).toBeEnabled();
+  statusSpy.mockRestore();
 });

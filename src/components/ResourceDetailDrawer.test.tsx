@@ -1,3 +1,4 @@
+import { publishProtection } from "@/hooks/useMutationCapability";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -211,4 +212,12 @@ describe("ResourceDetailDrawer confirmations", () => {
     expect(screen.queryByRole("button", { name: /^apply$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: /preflight apply deployment/i })).not.toBeInTheDocument();
   });
+});
+
+vi.mock("@/lib/contextProtection", async (original) => ({
+  ...await original<typeof import("@/lib/contextProtection")>(),
+  contextProtection: { get: async (context: string) => ({ context, protected: false, unlocked_until_ms: null, can_mutate: true }) },
+}));
+beforeEach(() => {
+  for (const context of ["dev", "prod"]) publishProtection(context, { context, protected: false, unlocked_until_ms: null, can_mutate: true });
 });

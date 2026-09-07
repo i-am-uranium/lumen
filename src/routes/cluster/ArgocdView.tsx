@@ -1,3 +1,4 @@
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import {
   useCallback,
   useEffect,
@@ -244,7 +245,7 @@ function ArgocdTabStrip({
  */
 function ApplicationsTab({ context }: { context: string }) {
   const qc = useQueryClient();
-  const readOnly = useUiSettings((s) => s.readOnly);
+  const readOnly = !useMutationCapability(context).canMutate;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedKey = searchParams.get("app") ?? null;
@@ -805,7 +806,7 @@ function ApplicationDetailPanel({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const lockedTitle = readOnly ? " (changes blocked)" : "";
   const operationRunning = detail.data?.operation_state?.phase === "Running";
   const inCluster = isInClusterDestination(app.destination_server);
   const appPreflightTarget = useMemo(
@@ -1099,7 +1100,7 @@ function ApplicationDetailPanel({
           app={app}
           defaultRevision={app.target_revision || "HEAD"}
           managedResources={detail.data?.resources ?? []}
-          busy={busyAction === "sync"}
+          busy={readOnly || busyAction === "sync"}
           onCancel={() => setSyncDialogOpen(false)}
           onSubmit={(opts) => {
             setSyncDialogOpen(false);
@@ -1109,13 +1110,14 @@ function ApplicationDetailPanel({
       )}
 
       <PreflightPreviewDialog
+        context={context}
         open={!!pendingSyncOptions}
         title="preflight argocd sync"
         description="This requests ArgoCD reconciliation through the Application CRD."
         impact={syncPreflight}
         confirmText={`${app.namespace}/${app.name}`}
         confirmLabel="sync"
-        busy={busyAction === "sync"}
+        busy={readOnly || busyAction === "sync"}
         onCancel={() => setPendingSyncOptions(null)}
         onConfirm={() => {
           if (!pendingSyncOptions) return;
@@ -1126,18 +1128,20 @@ function ApplicationDetailPanel({
       />
 
       <PreflightPreviewDialog
+        context={context}
         open={terminateConfirm}
         title="preflight terminate running sync"
         description={`This clears the .operation field on ${app.name} — ArgoCD treats that as a terminate signal. Resources that have already started reconciling won't be rolled back; only the in-flight orchestration stops.`}
         impact={terminatePreflight}
         confirmText={`${app.namespace}/${app.name}`}
         confirmLabel="terminate"
-        busy={busyAction === "terminate"}
+        busy={readOnly || busyAction === "terminate"}
         onCancel={() => setTerminateConfirm(false)}
         onConfirm={performTerminate}
       />
 
       <PreflightPreviewDialog
+        context={context}
         open={!!pendingRollback}
         title="preflight rollback to historical revision"
         description={
@@ -1148,7 +1152,7 @@ function ApplicationDetailPanel({
         impact={rollbackPreflight}
         confirmText={`${app.namespace}/${app.name}`}
         confirmLabel="rollback"
-        busy={busyAction === "rollback"}
+        busy={readOnly || busyAction === "rollback"}
         onCancel={() => setPendingRollback(null)}
         onConfirm={() => {
           if (pendingRollback) void performRollback(pendingRollback);
@@ -2270,7 +2274,7 @@ function ResourceRow({
   /** Topology view: chevron-collapse marker for nodes with children. */
   expandable?: { collapsed: boolean; onToggle: () => void };
 }) {
-  const lockedTitle = readOnly ? " (read-only mode)" : "";
+  const lockedTitle = readOnly ? " (changes blocked)" : "";
   const openLabel = inCluster
     ? `open ${resource.kind}/${resource.name} in drawer`
     : `external destination — drawer is only available for in-cluster resources`;

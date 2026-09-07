@@ -1,3 +1,5 @@
+import { useConfirmationTarget } from "@/hooks/useConfirmationTarget";
+import { useMutationCapability } from "@/hooks/useMutationCapability";
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -75,6 +77,7 @@ type PendingTeamMutation =
 export function TeamAccess() {
   const { ctx = "" } = useParams();
   const context = decodeURIComponent(ctx);
+  const capability = useMutationCapability(context);
   const qc = useQueryClient();
 
   const { data: allNamespaces = [] } = useQuery({
@@ -102,6 +105,7 @@ export function TeamAccess() {
   const [pendingMutation, setPendingMutation] = useState<PendingTeamMutation | null>(null);
 
   const handleRenew = async (g: TeamGrant, ttlHours: number) => {
+    if (!capability.canMutate) { toast.error(capability.reason); return; }
     try {
       const res = await k8s.renewTeamToken(g.member_id, ttlHours, context || undefined);
       setResult(res);
@@ -117,6 +121,7 @@ export function TeamAccess() {
   // token becomes invalid the moment the Secret is deleted, so this is a
   // one-click revoke+reissue rather than a "re-download same token" flow.
   const executeRotate = async (g: TeamGrant) => {
+    if (!capability.canMutate) { toast.error(capability.reason); return; }
     try {
       const res = await k8s.rotateTeamToken(g.member_id, context || undefined);
       setResult(res);
@@ -128,7 +133,7 @@ export function TeamAccess() {
     }
   };
 
-  const canSubmit =
+  const canSubmit = capability.canMutate &&
     /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(memberId) &&
     memberId.length <= 40 &&
     (scope === "cluster" || chosenNs.size > 0);
@@ -167,6 +172,7 @@ export function TeamAccess() {
   };
 
   const executeRevoke = async (memberId: string, namespaces: string[]) => {
+    if (!capability.canMutate) { toast.error(capability.reason); return; }
     try {
       await k8s.revokeTeamAccess(memberId, namespaces, context || undefined);
       toast.success(`revoked ${memberId}`);
@@ -181,6 +187,7 @@ export function TeamAccess() {
   const chosenList = scope === "cluster" ? ["(cluster-wide)"] : Array.from(chosenNs);
   const mutationDialog = pendingMutation ? (
     <ConfirmActionDialog
+      context={context}
       open
       title={
         pendingMutation.kind === "rotate"
@@ -197,6 +204,8 @@ export function TeamAccess() {
           ? pendingMutation.grant.member_id
           : pendingMutation.memberId
       }
+      busy={!capability.canMutate}
+      namespace={pendingMutation.kind === "rotate" ? pendingMutation.grant.namespaces.join(", ") : pendingMutation.namespaces.join(", ")}
       confirmLabel={pendingMutation.kind === "rotate" ? "rotate" : "revoke"}
       intent="danger"
       onCancel={() => setPendingMutation(null)}
@@ -250,6 +259,7 @@ export function TeamAccess() {
 
       <div className="max-w-3xl mx-auto p-6 space-y-6">
         <ExistingGrants
+          readOnly={!capability.canMutate}
           grants={grants.data ?? []}
           loading={grants.isLoading}
           fetching={grants.isFetching}
@@ -268,6 +278,8 @@ export function TeamAccess() {
 
         {renewTarget && (
           <RenewDialog
+            context={context}
+            mutationBlocked={!capability.canMutate}
             grant={renewTarget}
             onCancel={() => setRenewTarget(null)}
             onRenew={(ttlHours) => handleRenew(renewTarget, ttlHours)}
@@ -475,6 +487,7 @@ export function TeamAccess() {
 
         {confirming && (
           <ConfirmDialog
+            context={context}
             onClose={() => setConfirming(false)}
             onConfirm={submit}
             memberId={memberId}
@@ -483,7 +496,7 @@ export function TeamAccess() {
             namespaces={Array.from(chosenNs)}
             ttl={ttl}
             longLived={longLived}
-            loading={loading}
+            loading={loading || !capability.canMutate}
           />
         )}
         {mutationDialog}
@@ -493,6 +506,7 @@ export function TeamAccess() {
 }
 
 function ExistingGrants({
+  readOnly,
   grants,
   loading,
   fetching,
@@ -502,6 +516,7 @@ function ExistingGrants({
   onRenew,
   onRotate,
 }: {
+  readOnly: boolean;
   grants: TeamGrant[];
   loading: boolean;
   fetching: boolean;
@@ -576,6 +591,7 @@ function ExistingGrants({
               </div>
               <div className="flex gap-1.5 shrink-0">
                 <button
+                  disabled={readOnly}
                   onClick={() => onRenew(g)}
                   className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px]"
                   title={
@@ -589,6 +605,7 @@ function ExistingGrants({
                 </button>
                 {g.token_mode === "long" && (
                   <button
+                    disabled={readOnly}
                     onClick={() => onRotate(g)}
                     className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px] !text-term-amber !border-term-amber/40"
                     title="invalidate the current long-lived token and issue a new one"
@@ -597,6 +614,7 @@ function ExistingGrants({
                   </button>
                 )}
                 <button
+                  disabled={readOnly}
                   onClick={() => onRevoke(g)}
                   className="term-btn !min-h-[28px] !py-1 !px-2 !text-[11px] !text-term-red !border-term-red/40"
                   title="delete Lumen-managed RBAC for this member"
@@ -613,18 +631,24 @@ function ExistingGrants({
 }
 
 function RenewDialog({
+  context,
+  mutationBlocked,
   grant,
   onCancel,
   onRenew,
 }: {
+  context: string;
+  mutationBlocked: boolean;
   grant: TeamGrant;
   onCancel: () => void;
   onRenew: (ttlHours: number) => void | Promise<void>;
 }) {
   const [ttl, setTtl] = useState(8);
   const [busy, setBusy] = useState(false);
+  const { valid } = useConfirmationTarget(true, grant.member_id, context, grant.namespaces.join(", "), onCancel);
   const isLong = grant.token_mode === "long";
   const go = async () => {
+    if (!valid || mutationBlocked) return;
     setBusy(true);
     try {
       await onRenew(isLong ? 0 : ttl);
@@ -651,6 +675,7 @@ function RenewDialog({
           </button>
         </div>
         <div className="p-4 space-y-3 text-[12px]">
+          <p className="font-mono text-term-muted">{context} · {grant.namespaces.join(", ") || "cluster scope"} · {grant.service_account}</p>
           {isLong ? (
             <>
               <p className="text-term-muted">
@@ -703,7 +728,7 @@ function RenewDialog({
           </button>
           <button
             onClick={go}
-            disabled={busy}
+            disabled={busy || mutationBlocked || !valid}
             className="term-btn term-btn-primary !min-h-[30px] !text-[11px]"
           >
             <KeyRound className="size-3.5" /> issue kubeconfig
@@ -814,6 +839,7 @@ function SummaryLine({
 }
 
 function ConfirmDialog({
+  context,
   onClose,
   onConfirm,
   memberId,
@@ -824,6 +850,7 @@ function ConfirmDialog({
   longLived,
   loading,
 }: {
+  context: string;
   onClose: () => void;
   onConfirm: () => void;
   memberId: string;
@@ -835,7 +862,8 @@ function ConfirmDialog({
   loading: boolean;
 }) {
   const [typed, setTyped] = useState("");
-  const confirmed = typed === memberId;
+  const { valid } = useConfirmationTarget(true, JSON.stringify([memberId, template, scope, namespaces, ttl, longLived]), context, namespaces.join(", "), onClose);
+  const confirmed = valid && typed === memberId;
   const toCreate = useMemo(() => {
     const base = [`ServiceAccount/lumen-team-${memberId}`];
     const rbac =
@@ -865,7 +893,7 @@ function ConfirmDialog({
       >
         <div className="flex items-center justify-between px-4 h-11 border-b border-term-border-soft">
           <h3 className="text-[13px] font-semibold text-term-fg">
-            confirm provisioning
+            confirm provisioning · {context}
           </h3>
           <button onClick={onClose} className="text-term-subtle hover:text-term-fg">
             <X className="size-4" />
