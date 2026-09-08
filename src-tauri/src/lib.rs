@@ -101,6 +101,8 @@ pub fn run() {
             commands::k8s::helm_uninstall,
             commands::k8s::helm_search_repo,
             commands::k8s::helm_show_values,
+            commands::k8s::get_debug_target,
+            commands::k8s::create_debug_container,
             commands::k8s::start_pod_attach,
             commands::k8s::pod_attach_stdin,
             commands::k8s::pod_attach_resize,

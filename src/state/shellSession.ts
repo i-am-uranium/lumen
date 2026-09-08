@@ -5,6 +5,7 @@ export type ShellState = "idle" | "starting" | "live" | "exited" | "failed";
 
 export type ShellSessionKey = {
   pod: string;
+  podUid?: string;
   namespace: string;
   context: string;
   container: string;
@@ -25,6 +26,7 @@ type OutputSubscriber = (chunk: Uint8Array) => void;
  */
 export class ShellSession {
   readonly pod: string;
+  readonly podUid?: string;
   readonly namespace: string;
   readonly context: string;
   readonly container: string;
@@ -47,6 +49,7 @@ export class ShellSession {
 
   constructor(key: ShellSessionKey) {
     this.pod = key.pod;
+    this.podUid = key.podUid;
     this.namespace = key.namespace;
     this.context = key.context;
     this.container = key.container;
@@ -148,6 +151,7 @@ export class ShellSession {
         {
           namespace: this.namespace,
           pod: this.pod,
+          ...(this.podUid ? { pod_uid: this.podUid } : {}),
           container: this.container,
           command: [...this.command],
           tty: true,

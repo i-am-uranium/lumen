@@ -2269,6 +2269,14 @@ pub async fn list_pod_containers(
             });
         }
     }
+    for c in spec.ephemeral_containers.as_deref().unwrap_or_default() {
+        out.push(PodContainerInfo {
+            name: c.name.clone(),
+            image: c.image.clone().unwrap_or_default(),
+            is_init: false,
+            is_default: false,
+        });
+    }
     Ok(out)
 }
 
@@ -2469,6 +2477,30 @@ pub async fn helm_show_values(chart: String, version: Option<String>) -> AppResu
 // ─── Pod attach (terminal) ────────────────────────────────────────────────
 
 use crate::k8s::exec as attach;
+
+#[tauri::command]
+pub async fn get_debug_target(
+    context: String,
+    namespace: String,
+    pod: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::k8s::debug::DebugTarget> {
+    let client = client_for(&state, Some(&context)).await?;
+    crate::k8s::debug::get_target(client, &context, &namespace, &pod).await
+}
+
+#[tauri::command]
+pub async fn create_debug_container(
+    request: crate::k8s::debug::DebugRequest,
+    state: State<'_, AppState>,
+) -> AppResult<crate::k8s::debug::DebugResult> {
+    let (context, client, identity, _) =
+        mutation_client(&state, Some(&request.context), false).await?;
+    crate::k8s::debug::create(client, request, || {
+        require_current_target(&state.protection, &context, &identity, false)
+    })
+    .await
+}
 
 #[tauri::command]
 pub async fn start_pod_attach(
@@ -2876,6 +2908,7 @@ mod protection_entrypoint_tests {
         "helm_rollback",
         "helm_uninstall",
         "start_pod_attach",
+        "create_debug_container",
         "sync_argocd_application",
         "refresh_argocd_application",
         "terminate_argocd_operation",
@@ -2904,6 +2937,7 @@ mod protection_entrypoint_tests {
     fn every_registered_kubernetes_ipc_has_an_explicit_policy_classification() {
         let read_or_local = &[
             "list_contexts",
+            "get_debug_target",
             "set_context",
             "delete_context",
             "list_deleted_contexts",

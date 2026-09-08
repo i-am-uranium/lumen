@@ -17,6 +17,7 @@ it("blocks every mutation family before dispatch to a protected context", async 
     () => k8s.syncArgocdApplication("prod", "ns", "api", {}),
     () => k8s.refreshArgocdApplication("prod", "ns", "api", false),
     () => k8s.cancelPipelineRun("prod", "ns", "run"),
+    () => k8s.createDebugContainer({ context: "prod" } as any),
     () => k8s.startPodAttach({} as any, {} as any, "prod"),
   ];
   for (const call of calls) await expect(call()).rejects.toThrow(/locked/);

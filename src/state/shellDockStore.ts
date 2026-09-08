@@ -49,6 +49,7 @@ function loadMru(): ShellSessionKey[] {
         (e): e is ShellSessionKey =>
           e &&
           typeof e.pod === "string" &&
+          (e.podUid === undefined || typeof e.podUid === "string") &&
           typeof e.namespace === "string" &&
           typeof e.context === "string" &&
           typeof e.container === "string" &&
@@ -99,6 +100,7 @@ export const useShellDockStore = create<Store>((set, get) => ({
     if (!tab || tab.session.getState() === "live" || tab.session.getState() === "starting") return;
     const key: ShellSessionKey = {
       context: tab.session.context, namespace: tab.session.namespace, pod: tab.session.pod,
+      ...(tab.session.podUid ? { podUid: tab.session.podUid } : {}),
       container: selection.container, command: [...selection.command],
     };
     tab.session.close();

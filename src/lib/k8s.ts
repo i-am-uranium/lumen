@@ -1,3 +1,4 @@
+import type { DebugRequest, DebugResult, DebugTarget } from "./podDebug";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { assertContextMutation } from "@/lib/contextProtection";
 import { useUiSettings } from "@/state/uiSettings";
@@ -16,7 +17,7 @@ const mutationCommands = new Set([
   "restart_workload", "scale_workload", "set_workload_image", "delete_pod",
   "cordon_node", "uncordon_node", "drain_node", "trigger_cronjob", "delete_resource",
   "apply_resource", "helm_install", "helm_upgrade", "helm_rollback", "helm_uninstall",
-  "start_pod_attach", "sync_argocd_application", "terminate_argocd_operation",
+  "create_debug_container", "start_pod_attach", "sync_argocd_application", "terminate_argocd_operation",
   "refresh_argocd_application", "cancel_pipeline_run",
 ]);
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -1238,11 +1239,16 @@ export const k8s = {
     invoke<HelmChartHit[]>("helm_search_repo", { query }),
   helmShowValues: (chart: string, version?: string) =>
     invoke<string>("helm_show_values", { chart, version: version ?? null }),
+  getDebugTarget: (context: string, namespace: string, pod: string) =>
+    invoke<DebugTarget>("get_debug_target", { context, namespace, pod }),
+  createDebugContainer: (request: DebugRequest) =>
+    invoke<DebugResult>("create_debug_container", { request, context: request.context }),
   // Pod attach commands. See PodTerminal for end-to-end usage.
   startPodAttach: (
     request: {
       namespace: string;
       pod: string;
+      pod_uid?: string;
       container: string | null;
       command: string[];
       tty: boolean;

@@ -148,6 +148,8 @@ impl AttachRegistry {
 pub struct StartAttachRequest {
     pub namespace: String,
     pub pod: String,
+    #[serde(default)]
+    pub pod_uid: Option<String>,
     pub container: Option<String>,
     pub command: Vec<String>,
     pub tty: bool,
@@ -183,6 +185,28 @@ pub async fn start(
     }
 
     let api: Api<Pod> = Api::namespaced(client, &req.namespace);
+    if req.pod_uid.is_some()
+        || req
+            .container
+            .as_deref()
+            .is_some_and(|c| c.starts_with("lumen-debug-"))
+    {
+        let uid = req
+            .pod_uid
+            .as_deref()
+            .filter(|uid| !uid.is_empty())
+            .ok_or_else(|| {
+                AppError::Conflict(
+                    "Debug terminal requires the captured pod UID. Reopen it from Debug container."
+                        .into(),
+                )
+            })?;
+        let pod = tokio::time::timeout(std::time::Duration::from_secs(10), api.get(&req.pod))
+            .await
+            .map_err(|_| AppError::Network("Timed out checking debug pod identity".into()))?
+            .map_err(|e| AppError::K8s(e.to_string()))?;
+        crate::k8s::debug::verify_terminal(&pod, uid, req.container.as_deref())?;
+    }
     protection.authorize()?;
     let mut attached = api
         .exec(&req.pod, &req.command, &ap)
@@ -476,5 +500,52 @@ mod tests {
         assert!(registry.write_stdin("one", vec![b'x']).await.is_err());
         assert_eq!(registry.sessions.read().await.len(), 1);
         registry.close_all().await;
+    }
+    #[tokio::test]
+    async fn debug_attach_checks_uid_before_any_exec_request() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/api/v1/namespaces/apps/pods/api"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"apiVersion":"v1","kind":"Pod","metadata":{"name":"api","namespace":"apps","uid":"replacement"},"spec":{"containers":[{"name":"app"}]},"status":{"phase":"Running"}}))).mount(&server).await;
+        for uid in [None, Some("captured-uid".to_owned())] {
+            let client =
+                kube::Client::try_from(kube::Config::new(server.uri().parse().unwrap())).unwrap();
+            let request = super::StartAttachRequest {
+                namespace: "apps".into(),
+                pod: "api".into(),
+                pod_uid: uid,
+                container: Some("lumen-debug-one".into()),
+                command: vec!["/bin/sh".into()],
+                tty: true,
+                cols: None,
+                rows: None,
+            };
+            let protection = super::SessionProtection {
+                context: "test".into(),
+                identity: String::new(),
+                policy: std::sync::Arc::new(
+                    crate::protection::ContextProtectionPolicy::unavailable(),
+                ),
+            };
+            let channel = tauri::ipc::Channel::new(|_| Ok(()));
+            let result = super::start(
+                client,
+                super::AttachRegistry::new(),
+                request,
+                channel,
+                protection,
+            )
+            .await;
+            assert!(matches!(result, Err(crate::error::AppError::Conflict(_))));
+        }
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "GET" && !request.url.path().contains("exec")));
     }
 }
