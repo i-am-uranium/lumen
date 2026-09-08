@@ -99,7 +99,26 @@ function uniqueNonEmpty(values: string[]): string[] {
 function cleanLine(value: string | null | undefined): string {
   return redactIncidentReportText(value ?? "").replace(/\s+/g, " ").trim();
 }
-function finalLogExcerpt(value: string): { text: string; truncated: boolean } { const redacted = redactIncidentReportText(value); const text = redacted.split(/\r?\n/).slice(0, 200).join("\n").slice(0, 20_000); return { text, truncated: text !== redacted }; }
+function finalLogExcerpt(value: string): { text: string; truncated: boolean } {
+  const redacted = redactIncidentReportText(value);
+  const text = redacted.split(/\r?\n/).slice(0, 200).join("\n").slice(0, 20_000);
+  return { text, truncated: text !== redacted };
+}
+
+function normalizeLogEvidence(log: LogEvidence): LogEvidence {
+  const bounded = finalLogExcerpt(log.text);
+  return {
+    ...log,
+    context: cleanLine(log.context),
+    namespace: cleanLine(log.namespace),
+    pod: cleanLine(log.pod),
+    podUid: log.podUid ? cleanLine(log.podUid) : null,
+    container: cleanLine(log.container),
+    text: bounded.text,
+    truncated: log.truncated || bounded.truncated,
+    note: cleanLine(log.note),
+  };
+}
 
 export function buildIncidentReportData(input: IncidentReportInput): IncidentReportData {
   const generatedAtIso = safeIso(input.generatedAt);
@@ -151,7 +170,14 @@ export function buildIncidentReportData(input: IncidentReportInput): IncidentRep
   );
 
   return {
-    investigation: input.investigation ? { startedAt: cleanLine(input.investigation.startedAt), sources: input.investigation.sources.map(cleanLine), observations: input.investigation.observations.map(cleanLine), logEvidence: input.investigation.logEvidence ? (() => { const bounded = finalLogExcerpt(input.investigation!.logEvidence!.text); return { ...input.investigation!.logEvidence!, context: cleanLine(input.investigation!.logEvidence!.context), namespace: cleanLine(input.investigation!.logEvidence!.namespace), pod: cleanLine(input.investigation!.logEvidence!.pod), podUid: input.investigation!.logEvidence!.podUid ? cleanLine(input.investigation!.logEvidence!.podUid) : null, container: cleanLine(input.investigation!.logEvidence!.container), text: bounded.text, truncated: input.investigation!.logEvidence!.truncated || bounded.truncated, note: cleanLine(input.investigation!.logEvidence!.note) }; })() : undefined } : undefined,
+    investigation: input.investigation ? {
+      startedAt: cleanLine(input.investigation.startedAt),
+      sources: input.investigation.sources.map(cleanLine),
+      observations: input.investigation.observations.map(cleanLine),
+      logEvidence: input.investigation.logEvidence
+        ? normalizeLogEvidence(input.investigation.logEvidence)
+        : undefined,
+    } : undefined,
     generatedAtIso,
     scope: {
       clusterContext: cleanLine(input.clusterContext || "current-context"),
@@ -206,10 +232,22 @@ export function renderIncidentReportMarkdown(report: IncidentReportData): string
     "",
   ];
 
+  let logTextIndex: number | undefined;
   if (report.investigation) {
     lines.push("## Investigation capture", "", `Started: ${report.investigation.startedAt}`, "", ...renderList("Sources and freshness:", report.investigation.sources), ...renderList("Observed evidence and limitations:", report.investigation.observations));
     const log = report.investigation.logEvidence;
-    if (log) lines.push("### Selected log evidence", "", `- **Status:** ${log.status}${log.included ? " · included" : " · excluded"}`, `- **Identity:** ${log.context} · ${log.namespace}/${log.pod} · UID ${log.podUid ?? "unavailable"} · ${log.container} · ${log.instance}`, `- **Captured:** ${log.capturedAt}; bounds ${log.lineLimit} lines / ${log.charLimit} characters; truncated ${log.truncated ? "yes" : "no"}`, `- **Note:** ${log.note}`, "", ...(log.included ? ["```text", log.text, "```", ""] : []));
+    if (log) {
+      lines.push("### Selected log evidence", "",
+        `- **Status:** ${log.status}${log.included ? " · included" : " · excluded"}`,
+        `- **Identity:** ${log.context} · ${log.namespace}/${log.pod} · UID ${log.podUid ?? "unavailable"} · ${log.container} · ${log.instance}`,
+        `- **Captured:** ${log.capturedAt}; bounds ${log.lineLimit} lines / ${log.charLimit} characters; truncated ${log.truncated ? "yes" : "no"}`,
+        `- **Note:** ${log.note}`, "");
+      if (log.included) {
+        lines.push("```text");
+        logTextIndex = lines.length;
+        lines.push(log.text, "```", "");
+      }
+    }
   }
 
   if (report.triageIssues.length === 0) {
@@ -256,6 +294,14 @@ export function renderIncidentReportMarkdown(report: IncidentReportData): string
   lines.push(...renderList("## Next Checks", report.nextChecks.map(redactIncidentReportText)));
   lines.push("## Manual Notes", "", report.manualNotes || "_none_", "");
 
+  if (logTextIndex !== undefined) {
+    // Redact and bound the excerpt last. Redacting the complete report afterward
+    // could expand a marker clipped at the character limit beyond its bound.
+    const before = redactIncidentReportText(lines.slice(0, logTextIndex).join("\n"));
+    const excerpt = finalLogExcerpt(lines[logTextIndex]).text;
+    const after = redactIncidentReportText(lines.slice(logTextIndex + 1).join("\n"));
+    return [before, excerpt, after].join("\n").trimEnd() + "\n";
+  }
   return redactIncidentReportText(lines.join("\n")).trimEnd() + "\n";
 }
 

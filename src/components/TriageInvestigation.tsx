@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { k8s, type EventSummary, type ResourceDetail, type WorkloadKind } from "@/lib/k8s";
@@ -52,6 +52,14 @@ function InvestigationSession({ context, issue, startedAt, onClose }: Props) {
   const suggested = [...containers].sort((a, b) => Number(a.ready) - Number(b.ready) || b.restart_count - a.restart_count)[0];
   const container = containers.find((entry) => entry.name === chosenContainer) ?? suggested;
   const uid = resourceUid(resource.data);
+  // A query refresh can change identity or the suggested container without a
+  // selection event. Invalidate that capture just as an explicit selection does.
+  useEffect(() => {
+    captureVersion.current += 1;
+    setCapturing(false);
+    setLogEvidence(undefined);
+    return () => { captureVersion.current += 1; };
+  }, [uid, container?.name, previous]);
   const relatedEvents = matchingEvents(events.data, kind, name, uid);
   const rolloutUid = resourceUid(controllerQuery.data ?? ownerQuery.data ?? (OWNER_KINDS.has(kind) ? resource.data : undefined));
   const rolloutEvents = rolloutTarget ? matchingEvents(ownerEvents.data, rolloutTarget.kind, rolloutTarget.name, rolloutUid) : [];
@@ -77,7 +85,7 @@ function InvestigationSession({ context, issue, startedAt, onClose }: Props) {
     const version = ++captureVersion.current;
     setCapturing(true);
     const evidence = await captureIncidentLogEvidence(capturedIdentity);
-    if (captureVersion.current !== version) { setCapturing(false); return; }
+    if (captureVersion.current !== version) return;
     setLogEvidence(evidence);
     setCapturing(false);
   }

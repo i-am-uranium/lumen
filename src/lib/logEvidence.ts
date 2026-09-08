@@ -18,7 +18,8 @@ export async function captureIncidentLogEvidence(request: Request, deps: Deps = 
   if (!request.podUid) return { ...base, status: "unavailable", note: "Pod UID unavailable; name-only logs were not captured." };
   try {
     const capture = await deps.capture(request.context, request.namespace, request.pod, request.podUid, request.container, request.previous);
-    const text = boundLogEvidenceText(redactIncidentReportText(capture.text));
-    return { ...base, status: "captured", included: true, text, truncated: capture.truncated || capture.text !== text, note: request.previous ? "Retained previous logs; exact terminated container instance identity is unavailable." : "Current log selection captured; exact container instance identity is unavailable." };
+    const redacted = redactIncidentReportText(capture.text);
+    const text = boundLogEvidenceText(redacted);
+    return { ...base, status: "captured", included: true, text, truncated: capture.truncated || redacted !== text, note: request.previous ? "Retained previous logs; exact terminated container instance identity is unavailable." : "Current log selection captured; exact container instance identity is unavailable." };
   } catch (error) { const identityChanged = String(error).toLowerCase().includes("identity changed"); return { ...base, status: identityChanged ? "replaced" : "error", note: identityChanged ? "Pod identity changed during bounded capture; logs were excluded." : "Log capture failed, timed out, or retained logs were unavailable." }; }
 }

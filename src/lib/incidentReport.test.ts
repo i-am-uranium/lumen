@@ -193,3 +193,23 @@ it("redacts included log evidence and omits excluded excerpts", () => {
   const excluded = renderIncidentReportMarkdown(buildIncidentReportData({ clusterContext: "prod", investigation: { startedAt: "now", sources: [], observations: [], logEvidence: { ...base, included: false } } }));
   expect(excluded).not.toContain("Authorization");
 });
+
+describe("final log excerpt bounds", () => {
+  const log = { status: "captured" as const, context: "prod", namespace: "payments", pod: "api", podUid: "uid-1", container: "worker", instance: "current" as const, capturedAt: "now", lineLimit: 200, charLimit: 20000, truncated: false, text: "", included: true, note: "captured" };
+  it.each([
+    ["short bearer expansion", "Bearer a ".repeat(2500)],
+    ["partial redaction marker at boundary", "x".repeat(19970) + "\nAuthorization: Bearer a"],
+    ["oversized line", "x".repeat(25000)],
+    ["line limit", "ordinary log\n".repeat(250)],
+  ])("bounds after all report redaction: %s", (_label, text) => {
+    const report = buildIncidentReportData({ clusterContext: "prod", investigation: { startedAt: "now", sources: [], observations: [], logEvidence: { ...log, text } } });
+    const markdown = renderIncidentReportMarkdown(report);
+    const excerpt = markdown.match(/```text\n([\s\S]*?)\n```/)?.[1];
+    expect(excerpt).toBeDefined();
+    expect(excerpt!.length).toBeLessThanOrEqual(20000);
+    expect(excerpt!.split("\n").length).toBeLessThanOrEqual(200);
+    expect(excerpt).not.toMatch(/Bearer a(?:\s|$)/);
+    expect(markdown).toContain("truncated yes");
+    expect(renderIncidentReportMarkdown(report)).toBe(markdown);
+  });
+});
