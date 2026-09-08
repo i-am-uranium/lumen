@@ -7,7 +7,7 @@ import { redactIncidentReportText } from "@/lib/incidentReport";
 import { Button } from "@/components/ui/button";
 import { SectionPanel } from "@/components/lumen/page";
 import { IncidentReportDialog } from "@/components/IncidentReportDialog";
-import { captureIncidentLogEvidence, resourceUid, type LogEvidence } from "@/lib/logEvidence";
+import { boundLogEvidenceText, captureIncidentLogEvidence, resourceUid, type LogEvidence } from "@/lib/logEvidence";
 
 type Props = { context: string; issue: TriageIssue; startedAt: string; onClose: () => void };
 const OWNER_KINDS = new Set(["deployment", "replicaset", "statefulset", "daemonset", "job", "cronjob", "replicationcontroller"]);
@@ -77,7 +77,7 @@ function InvestigationSession({ context, issue, startedAt, onClose }: Props) {
     const version = ++captureVersion.current;
     setCapturing(true);
     const evidence = await captureIncidentLogEvidence(capturedIdentity);
-    if (captureVersion.current !== version) return;
+    if (captureVersion.current !== version) { setCapturing(false); return; }
     setLogEvidence(evidence);
     setCapturing(false);
   }
@@ -89,13 +89,13 @@ function InvestigationSession({ context, issue, startedAt, onClose }: Props) {
       </div>
       <ul className="text-xs text-text-secondary space-y-1">{sources.map((line) => <li key={line}>{line}</li>)}</ul>
       {kind === "pod" && container && <div className="flex flex-wrap items-center gap-2">
-        <label className="text-xs text-text-secondary">Container <select aria-label="Investigation container" value={container.name} onChange={(event) => { captureVersion.current += 1; setChosenContainer(event.target.value); setLogEvidence(undefined); }} className="rounded-control border border-border-default bg-elevated p-1">{containers.map((entry) => <option key={entry.name} value={entry.name}>{entry.name} · {entry.state} · {entry.restart_count} restarts</option>)}</select></label>
+        <label className="text-xs text-text-secondary">Container <select aria-label="Investigation container" value={container.name} onChange={(event) => { captureVersion.current += 1; setCapturing(false); setChosenContainer(event.target.value); setLogEvidence(undefined); }} className="rounded-control border border-border-default bg-elevated p-1">{containers.map((entry) => <option key={entry.name} value={entry.name}>{entry.name} · {entry.state} · {entry.restart_count} restarts</option>)}</select></label>
         <Button asChild variant="outline"><Link to={logs(false)}>current logs · {container.name}</Link></Button>
         {container.restart_count > 0 && <Button asChild variant="outline"><Link to={logs(true)}>previous logs · {container.name}</Link></Button>}
-        <label className="text-xs"><input type="checkbox" checked={previous} onChange={(event) => { captureVersion.current += 1; setPrevious(event.target.checked); setLogEvidence(undefined); }} /> capture previous instance</label>
+        <label className="text-xs"><input type="checkbox" checked={previous} onChange={(event) => { captureVersion.current += 1; setCapturing(false); setPrevious(event.target.checked); setLogEvidence(undefined); }} /> capture previous instance</label>
         <Button variant="outline" disabled={capturing} onClick={() => void captureLogs()}>{capturing ? "capturing…" : "capture bounded logs"}</Button>
       </div>}
-      {logEvidence && <div className="space-y-2 rounded-control border border-border-default p-3"><p className="text-xs text-text-secondary">{logEvidence.note} · max {logEvidence.lineLimit} lines / {logEvidence.charLimit} characters{logEvidence.truncated ? " · truncated" : ""}</p>{logEvidence.status === "captured" && <><textarea aria-label="Log evidence preview" value={logEvidence.text} onChange={(event) => setLogEvidence({ ...logEvidence, text: event.target.value })} className="h-40 w-full rounded-control border bg-code-surface p-2 font-mono text-xs" /><label className="text-xs"><input type="checkbox" checked={logEvidence.included} onChange={(event) => setLogEvidence({ ...logEvidence, included: event.target.checked })} /> include edited excerpt in export</label></>}</div>}
+      {logEvidence && <div className="space-y-2 rounded-control border border-border-default p-3"><p className="text-xs text-text-secondary">{logEvidence.note} · max {logEvidence.lineLimit} lines / {logEvidence.charLimit} characters{logEvidence.truncated ? " · truncated" : ""}</p>{logEvidence.status === "captured" && <><textarea aria-label="Log evidence preview" value={logEvidence.text} onChange={(event) => { const text = boundLogEvidenceText(event.target.value); setLogEvidence({ ...logEvidence, text, truncated: logEvidence.truncated || text !== event.target.value }); }} className="h-40 w-full rounded-control border bg-code-surface p-2 font-mono text-xs" /><label className="text-xs"><input type="checkbox" checked={logEvidence.included} onChange={(event) => setLogEvidence({ ...logEvidence, included: event.target.checked })} /> include edited excerpt in export</label></>}</div>}
       <div><h3 className="text-sm font-medium text-text-primary">Related events</h3><p className="text-xs text-text-secondary">Fetched for {namespace || "cluster"}/{kind}/{name}; event timestamps are shown below.</p>
         {events.isSuccess && relatedEvents.length === 0 && <p className="text-xs text-text-secondary">No related events returned.</p>}
         <ul className="space-y-1 text-xs text-text-secondary">{relatedEvents.map((event, index) => <li key={index}>{event.ts ?? "unknown time"} · {event.type_} · {event.reason}: {redactIncidentReportText(event.message)}</li>)}</ul>

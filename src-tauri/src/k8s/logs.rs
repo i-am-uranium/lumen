@@ -33,6 +33,93 @@ pub struct LogSelector {
     pub previous: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BoundedLogCapture {
+    pub text: String,
+    pub truncated: bool,
+    pub bytes: usize,
+}
+
+fn capture_params(
+    container: String,
+    previous: bool,
+    tail_lines: Option<i64>,
+    limit_bytes: i64,
+) -> LogParams {
+    LogParams {
+        container: Some(container),
+        follow: false,
+        previous,
+        tail_lines,
+        limit_bytes: Some(limit_bytes),
+        timestamps: true,
+        ..Default::default()
+    }
+}
+
+fn cap_capture_text(mut text: String, limit_bytes: usize) -> (String, bool) {
+    let truncated = text.len() >= limit_bytes;
+    if text.len() > limit_bytes {
+        let mut end = limit_bytes;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    (text, truncated)
+}
+
+pub async fn capture_logs(
+    client: Client,
+    selector: LogSelector,
+    limit_bytes: i64,
+) -> AppResult<BoundedLogCapture> {
+    let pod = selector
+        .pod_name
+        .ok_or_else(|| AppError::K8s("pod name required".into()))?;
+    let container = selector
+        .container
+        .ok_or_else(|| AppError::K8s("container required".into()))?;
+    let api: Api<Pod> = Api::namespaced(client, &selector.namespace);
+    let params = capture_params(
+        container,
+        selector.previous,
+        selector.tail_lines,
+        limit_bytes,
+    );
+    let text = api
+        .logs(&pod, &params)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let cap = limit_bytes.max(1) as usize;
+    let (text, truncated) = cap_capture_text(text, cap);
+    Ok(BoundedLogCapture {
+        bytes: text.len(),
+        text,
+        truncated,
+    })
+}
+
+#[cfg(test)]
+mod bounded_capture_tests {
+    use super::*;
+    #[test]
+    fn capture_is_finite_and_server_bounded() {
+        let p = capture_params("worker".into(), false, Some(201), 20_000);
+        assert!(!p.follow);
+        assert_eq!(p.limit_bytes, Some(20_000));
+        assert_eq!(p.tail_lines, Some(201));
+        assert_eq!(p.container.as_deref(), Some("worker"));
+    }
+    #[test]
+    fn local_byte_cap_handles_oversized_utf8() {
+        let (text, truncated) = cap_capture_text("é".repeat(20_000), 20_001);
+        assert!(truncated);
+        assert!(text.len() <= 20_001);
+        assert!(text.is_char_boundary(text.len()));
+    }
+}
+
 /// Known service-mesh / observability sidecar container names. When a pod has
 /// no `kubectl.kubernetes.io/default-container` annotation, we skip these to
 /// pick the application container first.

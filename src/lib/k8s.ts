@@ -603,6 +603,7 @@ export type EventSummary = {
   involved_uid?: string | null;
   count: number | null;
 };
+export type BoundedLogCapture = { text: string; truncated: boolean; bytes: number };
 
 // ─── ArgoCD ───────────────────────────────────────────────────────────────
 //
@@ -1005,6 +1006,8 @@ export const k8s = {
       name,
       context,
     }),
+  captureIncidentLogs: (context: string, namespace: string, pod: string, container: string, previous: boolean) =>
+    invoke<BoundedLogCapture>("capture_incident_logs", { context, selector: { namespace, pod_name: pod, container, previous, tail_lines: 201, label_selector: null, since_seconds: null } }),
   restartWorkload: (
     namespace: string,
     kind: WorkloadKind,
