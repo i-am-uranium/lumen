@@ -378,7 +378,14 @@ export function NetworkDebuggerView() {
   const combined = useMemo(() => {
     if (!snapshot.data) return undefined;
     if (sourceNamespace === namespace) return snapshot.data;
-    const source = sourceSnapshot.data;
+    // A rejected refresh invalidates the whole source snapshot for current
+    // conclusions, not just policy lists. Keep successful target evidence.
+    const source = sourceSnapshot.error ? undefined : sourceSnapshot.data;
+    const sourceUnavailable = !source ? Object.fromEntries(
+      ["pods", "services", "endpoints", "endpointSlices", "ingresses", "networkPolicies", "namespaces", "gateways", "httproutes", "referencegrants"].map((resource) => [
+        `${sourceNamespace}/${resource}`, sourceSnapshot.error ? `Source snapshot refresh failed; cached evidence excluded. ${String(sourceSnapshot.error)}` : "Source namespace is loading or unavailable.",
+      ]),
+    ) : {};
     return {
       ...snapshot.data,
       loadedNamespaces: [...(snapshot.data.loadedNamespaces ?? [namespace]), ...(source?.loadedNamespaces ?? [])],
@@ -389,10 +396,10 @@ export function NetworkDebuggerView() {
       endpointSlices: [...snapshot.data.endpointSlices, ...(source?.endpointSlices ?? [])],
       networkPolicies: [...snapshot.data.networkPolicies, ...(source?.networkPolicies ?? [])],
       gatewayResources: [...(snapshot.data.gatewayResources ?? []), ...(source?.gatewayResources ?? [])],
-      unavailable: { ...snapshot.data.unavailable, ...source?.unavailable, ...(!source || sourceSnapshot.error ? { [`${sourceNamespace}/networkPolicies`]: sourceSnapshot.error ? String(sourceSnapshot.error) : "Source namespace is loading or unavailable." } : {}) },
+      unavailable: { ...snapshot.data.unavailable, ...source?.unavailable, ...sourceUnavailable },
     };
   }, [snapshot.data, sourceSnapshot.data, sourceSnapshot.error, namespace, sourceNamespace]);
-  const sourcePods = useMemo(() => sortedPods(sourceSnapshot.data?.pods ?? []), [sourceSnapshot.data]);
+  const sourcePods = useMemo(() => sortedPods(sourceSnapshot.error ? [] : sourceSnapshot.data?.pods ?? []), [sourceSnapshot.data, sourceSnapshot.error]);
   const gatewayEvidence = useMemo(() => combined ? analyzeGatewayRelationships(combined) : [], [combined]);
   useEffect(() => { setDrawerResource(null); setSourcePodName(""); }, [context, sourceNamespace]);
 

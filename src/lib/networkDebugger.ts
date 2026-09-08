@@ -266,12 +266,13 @@ function collectEndpointAddresses(
   const sliceAddresses = snapshot.endpointSlices
     .filter(
       (slice) =>
-        slice.namespace === service.namespace && slice.serviceName === service.name,
+        slice.namespace === service.namespace && slice.serviceName === service.name &&
+        !snapshot.unavailable?.[`${service.namespace}/endpointSlices`],
     )
     .flatMap((slice) => slice.endpoints);
   if (sliceAddresses.length > 0) return sliceAddresses;
   return snapshot.endpoints
-    .filter((endpoint) => sameResource(endpoint, service.namespace, service.name))
+    .filter((endpoint) => sameResource(endpoint, service.namespace, service.name) && !snapshot.unavailable?.[`${service.namespace}/endpoints`])
     .flatMap((endpoint) => endpoint.addresses);
 }
 
@@ -339,7 +340,11 @@ function analyzeService(
         resolvedTargetPort,
       };
     });
-  const incomplete = snapshot.unavailable?.[`${service.namespace}/pods`] || (snapshot.unavailable?.[`${service.namespace}/endpointSlices`] && snapshot.unavailable?.[`${service.namespace}/endpoints`]);
+  // Either API can independently contain useful endpoints (including manually
+  // managed EndpointSlices). A failed read cannot establish absence or prove
+  // that the visible not-ready endpoints are the only endpoints.
+  const endpointEvidenceMissing = snapshot.unavailable?.[`${service.namespace}/endpointSlices`] || snapshot.unavailable?.[`${service.namespace}/endpoints`];
+  const incomplete = snapshot.unavailable?.[`${service.namespace}/pods`] || (endpointEvidenceMissing && readyEndpoints.length === 0);
   const diagnosis = incomplete ? "evidence-unavailable" : diagnoseService(service, backingPods, endpoints, readyEndpoints);
   return {
     service,
@@ -613,12 +618,19 @@ export function analyzeNetworkPath(
     }
   }
 
-  const policyAnalysis = analyzeNetworkPolicies(
+  const selectedServicePort = serviceAnalysis?.portMappings.length === 1 ? serviceAnalysis.portMappings[0] : null;
+  const policyAnalysis: NetworkPolicyAnalysis | null = serviceAnalysis && !selectedServicePort ? {
+    verdict: "unknown",
+    reason: serviceAnalysis.portMappings.length > 1
+      ? "Select a specific Service port to evaluate its target port and protocol; multiple mappings remain."
+      : "Select an observed Service port; the requested port mapping is unavailable.",
+    policies: [], allowingPolicies: [], approximate: true,
+  } : analyzeNetworkPolicies(
     snapshot,
     sourcePod,
     destinationPods,
-    serviceAnalysis?.portMappings.length === 1 ? serviceAnalysis.portMappings[0].targetPort : request.destination.kind === "Pod" ? request.destination.port ?? null : null,
-    serviceAnalysis?.portMappings[0]?.protocol ?? "TCP",
+    selectedServicePort?.targetPort ?? (request.destination.kind === "Pod" ? request.destination.port ?? null : null),
+    selectedServicePort?.protocol ?? "TCP",
   );
   if (policyAnalysis && request.source?.kind === "Workload" && snapshot.pods.filter(p => p.namespace === request.source!.namespace && labelsMatchSelector(request.source!.kind === "Workload" ? request.source!.selector : {}, p.labels)).length > 1) {
     policyAnalysis.verdict = "unknown";

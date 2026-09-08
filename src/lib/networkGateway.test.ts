@@ -43,8 +43,8 @@ describe("Gateway relationship evidence", () => {
   it("explains healthy backend objects without proving connectivity", () => {
     const data = snapshot([gateway, route]);
     data.pods = [{ name: "api-1", namespace: "web", labels: { app: "api" }, ready: true, ports: [{ name: "http", containerPort: 8080 }] }];
-    data.services = [{ name: "api", namespace: "web", selector: { app: "api" }, ports: [{ port: 80, targetPort: "http" }] }];
-    data.endpointSlices = [{ name: "api-slice", namespace: "web", serviceName: "api", ports: [], endpoints: [{ ready: true, addresses: ["10.0.0.1"], targetRef: { kind: "Pod", name: "api-1" } }] }];
+    data.services = [{ name: "api", namespace: "web", selector: { app: "api" }, ports: [{ name: "http", port: 80, targetPort: "http" }] }];
+    data.endpointSlices = [{ name: "api-slice", namespace: "web", serviceName: "api", ports: [{ name: "http", protocol: "TCP", port: 8080 }], endpoints: [{ ready: true, addresses: ["10.0.0.1"], targetRef: { kind: "Pod", name: "api-1" } }] }];
     expect(analyzeGatewayRelationships(data)).toContainEqual(expect.objectContaining({ title: "HTTPRoute backend → Service → endpoints → pods", outcome: "allowed-by-model", objects: expect.arrayContaining([expect.objectContaining({ kind: "EndpointSlice", name: "api-slice" }), expect.objectContaining({ kind: "Pod", name: "api-1" })]) }));
   });
   it("blocks listener hostname mismatch", () => {
@@ -53,4 +53,52 @@ describe("Gateway relationship evidence", () => {
     expect(analyzeGatewayRelationships(snapshot([hostGateway, hostRoute]))).toContainEqual(expect.objectContaining({ title: "Listener http → HTTPRoute", outcome: "blocked" }));
   });
 
+});
+
+function backendSnapshot(): NetworkDebugSnapshot {
+  const data = snapshot([gateway, route]);
+  data.pods = [
+    { name: "api-a", namespace: "web", labels: { app: "api" }, ready: true, ports: [{ name: "http", containerPort: 8080 }, { name: "metrics", containerPort: 9090 }] },
+    { name: "api-b", namespace: "web", labels: { app: "api" }, ready: true, ports: [{ name: "http", containerPort: 8081 }, { name: "metrics", containerPort: 9090 }] },
+  ];
+  data.services = [{ name: "api", namespace: "web", selector: { app: "api" }, ports: [{ name: "http", port: 80, targetPort: "http" }, { name: "metrics", port: 9090, targetPort: "metrics" }] }];
+  data.endpointSlices = [{ name: "metrics-only", namespace: "web", serviceName: "api", ports: [{ name: "metrics", protocol: "TCP", port: 9090 }], endpoints: [{ ready: true, addresses: ["10.0.0.1"], targetRef: { kind: "Pod", namespace: "web", name: "api-a" } }] }];
+  return data;
+}
+const backendRow = (data: NetworkDebugSnapshot) => analyzeGatewayRelationships(data).find((row) => row.title === "HTTPRoute backend → Service → endpoints → pods")!;
+describe("review regressions: selected backend endpoint evidence", () => {
+  it("cannot use metrics-only endpoints to establish an HTTP backend", () => {
+    const result = backendRow(backendSnapshot());
+    expect(result.outcome).toBe("unknown");
+    expect(result.objects.some((ref) => ref.kind === "Pod")).toBe(false);
+  });
+  it("resolves named targets per slice and cites only namespace-qualified endpoint pods", () => {
+    const data = backendSnapshot();
+    data.endpointSlices.push(
+      { name: "http-a", namespace: "web", serviceName: "api", ports: [{ name: "http", port: 8080 }], endpoints: [{ ready: true, addresses: ["10.0.0.1"], targetRef: { kind: "Pod", namespace: "web", name: "api-a" } }] },
+      { name: "http-b", namespace: "web", serviceName: "api", ports: [{ name: "http", port: 8081 }], endpoints: [{ ready: true, addresses: ["10.0.0.2"], targetRef: { kind: "Pod", namespace: "web", name: "api-b" } }] },
+    );
+    expect(backendRow(data)).toMatchObject({ outcome: "allowed-by-model", objects: expect.arrayContaining([{ kind: "Pod", namespace: "web", name: "api-a" }, { kind: "Pod", namespace: "web", name: "api-b" }]) });
+    expect(backendRow(data).objects.some((ref) => ref.name === "metrics-only")).toBe(false);
+    data.endpointSlices[2].ports[0].port = 8080;
+    expect(backendRow(data).outcome).toBe("unknown");
+    expect(backendRow(data).objects.some((ref) => ref.kind === "Pod" && ref.name === "api-b")).toBe(false);
+  });
+  it.each(["wrong-protocol", "wrong-namespace", "legacy", "slice-denied", "endpoints-denied"])("does not assert a supported chain with %s evidence", (variant) => {
+    const data = backendSnapshot();
+    data.endpointSlices[0].ports = [{ name: "http", protocol: "TCP", port: 8080 }];
+    if (variant === "wrong-protocol") data.endpointSlices[0].ports[0].protocol = "UDP";
+    if (variant === "wrong-namespace") data.endpointSlices[0].endpoints[0].targetRef!.namespace = "other";
+    if (variant === "legacy") { data.endpoints = [{ name: "api", namespace: "web", addresses: data.endpointSlices[0].endpoints }]; data.endpointSlices = []; }
+    if (variant === "slice-denied" || variant === "endpoints-denied") { data.endpointSlices = []; data.unavailable = { [`web/${variant === "slice-denied" ? "endpointSlices" : "endpoints"}`]: "403" }; }
+    expect(backendRow(data).outcome).toBe("unknown");
+    expect(backendRow(data).objects.some((ref) => ref.kind === "Pod")).toBe(false);
+  });
+});
+
+it("keeps positive matching EndpointSlice evidence when only legacy Endpoints are unreadable", () => {
+  const data = backendSnapshot();
+  data.endpointSlices[0].ports = [{ name: "http", port: 8080 }];
+  data.unavailable = { "web/endpoints": "403" };
+  expect(backendRow(data).outcome).toBe("allowed-by-model");
 });

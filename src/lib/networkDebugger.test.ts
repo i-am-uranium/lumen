@@ -307,3 +307,33 @@ describe("bidirectional policy evidence", () => {
     expect(result.findings.some(f => f.title === "Service has no endpoints")).toBe(false);
   });
 });
+
+describe("review regressions: partial endpoints and unspecified protocols", () => {
+  it.each(["endpointSlices", "endpoints"])("does not infer endpoint absence when %s is unavailable", (api) => {
+    const data = structuredClone(baseSnapshot);
+    data.endpointSlices = []; data.endpoints = []; data.unavailable = { [`shop/${api}`]: "403 Forbidden" };
+    const result = analyzeNetworkPath(data, { destination: { kind: "Service", namespace: "shop", name: "api", port: 80 } });
+    expect(result.service?.diagnosis).toBe("evidence-unavailable");
+    expect(result.findings.some((finding) => finding.title === "Service has no endpoints")).toBe(false);
+  });
+  it.each(["endpointSlices", "endpoints"])("preserves positive endpoints from the successful API when %s failed", (api) => {
+    const data = structuredClone(baseSnapshot);
+    data.unavailable = { [`shop/${api}`]: "403 Forbidden" };
+    if (api === "endpointSlices") { data.endpoints = [{ namespace: "shop", name: "api", addresses: data.endpointSlices[0].endpoints }]; data.endpointSlices = []; }
+    const result = analyzeNetworkPath(data, { destination: { kind: "Service", namespace: "shop", name: "api", port: 80 } });
+    expect(result.service?.diagnosis).toBe("ready-endpoints");
+    expect(result.service?.readyEndpoints).toHaveLength(1);
+  });
+  it.each([false, true])("requires a port for a mixed-protocol Service regardless of order (reversed=%s)", (reverse) => {
+    const data = structuredClone(baseSnapshot);
+    data.services[0].ports = [{ name: "http", protocol: "TCP", port: 80, targetPort: 8080 }, { name: "dns", protocol: "UDP", port: 53, targetPort: 53 }];
+    if (reverse) data.services[0].ports.reverse();
+    data.networkPolicies = [{ name: "tcp-only", namespace: "shop", podSelector: { app: "api" }, policyTypes: ["Ingress"], ingress: [{ ports: [{ protocol: "TCP" }] }] }];
+    const request = { source: { kind: "Pod" as const, namespace: "shop", name: "web-1" }, destination: { kind: "Service" as const, namespace: "shop", name: "api" } };
+    const any = analyzeNetworkPath(data, request);
+    expect(any.networkPolicy?.verdict).toBe("unknown");
+    expect(any.networkPolicy?.reason).toMatch(/select.*port/i);
+    expect(analyzeNetworkPath(data, { ...request, destination: { ...request.destination, port: 80 } }).networkPolicy?.verdict).toBe("allowed");
+    expect(analyzeNetworkPath(data, { ...request, destination: { ...request.destination, port: 53 } }).networkPolicy?.verdict).toBe("blocked");
+  });
+});

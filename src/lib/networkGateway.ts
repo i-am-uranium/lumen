@@ -1,4 +1,4 @@
-import { analyzeNetworkPath, labelsMatchSelector, type NetworkDebugSnapshot } from "./networkDebugger";
+import { labelsMatchSelector, type NetworkDebugSnapshot, type NetworkService, type NetworkServicePort } from "./networkDebugger";
 
 type Ref = { name: string; namespace?: string; kind?: string; group?: string; sectionName?: string; port?: number };
 type Condition = { type: string; status: string; reason?: string; observedGeneration?: number };
@@ -16,6 +16,41 @@ export type GatewayObject = {
   status?: { conditions?: Condition[]; parents?: { parentRef: Ref; conditions?: Condition[] }[]; listeners?: { name: string; conditions?: Condition[] }[] };
 };
 export type GatewayEvidence = { title: string; outcome: "blocked" | "allowed-by-model" | "unknown"; detail: string; objects: Ref[] };
+
+const protocol = (value?: string | null) => (value || "TCP").toUpperCase();
+
+/** A Service-wide ready endpoint is insufficient for a particular backend port.
+ * EndpointSlice port names correspond to Service port names; named target ports
+ * resolve independently on each namespace-qualified referenced Pod. */
+function backendEndpoints(snapshot: NetworkDebugSnapshot, service: NetworkService, selected: NetworkServicePort): { known: boolean; detail: string; objects: Ref[] } {
+  const objects: Ref[] = [];
+  const add = (ref: Ref) => { if (!objects.some((item) => item.kind === ref.kind && item.namespace === ref.namespace && item.name === ref.name)) objects.push(ref); };
+  if (snapshot.unavailable?.[`${service.namespace}/endpointSlices`]) return { known: false, detail: "EndpointSlice evidence is unavailable; the legacy endpoint snapshot lacks selected port mappings.", objects };
+  const slices = snapshot.endpointSlices.filter((slice) => slice.namespace === service.namespace && slice.serviceName === service.name);
+  let supported = 0, unresolved = 0;
+  for (const slice of slices) {
+    const ports = slice.ports.filter((port) => (port.name ?? "") === (selected.name ?? "") && protocol(port.protocol) === protocol(selected.protocol));
+    if (!ports.length) continue;
+    add({ kind: "EndpointSlice", namespace: slice.namespace, name: slice.name });
+    for (const endpoint of slice.endpoints.filter((candidate) => candidate.ready)) {
+      const targetRef = endpoint.targetRef;
+      const namespace = targetRef?.namespace ?? slice.namespace;
+      const pod = targetRef?.kind === "Pod" && !snapshot.unavailable?.[`${namespace}/pods`]
+        ? snapshot.pods.find((pod) => pod.namespace === namespace && pod.name === targetRef.name) : undefined;
+      const target = selected.targetPort ?? selected.port;
+      const expected = typeof target === "number" ? target : pod?.ports.find((port) => port.name === target && protocol(port.protocol) === protocol(selected.protocol))?.containerPort;
+      if (!pod || expected == null || !ports.some((port) => port.port != null && port.port === expected)) { unresolved++; continue; }
+      supported++;
+      add({ kind: "Pod", namespace: pod.namespace, name: pod.name });
+    }
+  }
+  return {
+    known: supported > 0 && unresolved === 0,
+    detail: `Ready endpoints matching the selected port and referenced pod: ${supported}. Unresolved ready endpoint references or target ports: ${unresolved}.` +
+      (supported === 0 ? " No complete selected-port EndpointSlice → Pod chain is established; missing or legacy-only port evidence remains unknown." : ""),
+    objects,
+  };
+}
 
 /** Relationship evidence only: no route selection or controller/data-plane simulation. */
 export function analyzeGatewayRelationships(snapshot: NetworkDebugSnapshot): GatewayEvidence[] {
@@ -74,9 +109,11 @@ export function analyzeGatewayRelationships(snapshot: NetworkDebugSnapshot): Gat
         }
         const service = snapshot.services.find(s => s.namespace === ns && s.name === backend.name);
         if (!service) { emit("Backend Service missing", snapshot.unavailable?.[`${ns}/services`] || !snapshot.loadedNamespaces?.includes(ns) ? "unknown" : "blocked", `${ns}/${backend.name} is absent from available evidence.`, refs); continue; }
-        const path = analyzeNetworkPath(snapshot, { destination: { kind: "Service", namespace: ns, name: backend.name, port: backend.port } });
-        const unavailable = snapshot.unavailable?.[`${ns}/pods`] || (snapshot.unavailable?.[`${ns}/endpointSlices`] && snapshot.unavailable?.[`${ns}/endpoints`]);
-        emit("HTTPRoute backend → Service → endpoints → pods", unavailable ? "unknown" : backend.port == null || !path.service?.portMappings.length ? "blocked" : path.service.diagnosis === "ready-endpoints" ? "allowed-by-model" : "unknown", `Service ${ns}/${backend.name}:${backend.port ?? "missing port"}; ${path.service?.diagnosis}. Ready endpoints: ${path.service?.readyEndpoints.length ?? 0}. This does not prove packet delivery.`, [...refs, ...snapshot.endpointSlices.filter(s => s.namespace === ns && s.serviceName === backend.name).map(s => ({ kind: "EndpointSlice", namespace: ns, name: s.name })), ...(path.destinationPods.map(p => ({ kind: "Pod", namespace: ns, name: p.name })))]);
+        const ports = service.ports.filter((port) => port.port === backend.port);
+        if (backend.port == null || ports.length === 0) { emit("HTTPRoute backend → Service → endpoints → pods", "blocked", `Service ${ns}/${backend.name}:${backend.port ?? "missing port"} has no matching Service port.`, refs); continue; }
+        if (ports.length !== 1) { emit("HTTPRoute backend → Service → endpoints → pods", "unknown", `Service ${ns}/${backend.name}:${backend.port} has ambiguous protocol mappings.`, refs); continue; }
+        const chain = backendEndpoints(snapshot, service, ports[0]);
+        emit("HTTPRoute backend → Service → endpoints → pods", chain.known ? "allowed-by-model" : "unknown", `Service ${ns}/${backend.name}:${backend.port} (${protocol(ports[0].protocol)}). ${chain.detail} This does not prove packet delivery.`, [...refs, ...chain.objects]);
       }
     }
   }

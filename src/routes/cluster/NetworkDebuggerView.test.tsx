@@ -33,7 +33,7 @@ describe("NetworkDebuggerView", () => {
     setup();
     await screen.findByText("Connectivity remains unknown");
     fireEvent.change(screen.getByLabelText("source namespace"), { target: { value: "client" } });
-    await screen.findByText("Error: 403 Forbidden");
+    await screen.findAllByText(/Error: 403 Forbidden/);
     expect(screen.getByText("service route")).toBeInTheDocument();
     expect(screen.getByText("unknown", { selector: "h2" })).toBeInTheDocument();
   });
@@ -55,8 +55,36 @@ describe("NetworkDebuggerView", () => {
     await waitFor(() => expect(k8s.networkDebugSnapshot).toHaveBeenCalledWith("client", "test"));
     vi.mocked(k8s.networkDebugSnapshot).mockImplementation(async ns => { if (ns === "client") throw new Error("403 refreshed"); return snapshot(ns); });
     fireEvent.click(screen.getByRole("button", { name: "refresh" }));
-    await screen.findByText("Error: 403 refreshed");
+    await screen.findAllByText(/Error: 403 refreshed/);
     expect(screen.getByText("unknown", { selector: "h2" })).toBeInTheDocument();
   });
 
+});
+
+it("drops stale source Gateway, backend and grant conclusions after its refresh fails", async () => {
+  const target = snapshot("shop");
+  target.gatewayResources = [{ kind: "HTTPRoute", metadata: { name: "route", namespace: "shop", generation: 1 }, spec: { parentRefs: [{ name: "edge", namespace: "client" }], rules: [{ backendRefs: [{ name: "api", namespace: "client", port: 80 }] }] } }];
+  const source = snapshot("client");
+  source.pods[0].ports = [{ name: "http", containerPort: 8080 }];
+  source.services[0].ports = [{ name: "http", port: 80, targetPort: "http" }];
+  source.endpointSlices = [{ name: "api-http", namespace: "client", serviceName: "api", ports: [{ name: "http", port: 8080 }], endpoints: [{ addresses: ["10.0.0.1"], ready: true, targetRef: { kind: "Pod", namespace: "client", name: "pod" } }] }];
+  source.gatewayResources = [
+    { kind: "Gateway", metadata: { name: "edge", namespace: "client", generation: 1 }, spec: { listeners: [{ name: "http", protocol: "HTTP", port: 80, allowedRoutes: { namespaces: { from: "All" } } }] }, status: { conditions: [{ type: "Programmed", status: "True", observedGeneration: 1 }] } },
+    { kind: "ReferenceGrant", metadata: { name: "grant", namespace: "client" }, spec: { from: [{ group: "gateway.networking.k8s.io", kind: "HTTPRoute", namespace: "shop" }], to: [{ group: "", kind: "Service", name: "api" }] } },
+  ];
+  vi.mocked(k8s.networkDebugSnapshot).mockImplementation(async (ns) => ns === "client" ? source : target);
+  setup(); await screen.findByText("Connectivity remains unknown");
+  fireEvent.change(screen.getByLabelText("source namespace"), { target: { value: "client" } });
+  const row = (title: string) => screen.getByText((content) => content.startsWith(`${title} · `)).closest("div.rounded-control")!;
+  await waitFor(() => expect(row("HTTPRoute backend → Service → endpoints → pods")).toHaveTextContent("allowed-by-model"));
+  expect(row("Gateway: Programmed")).toHaveTextContent("allowed-by-model");
+  expect(row("Cross-namespace ReferenceGrant")).toHaveTextContent("allowed-by-model");
+  vi.mocked(k8s.networkDebugSnapshot).mockImplementation(async (ns) => { if (ns === "client") throw new Error("source refresh denied"); return target; });
+  fireEvent.click(screen.getByRole("button", { name: "refresh" }));
+  await screen.findAllByText(/source refresh denied/);
+  await waitFor(() => expect(screen.queryByText((content) => content.startsWith("Gateway: Programmed · "))).not.toBeInTheDocument());
+  expect(row("Gateway parent missing")).toHaveTextContent("unknown");
+  expect(row("Cross-namespace ReferenceGrant")).toHaveTextContent("unknown");
+  expect(row("Backend Service missing")).toHaveTextContent("unknown");
+  expect(screen.getByText(/Evidence unavailable: client\/gateways/)).toBeInTheDocument();
 });
