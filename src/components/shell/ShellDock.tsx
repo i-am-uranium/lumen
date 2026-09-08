@@ -148,6 +148,7 @@ function ContainerListProvider({ tab }: { tab: ShellTab }) {
     staleTime: 60_000,
   });
   const opts = (data ?? []).filter((c) => !c.is_init).map((c) => ({ name: c.name }));
+  if (tab.session.container && !opts.some((item) => item.name === tab.session.container)) opts.push({ name: tab.session.container });
   return <ShellPanel
     key={JSON.stringify([tab.id, tab.session.container, tab.session.command])}
     session={tab.session} containerOptions={opts}

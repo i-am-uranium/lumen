@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use futures::AsyncReadExt as FuturesAsyncReadExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
     api::{Api, ListParams, LogParams},
@@ -31,6 +32,491 @@ pub struct LogSelector {
     /// and the kubelet only retains a single previous log slice.
     #[serde(default)]
     pub previous: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BoundedLogCapture {
+    pub text: String,
+    pub truncated: bool,
+    pub bytes: usize,
+}
+
+fn capture_params(
+    container: String,
+    previous: bool,
+    tail_lines: Option<i64>,
+    limit_bytes: i64,
+) -> LogParams {
+    LogParams {
+        container: Some(container),
+        follow: false,
+        previous,
+        tail_lines,
+        limit_bytes: Some(limit_bytes),
+        timestamps: true,
+        ..Default::default()
+    }
+}
+
+fn cap_capture_text(mut text: String, limit_bytes: usize) -> (String, bool) {
+    let truncated = text.len() >= limit_bytes;
+    if text.len() > limit_bytes {
+        let mut end = limit_bytes;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    (text, truncated)
+}
+
+/// Includes client/credential startup, both UID reads, and the finite body read.
+/// Keeping the deadline here lets native tests exercise the same boundary as IPC.
+pub async fn capture_logs_with_deadline(
+    client: impl std::future::Future<Output = AppResult<Client>>,
+    selector: LogSelector,
+    limit_bytes: i64,
+    expected_uid: &str,
+    budget: std::time::Duration,
+) -> AppResult<BoundedLogCapture> {
+    tokio::time::timeout(budget, async {
+        capture_logs(client.await?, selector, limit_bytes, expected_uid).await
+    })
+    .await
+    .map_err(|_| AppError::K8s("bounded log capture timed out".into()))?
+}
+
+async fn read_bounded_capture(
+    stream: impl futures::AsyncRead + Unpin,
+    cap: usize,
+) -> AppResult<BoundedLogCapture> {
+    let mut bytes = Vec::with_capacity(cap + 1);
+    stream
+        .take((cap + 1) as u64)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let transport_truncated = bytes.len() > cap;
+    bytes.truncate(cap);
+    let (text, utf8_truncated) =
+        cap_capture_text(String::from_utf8_lossy(&bytes).into_owned(), cap);
+    Ok(BoundedLogCapture {
+        bytes: text.len(),
+        text,
+        truncated: transport_truncated || utf8_truncated,
+    })
+}
+
+pub async fn capture_logs(
+    client: Client,
+    selector: LogSelector,
+    limit_bytes: i64,
+    expected_uid: &str,
+) -> AppResult<BoundedLogCapture> {
+    let pod = selector
+        .pod_name
+        .ok_or_else(|| AppError::K8s("pod name required".into()))?;
+    let container = selector
+        .container
+        .ok_or_else(|| AppError::K8s("container required".into()))?;
+    let api: Api<Pod> = Api::namespaced(client, &selector.namespace);
+    let before_uid = api
+        .get(&pod)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?
+        .metadata
+        .uid;
+    if before_uid.as_deref() != Some(expected_uid) {
+        return Err(AppError::K8s("pod identity changed before capture".into()));
+    }
+    let params = capture_params(
+        container,
+        selector.previous,
+        selector.tail_lines,
+        limit_bytes,
+    );
+    let stream = api
+        .log_stream(&pod, &params)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let capture = read_bounded_capture(stream, limit_bytes.max(1) as usize).await?;
+    let after_uid = api
+        .get(&pod)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?
+        .metadata
+        .uid;
+    if after_uid.as_deref() != Some(expected_uid) {
+        return Err(AppError::K8s("pod identity changed during capture".into()));
+    }
+    Ok(capture)
+}
+
+#[cfg(test)]
+mod bounded_capture_tests {
+    use super::*;
+    use std::{
+        pin::Pin,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        },
+        task::{Context, Poll},
+        time::Duration,
+    };
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    const POD: &str = "/api/v1/namespaces/ns/pods/api";
+    const LOG: &str = "/api/v1/namespaces/ns/pods/api/log";
+    const BUDGET: Duration = Duration::from_millis(150);
+
+    fn selector(previous: bool) -> LogSelector {
+        LogSelector {
+            namespace: "ns".into(),
+            pod_name: Some("api".into()),
+            container: Some("worker".into()),
+            label_selector: None,
+            since_seconds: None,
+            tail_lines: Some(201),
+            previous,
+        }
+    }
+
+    fn client(uri: &str) -> Client {
+        Client::try_from(kube::Config::new(uri.parse().unwrap())).unwrap()
+    }
+
+    fn pod_response(uid: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": "api", "namespace": "ns", "uid": uid}
+        }))
+    }
+
+    async fn mount_pod(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path(POD))
+            .respond_with(pod_response("original"))
+            .mount(server)
+            .await;
+    }
+
+    async fn capture(server: &MockServer, previous: bool) -> AppResult<BoundedLogCapture> {
+        capture_logs_with_deadline(
+            async { Ok(client(&server.uri())) },
+            selector(previous),
+            20_000,
+            "original",
+            Duration::from_secs(2),
+        )
+        .await
+    }
+
+    fn assert_timeout(result: AppResult<BoundedLogCapture>) {
+        let error =
+            result.expect_err("deadline must reject, never return captured partial/empty text");
+        assert!(
+            error.to_string().contains("bounded log capture timed out"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_current_and_previous_request_finite_selected_container_and_bounds() {
+        for previous in [false, true] {
+            let server = MockServer::start().await;
+            mount_pod(&server).await;
+            Mock::given(method("GET"))
+                .and(path(LOG))
+                .respond_with(ResponseTemplate::new(200).set_body_string("line\n"))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = capture(&server, previous).await.unwrap();
+            assert_eq!(result.text, "line\n");
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(
+                requests.iter().map(|r| r.url.path()).collect::<Vec<_>>(),
+                [POD, LOG, POD]
+            );
+            let query: std::collections::HashMap<_, _> = requests[1].url.query_pairs().collect();
+            assert_eq!(query.get("container").map(|s| s.as_ref()), Some("worker"));
+            assert_eq!(query.get("tailLines").map(|s| s.as_ref()), Some("201"));
+            assert_eq!(query.get("limitBytes").map(|s| s.as_ref()), Some("20000"));
+            assert_eq!(query.get("timestamps").map(|s| s.as_ref()), Some("true"));
+            // Kubernetes defaults omitted booleans to false.
+            assert_ne!(query.get("follow").map(|s| s.as_ref()), Some("true"));
+            assert_eq!(query.get("previous").is_some_and(|s| s == "true"), previous);
+        }
+    }
+
+    #[tokio::test]
+    async fn http_empty_eof_is_successful_empty_capture() {
+        let server = MockServer::start().await;
+        mount_pod(&server).await;
+        Mock::given(path(LOG))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::new()))
+            .mount(&server)
+            .await;
+        let result = capture(&server, false).await.unwrap();
+        assert_eq!(result.text, "");
+        assert_eq!(result.bytes, 0);
+        assert!(!result.truncated);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn http_nonempty_eof_retains_text_without_truncation() {
+        let server = MockServer::start().await;
+        mount_pod(&server).await;
+        let text = "2026-09-08T00:00:00Z café\nlast line without newline";
+        Mock::given(path(LOG))
+            .respond_with(ResponseTemplate::new(200).set_body_string(text))
+            .mount(&server)
+            .await;
+        let result = capture(&server, true).await.unwrap();
+        assert_eq!(result.text, text);
+        assert_eq!(result.bytes, text.len());
+        assert!(!result.truncated);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn http_oversized_single_line_ignoring_server_limit_is_locally_bounded() {
+        let server = MockServer::start().await;
+        mount_pod(&server).await;
+        let body = format!("{}{}", "a".repeat(19_999), "é".repeat(50_000));
+        Mock::given(path(LOG))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let result = capture(&server, false).await.unwrap();
+        assert_eq!(result.text, "a".repeat(19_999));
+        assert_eq!(result.bytes, 19_999);
+        assert!(result.truncated);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    struct CountingReader {
+        body: Vec<u8>,
+        consumed: Arc<AtomicUsize>,
+        dropped: Arc<AtomicBool>,
+        chunk_size: usize,
+    }
+    impl futures::AsyncRead for CountingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<std::io::Result<usize>> {
+            let consumed = self.consumed.load(Ordering::SeqCst);
+            let count = buf
+                .len()
+                .min(self.chunk_size)
+                .min(self.body.len() - consumed);
+            buf[..count].copy_from_slice(&self.body[consumed..consumed + count]);
+            self.consumed.fetch_add(count, Ordering::SeqCst);
+            Poll::Ready(Ok(count))
+        }
+    }
+    impl Drop for CountingReader {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn production_reader_consumes_only_20001_bytes_and_drops_split_utf8_body() {
+        // One-byte chunks split every multibyte code point across read calls.
+        for chunk_size in [1, 65_536] {
+            let consumed = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicBool::new(false));
+            let reader = CountingReader {
+                body: format!("{}{}", "a".repeat(19_999), "é".repeat(50_000)).into_bytes(),
+                consumed: consumed.clone(),
+                dropped: dropped.clone(),
+                chunk_size,
+            };
+            let result = read_bounded_capture(reader, 20_000).await.unwrap();
+            assert_eq!(consumed.load(Ordering::SeqCst), 20_001);
+            assert!(dropped.load(Ordering::SeqCst));
+            assert_eq!(result.text, "a".repeat(19_999));
+            assert!(result.truncated);
+            assert!(!result.text.contains('\u{fffd}'));
+        }
+    }
+
+    #[tokio::test]
+    async fn uid_mismatch_before_read_rejects_without_requesting_logs() {
+        let server = MockServer::start().await;
+        Mock::given(path(POD))
+            .respond_with(pod_response("replacement"))
+            .mount(&server)
+            .await;
+        let error = capture(&server, false).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("identity changed before capture"));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url.path(), POD);
+    }
+
+    #[tokio::test]
+    async fn uid_mismatch_after_read_rejects_instead_of_returning_collected_text() {
+        let server = MockServer::start().await;
+        let reads = Arc::new(AtomicUsize::new(0));
+        Mock::given(path(POD))
+            .respond_with(move |_: &wiremock::Request| {
+                pod_response(if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    "original"
+                } else {
+                    "replacement"
+                })
+            })
+            .mount(&server)
+            .await;
+        Mock::given(path(LOG))
+            .respond_with(ResponseTemplate::new(200).set_body_string("collected"))
+            .mount(&server)
+            .await;
+        let error = capture(&server, false).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("identity changed during capture"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn deadline_includes_client_startup_and_cancels_pending_startup() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = dropped.clone();
+        let startup = async move {
+            let _guard = DropFlag(flag);
+            std::future::pending::<AppResult<Client>>().await
+        };
+        assert_timeout(
+            capture_logs_with_deadline(startup, selector(false), 20_000, "original", BUDGET).await,
+        );
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    async fn assert_stalled_http_stage(stage: usize) {
+        let server = MockServer::start().await;
+        let reads = Arc::new(AtomicUsize::new(0));
+        Mock::given(path(POD))
+            .respond_with(move |_: &wiremock::Request| {
+                let index = reads.fetch_add(1, Ordering::SeqCst);
+                let response = pod_response("original");
+                if (stage == 0 && index == 0) || (stage == 2 && index == 1) {
+                    response.set_delay(Duration::from_secs(10))
+                } else {
+                    response
+                }
+            })
+            .mount(&server)
+            .await;
+        let response = ResponseTemplate::new(200).set_body_string("collected");
+        Mock::given(path(LOG))
+            .respond_with(if stage == 1 {
+                response.set_delay(Duration::from_secs(10))
+            } else {
+                response
+            })
+            .mount(&server)
+            .await;
+        assert_timeout(
+            capture_logs_with_deadline(
+                async { Ok(client(&server.uri())) },
+                selector(false),
+                20_000,
+                "original",
+                BUDGET,
+            )
+            .await,
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), stage + 1);
+    }
+
+    #[tokio::test]
+    async fn deadline_includes_stalled_pre_read_uid_request() {
+        assert_stalled_http_stage(0).await;
+    }
+    #[tokio::test]
+    async fn deadline_includes_stalled_log_response_startup() {
+        assert_stalled_http_stage(1).await;
+    }
+    #[tokio::test]
+    async fn deadline_includes_stalled_post_read_uid_request() {
+        assert_stalled_http_stage(2).await;
+    }
+
+    #[tokio::test]
+    async fn deadline_rejects_partial_body_and_drops_stream_without_post_read() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let uri = format!("http://{}", listener.local_addr().unwrap());
+        let partial_sent = Arc::new(AtomicBool::new(false));
+        let sent = partial_sent.clone();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+            }
+            assert!(String::from_utf8_lossy(&request).starts_with(&format!("GET {POD} ")));
+            count.fetch_add(1, Ordering::SeqCst);
+            let pod =
+                serde_json::json!({"apiVersion":"v1", "kind":"Pod", "metadata":{"uid":"original"}})
+                    .to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{pod}", pod.len()).as_bytes()).await.unwrap();
+            drop(socket);
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+            }
+            assert!(String::from_utf8_lossy(&request).starts_with(&format!("GET {LOG}?")));
+            count.fetch_add(1, Ordering::SeqCst);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\n\r\n7\r\npartial\r\n").await.unwrap();
+            sent.store(true, Ordering::SeqCst);
+            // No terminal chunk: keep the body pending until cancellation closes it.
+            let mut byte = [0];
+            let closed = matches!(socket.read(&mut byte).await, Ok(0) | Err(_));
+            let _ = closed_tx.send(closed);
+        });
+        assert_timeout(
+            capture_logs_with_deadline(
+                async { Ok(client(&uri)) },
+                selector(false),
+                20_000,
+                "original",
+                BUDGET,
+            )
+            .await,
+        );
+        assert!(partial_sent.load(Ordering::SeqCst));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        // This timeout only bounds fixture cleanup; production rejection was asserted above.
+        assert!(tokio::time::timeout(Duration::from_secs(1), closed_rx)
+            .await
+            .unwrap()
+            .unwrap());
+        server.await.unwrap();
+    }
 }
 
 /// Known service-mesh / observability sidecar container names. When a pod has

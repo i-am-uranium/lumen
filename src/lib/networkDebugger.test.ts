@@ -243,8 +243,97 @@ describe("analyzeNetworkPath", () => {
     expect(result.findings).toContainEqual(
       expect.objectContaining({
         severity: "error",
-        title: "NetworkPolicy likely blocks ingress",
+        title: "NetworkPolicy model blocks the path",
       }),
     );
+  });
+});
+
+describe("bidirectional policy evidence", () => {
+  const request = { source: { kind: "Pod" as const, namespace: "shop", name: "web-1" }, destination: { kind: "Service" as const, namespace: "shop", name: "api", port: 80 } };
+  const verdict = (patch: Partial<NetworkDebugSnapshot>) => analyzeNetworkPath({ ...baseSnapshot, ...patch }, request).networkPolicy?.verdict;
+  it("requires source egress even when destination ingress is unisolated", () => {
+    expect(verdict({ networkPolicies: [{ name: "deny-egress", namespace: "shop", podSelector: { app: "web" }, policyTypes: ["Egress"], egress: [] }] })).toBe("blocked");
+  });
+  it("allows the union of rules within each isolated direction", () => {
+    expect(verdict({ networkPolicies: [
+      { name: "ingress", namespace: "shop", podSelector: { app: "api" }, ingress: [{ from: [{ podSelector: { app: "web" } }], ports: [{ port: "http" }] }] },
+      { name: "egress", namespace: "shop", podSelector: { app: "web" }, policyTypes: ["Egress"], egress: [{ to: [{ podSelector: { app: "api" } }], ports: [{ port: 8080 }] }] },
+    ] })).toBe("allowed");
+  });
+  it("preserves denied policy evidence instead of treating it as no policies", () => {
+    expect(verdict({ unavailable: { "shop/networkPolicies": "403 Forbidden" } })).toBe("unknown");
+  });
+  it("does not drop unsupported selector expressions or IP blocks", () => {
+    expect(verdict({ networkPolicies: [{ name: "expression", namespace: "shop", podSelector: {}, unsupported: true }] })).toBe("unknown");
+    expect(verdict({ networkPolicies: [{ name: "ip", namespace: "shop", podSelector: { app: "api" }, ingress: [{ from: [{ ipBlock: { cidr: "10.0.0.0/8" } }] }] }] })).toBe("unknown");
+  });
+  it("resolves named ports independently for destination pods", () => {
+    expect(verdict({ pods: baseSnapshot.pods.map(p => p.name === "api-2" ? { ...p, ports: [{ name: "http", containerPort: 9090 }] } : p), networkPolicies: [{ name: "numeric", namespace: "shop", podSelector: { app: "api" }, ingress: [{ ports: [{ port: 8080 }] }] }] })).toBe("unknown");
+  });
+  it("does not let an allowing policy for one pod allow another isolated pod", () => {
+    expect(verdict({ pods: baseSnapshot.pods.map(p => ({ ...p, labels: { ...p.labels, instance: p.name } })), networkPolicies: [
+      { name: "deny", namespace: "shop", podSelector: { app: "api" }, ingress: [] },
+      { name: "allow-one", namespace: "shop", podSelector: { instance: "api-1" }, ingress: [{}] },
+    ] })).toBe("unknown");
+  });
+  it("honors numeric ranges and protocol", () => {
+    expect(verdict({ networkPolicies: [{ name: "range", namespace: "shop", podSelector: { app: "api" }, ingress: [{ ports: [{ port: 8000, endPort: 9000 }] }] }] })).toBe("allowed");
+    expect(verdict({ networkPolicies: [{ name: "udp", namespace: "shop", podSelector: { app: "api" }, ingress: [{ ports: [{ port: 8080, protocol: "UDP" }] }] }] })).toBe("blocked");
+  });
+  it("supports cross-namespace AND namespace/pod selectors, including empty namespaceSelector", () => {
+    const pods = baseSnapshot.pods.map(p => p.name === "web-1" ? { ...p, namespace: "client" } : p);
+    const snapshot = { ...baseSnapshot, pods, namespaces: [...baseSnapshot.namespaces, { name: "client", labels: { team: "client" } }], networkPolicies: [{ name: "cross", namespace: "shop", podSelector: { app: "api" }, ingress: [{ from: [{ namespaceSelector: {}, podSelector: { app: "web" } }] }] }] };
+    const req = { ...request, source: { ...request.source, namespace: "client" } };
+    expect(analyzeNetworkPath(snapshot, req).networkPolicy?.verdict).toBe("allowed");
+    snapshot.networkPolicies[0].ingress[0].from[0].podSelector.app = "other";
+    expect(analyzeNetworkPath(snapshot, req).networkPolicy?.verdict).toBe("blocked");
+  });
+  it("does not assume empty namespace selector means same namespace", () => {
+    const snapshot = { ...baseSnapshot, namespaces: [], networkPolicies: [{ name: "cross", namespace: "shop", podSelector: { app: "api" }, ingress: [{ from: [{ namespaceSelector: {} }] }] }] };
+    expect(analyzeNetworkPath(snapshot, request).networkPolicy?.verdict).toBe("unknown");
+  });
+  it("retains healthy configuration with explicit unknown external connectivity", () => {
+    expect(analyzeNetworkPath(baseSnapshot, request).findings).toContainEqual(expect.objectContaining({ title: "Connectivity remains unknown" }));
+  });
+  it("uses Pod destination ports and never guesses a missing source", () => {
+    const snapshot = { ...baseSnapshot, networkPolicies: [{ name: "port", namespace: "shop", podSelector: { app: "api" }, ingress: [{ ports: [{ port: 8080 }] }] }] };
+    expect(analyzeNetworkPath(snapshot, { ...request, destination: { kind: "Pod", namespace: "shop", name: "api-1", port: 9000 } }).networkPolicy?.verdict).toBe("blocked");
+    expect(analyzeNetworkPath(snapshot, { destination: request.destination }).networkPolicy?.verdict).toBe("unknown");
+  });
+  it("does not diagnose absent endpoints when both endpoint reads failed", () => {
+    const result = analyzeNetworkPath({ ...baseSnapshot, endpointSlices: [], unavailable: { "shop/endpointSlices": "403", "shop/endpoints": "403" } }, request);
+    expect(result.service?.diagnosis).toBe("evidence-unavailable");
+    expect(result.findings.some(f => f.title === "Service has no endpoints")).toBe(false);
+  });
+});
+
+describe("review regressions: partial endpoints and unspecified protocols", () => {
+  it.each(["endpointSlices", "endpoints"])("does not infer endpoint absence when %s is unavailable", (api) => {
+    const data = structuredClone(baseSnapshot);
+    data.endpointSlices = []; data.endpoints = []; data.unavailable = { [`shop/${api}`]: "403 Forbidden" };
+    const result = analyzeNetworkPath(data, { destination: { kind: "Service", namespace: "shop", name: "api", port: 80 } });
+    expect(result.service?.diagnosis).toBe("evidence-unavailable");
+    expect(result.findings.some((finding) => finding.title === "Service has no endpoints")).toBe(false);
+  });
+  it.each(["endpointSlices", "endpoints"])("preserves positive endpoints from the successful API when %s failed", (api) => {
+    const data = structuredClone(baseSnapshot);
+    data.unavailable = { [`shop/${api}`]: "403 Forbidden" };
+    if (api === "endpointSlices") { data.endpoints = [{ namespace: "shop", name: "api", addresses: data.endpointSlices[0].endpoints }]; data.endpointSlices = []; }
+    const result = analyzeNetworkPath(data, { destination: { kind: "Service", namespace: "shop", name: "api", port: 80 } });
+    expect(result.service?.diagnosis).toBe("ready-endpoints");
+    expect(result.service?.readyEndpoints).toHaveLength(1);
+  });
+  it.each([false, true])("requires a port for a mixed-protocol Service regardless of order (reversed=%s)", (reverse) => {
+    const data = structuredClone(baseSnapshot);
+    data.services[0].ports = [{ name: "http", protocol: "TCP", port: 80, targetPort: 8080 }, { name: "dns", protocol: "UDP", port: 53, targetPort: 53 }];
+    if (reverse) data.services[0].ports.reverse();
+    data.networkPolicies = [{ name: "tcp-only", namespace: "shop", podSelector: { app: "api" }, policyTypes: ["Ingress"], ingress: [{ ports: [{ protocol: "TCP" }] }] }];
+    const request = { source: { kind: "Pod" as const, namespace: "shop", name: "web-1" }, destination: { kind: "Service" as const, namespace: "shop", name: "api" } };
+    const any = analyzeNetworkPath(data, request);
+    expect(any.networkPolicy?.verdict).toBe("unknown");
+    expect(any.networkPolicy?.reason).toMatch(/select.*port/i);
+    expect(analyzeNetworkPath(data, { ...request, destination: { ...request.destination, port: 80 } }).networkPolicy?.verdict).toBe("allowed");
+    expect(analyzeNetworkPath(data, { ...request, destination: { ...request.destination, port: 53 } }).networkPolicy?.verdict).toBe("blocked");
   });
 });

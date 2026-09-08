@@ -148,11 +148,58 @@ impl AttachRegistry {
 pub struct StartAttachRequest {
     pub namespace: String,
     pub pod: String,
+    #[serde(default)]
+    pub pod_uid: Option<String>,
     pub container: Option<String>,
     pub command: Vec<String>,
     pub tty: bool,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+}
+
+async fn verify_attach_target(api: &Api<Pod>, req: &StartAttachRequest) -> AppResult<()> {
+    if req.pod_uid.is_some()
+        || req
+            .container
+            .as_deref()
+            .is_some_and(|c| c.starts_with("lumen-debug-"))
+    {
+        let pod = tokio::time::timeout(std::time::Duration::from_secs(10), api.get(&req.pod))
+            .await
+            .map_err(|_| AppError::Network("Timed out checking debug pod identity".into()))?
+            .map_err(|e| AppError::K8s(e.to_string()))?;
+        // A name prefix is not proof of an ephemeral container. Legacy Shell
+        // requests carry no UID, including ordinary containers on Windows pods.
+        if req.pod_uid.is_none()
+            && pod.spec.as_ref().is_some_and(|spec| {
+                req.container.as_deref().is_some_and(|name| {
+                    spec.containers
+                        .iter()
+                        .any(|container| container.name == name)
+                        && !spec
+                            .ephemeral_containers
+                            .as_ref()
+                            .is_some_and(|containers| {
+                                containers.iter().any(|container| container.name == name)
+                            })
+                })
+            })
+        {
+            return Ok(());
+        }
+        let uid = req
+            .pod_uid
+            .as_deref()
+            .filter(|uid| !uid.is_empty())
+            .ok_or_else(|| {
+                AppError::Conflict(
+                    "Debug terminal requires the captured pod UID. Reopen it from Debug container."
+                        .into(),
+                )
+            })?;
+        crate::k8s::debug::verify_terminal(&pod, uid, req.container.as_deref())?;
+    }
+    Ok(())
 }
 
 pub async fn start(
@@ -183,6 +230,7 @@ pub async fn start(
     }
 
     let api: Api<Pod> = Api::namespaced(client, &req.namespace);
+    verify_attach_target(&api, &req).await?;
     protection.authorize()?;
     let mut attached = api
         .exec(&req.pod, &req.command, &ap)
@@ -476,5 +524,152 @@ mod tests {
         assert!(registry.write_stdin("one", vec![b'x']).await.is_err());
         assert_eq!(registry.sessions.read().await.len(), 1);
         registry.close_all().await;
+    }
+    fn prefixed_request(uid: Option<&str>) -> super::StartAttachRequest {
+        super::StartAttachRequest {
+            namespace: "apps".into(),
+            pod: "api".into(),
+            pod_uid: uid.map(str::to_owned),
+            container: Some("lumen-debug-app".into()),
+            command: vec!["/bin/sh".into()],
+            tty: true,
+            cols: None,
+            rows: None,
+        }
+    }
+
+    async fn check_target(
+        pod: serde_json::Value,
+        uid: Option<&str>,
+    ) -> crate::error::AppResult<()> {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaces/apps/pods/api"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pod))
+            .mount(&server)
+            .await;
+        let client =
+            kube::Client::try_from(kube::Config::new(server.uri().parse().unwrap())).unwrap();
+        super::verify_attach_target(
+            &kube::Api::namespaced(client, "apps"),
+            &prefixed_request(uid),
+        )
+        .await
+    }
+
+    fn regular_prefixed_pod() -> serde_json::Value {
+        serde_json::json!({"apiVersion":"v1", "kind":"Pod", "metadata":{"uid":"original"},
+            "spec":{"os":{"name":"windows"},"containers":[{"name":"lumen-debug-app","image":"app"}]},
+            "status":{"phase":"Running"}})
+    }
+
+    fn ephemeral_prefixed_pod(state: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"apiVersion":"v1", "kind":"Pod", "metadata":{"uid":"original"},
+            "spec":{"containers":[{"name":"app","image":"app"}],
+                "ephemeralContainers":[{"name":"lumen-debug-app","image":"busybox"}]},
+            "status":{"phase":"Running", "ephemeralContainerStatuses":[{"name":"lumen-debug-app",
+                "image":"busybox", "imageID":"test", "ready":true,"restartCount":0,"state":state}]}})
+    }
+
+    #[tokio::test]
+    async fn ordinary_prefixed_container_without_uid_keeps_legacy_shell_behavior_on_windows() {
+        check_target(regular_prefixed_pod(), None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn actual_prefixed_ephemeral_container_requires_captured_uid() {
+        for uid in [None, Some("")] {
+            assert!(matches!(
+                check_target(
+                    ephemeral_prefixed_pod(serde_json::json!({"running":{}})),
+                    uid
+                )
+                .await,
+                Err(crate::error::AppError::Conflict(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn prefixed_ephemeral_terminal_preserves_uid_and_running_checks() {
+        let running = ephemeral_prefixed_pod(serde_json::json!({"running":{}}));
+        check_target(running.clone(), Some("original"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            check_target(running, Some("replacement")).await,
+            Err(crate::error::AppError::Conflict(_))
+        ));
+        for state in [
+            serde_json::json!({"waiting":{"reason":"ContainerCreating"}}),
+            serde_json::json!({"terminated":{"exitCode":0}}),
+        ] {
+            assert!(
+                check_target(ephemeral_prefixed_pod(state), Some("original"))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_prefixed_container_cannot_bypass_debug_uid_requirement() {
+        let mut pod = regular_prefixed_pod();
+        pod["spec"]["containers"][0]["name"] = serde_json::json!("app");
+        assert!(check_target(pod.clone(), None).await.is_err());
+        pod.as_object_mut().unwrap().remove("spec");
+        assert!(check_target(pod, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn debug_attach_checks_uid_before_any_exec_request() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/api/v1/namespaces/apps/pods/api"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"apiVersion":"v1","kind":"Pod","metadata":{"name":"api","namespace":"apps","uid":"replacement"},"spec":{"containers":[{"name":"app"}]},"status":{"phase":"Running"}}))).mount(&server).await;
+        for uid in [None, Some("captured-uid".to_owned())] {
+            let client =
+                kube::Client::try_from(kube::Config::new(server.uri().parse().unwrap())).unwrap();
+            let request = super::StartAttachRequest {
+                namespace: "apps".into(),
+                pod: "api".into(),
+                pod_uid: uid,
+                container: Some("lumen-debug-one".into()),
+                command: vec!["/bin/sh".into()],
+                tty: true,
+                cols: None,
+                rows: None,
+            };
+            let protection = super::SessionProtection {
+                context: "test".into(),
+                identity: String::new(),
+                policy: std::sync::Arc::new(
+                    crate::protection::ContextProtectionPolicy::unavailable(),
+                ),
+            };
+            let channel = tauri::ipc::Channel::new(|_| Ok(()));
+            let result = super::start(
+                client,
+                super::AttachRegistry::new(),
+                request,
+                channel,
+                protection,
+            )
+            .await;
+            assert!(matches!(result, Err(crate::error::AppError::Conflict(_))));
+        }
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "GET" && !request.url.path().contains("exec")));
     }
 }

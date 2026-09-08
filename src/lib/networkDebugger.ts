@@ -82,12 +82,14 @@ export type NetworkIngress = {
 };
 
 export type NetworkPolicyPeer = {
+  unsupported?: boolean;
   podSelector?: LabelMap | null;
   namespaceSelector?: LabelMap | null;
   ipBlock?: { cidr: string; except?: string[] } | null;
 };
 
 export type NetworkPolicyPort = {
+  endPort?: number | null;
   protocol?: string | null;
   port?: number | string | null;
 };
@@ -98,6 +100,8 @@ export type NetworkPolicyIngressRule = {
 };
 
 export type NetworkPolicyResource = {
+  unsupported?: boolean;
+  egress?: { to?: NetworkPolicyPeer[] | null; ports?: NetworkPolicyPort[] | null }[] | null;
   name: string;
   namespace: string;
   podSelector: LabelMap;
@@ -106,6 +110,9 @@ export type NetworkPolicyResource = {
 };
 
 export type NetworkDebugSnapshot = {
+  loadedNamespaces?: string[];
+  unavailable?: Record<string, string>;
+  gatewayResources?: import("./networkGateway").GatewayObject[];
   namespaces: NetworkNamespace[];
   pods: NetworkPod[];
   services: NetworkService[];
@@ -142,6 +149,7 @@ export type NetworkFinding = {
 };
 
 export type ServiceEndpointDiagnosis =
+  | "evidence-unavailable"
   | "headless-or-manual"
   | "selector-matches-no-pods"
   | "no-endpoints"
@@ -258,12 +266,13 @@ function collectEndpointAddresses(
   const sliceAddresses = snapshot.endpointSlices
     .filter(
       (slice) =>
-        slice.namespace === service.namespace && slice.serviceName === service.name,
+        slice.namespace === service.namespace && slice.serviceName === service.name &&
+        !snapshot.unavailable?.[`${service.namespace}/endpointSlices`],
     )
     .flatMap((slice) => slice.endpoints);
   if (sliceAddresses.length > 0) return sliceAddresses;
   return snapshot.endpoints
-    .filter((endpoint) => sameResource(endpoint, service.namespace, service.name))
+    .filter((endpoint) => sameResource(endpoint, service.namespace, service.name) && !snapshot.unavailable?.[`${service.namespace}/endpoints`])
     .flatMap((endpoint) => endpoint.addresses);
 }
 
@@ -331,7 +340,12 @@ function analyzeService(
         resolvedTargetPort,
       };
     });
-  const diagnosis = diagnoseService(service, backingPods, endpoints, readyEndpoints);
+  // Either API can independently contain useful endpoints (including manually
+  // managed EndpointSlices). A failed read cannot establish absence or prove
+  // that the visible not-ready endpoints are the only endpoints.
+  const endpointEvidenceMissing = snapshot.unavailable?.[`${service.namespace}/endpointSlices`] || snapshot.unavailable?.[`${service.namespace}/endpoints`];
+  const incomplete = snapshot.unavailable?.[`${service.namespace}/pods`] || (endpointEvidenceMissing && readyEndpoints.length === 0);
+  const diagnosis = incomplete ? "evidence-unavailable" : diagnoseService(service, backingPods, endpoints, readyEndpoints);
   return {
     service,
     selectorMatched: backingPods.length > 0,
@@ -374,11 +388,6 @@ function diagnoseService(
   return "ready-endpoints";
 }
 
-function destinationTargetPort(service: NetworkServiceAnalysis | null): number | string | null {
-  const first = service?.portMappings[0];
-  if (!first) return null;
-  return first.resolvedTargetPort ?? first.targetPort;
-}
 
 function ingressPathMatches(rulePath: string, requestedPath: string): boolean {
   if (!requestedPath) return true;
@@ -409,151 +418,69 @@ function findIngressBackend(
   return null;
 }
 
-function includesIngress(policy: NetworkPolicyResource): boolean {
-  if (!policy.policyTypes || policy.policyTypes.length === 0) return true;
-  return policy.policyTypes.includes("Ingress");
-}
-
-function policySelectsAnyPod(
-  policy: NetworkPolicyResource,
-  pods: NetworkPod[],
-): boolean {
-  return pods.some(
-    (pod) =>
-      pod.namespace === policy.namespace && labelsMatchSelector(policy.podSelector, pod.labels),
-  );
-}
-
-function rulePortMatches(
-  ports: NetworkPolicyPort[] | null | undefined,
-  targetPort: number | string | null,
-): boolean {
-  if (!ports || ports.length === 0 || targetPort == null) return true;
-  return ports.some((port) => {
-    if (port.port == null) return true;
-    if (typeof port.port === "number" && typeof targetPort === "number") {
-      return port.port === targetPort;
-    }
-    return String(port.port) === String(targetPort);
-  });
-}
-
-function peerMatchesSource(
-  peer: NetworkPolicyPeer,
-  sourcePod: NetworkPod,
-  namespaces: NetworkNamespace[],
-  policyNamespace: string,
-): boolean | "unknown" {
-  if (peer.ipBlock) return "unknown";
-  const sourceNamespace = namespaces.find((ns) => ns.name === sourcePod.namespace);
+type Match = boolean | "unknown";
+function peerMatches(peer: NetworkPolicyPeer, pod: NetworkPod, snapshot: NetworkDebugSnapshot, namespace: string): Match {
+  if (peer.unsupported || peer.ipBlock) return "unknown";
+  if (!peer.namespaceSelector && !peer.podSelector) return true;
   if (peer.namespaceSelector) {
-    if (!sourceNamespace) return "unknown";
-    if (!labelsMatchSelector(peer.namespaceSelector, sourceNamespace.labels)) return false;
-  } else if (sourcePod.namespace !== policyNamespace) {
-    return false;
-  }
-  if (peer.podSelector && !labelsMatchSelector(peer.podSelector, sourcePod.labels)) {
-    return false;
-  }
-  return true;
+    const ns = snapshot.namespaces.find((item) => item.name === pod.namespace);
+    if (!ns) return "unknown";
+    if (!labelsMatchSelector(peer.namespaceSelector, ns.labels)) return false;
+  } else if (pod.namespace !== namespace) return false;
+  return !peer.podSelector || labelsMatchSelector(peer.podSelector, pod.labels);
 }
-
-function ruleAllowsSource(
-  rule: NetworkPolicyIngressRule,
-  sourcePod: NetworkPod,
-  namespaces: NetworkNamespace[],
-  policyNamespace: string,
-): boolean | "unknown" {
-  const peers = rule.from;
-  if (!peers || peers.length === 0) return true;
+function portMatches(ports: NetworkPolicyPort[] | null | undefined, target: number | string | null, pod: NetworkPod, protocol: string): Match {
+  if (!ports?.length) return true;
   let unknown = false;
-  for (const peer of peers) {
-    const matched = peerMatchesSource(peer, sourcePod, namespaces, policyNamespace);
-    if (matched === true) return true;
-    if (matched === "unknown") unknown = true;
+  const resolve = (value: number | string | null) => typeof value === "string"
+    ? pod.ports.find((p) => p.name === value && normalizeProtocol(p.protocol) === protocol)?.containerPort ?? null : value;
+  for (const port of ports) {
+    if (normalizeProtocol(port.protocol) !== protocol) continue;
+    if (port.port == null) return true;
+    const actual = resolve(target), expected = resolve(port.port);
+    if (actual == null || expected == null) { unknown = true; continue; }
+    if (actual >= expected && actual <= (port.endPort ?? expected)) return true;
   }
   return unknown ? "unknown" : false;
 }
-
-function analyzeNetworkPolicies(
-  snapshot: NetworkDebugSnapshot,
-  sourcePod: NetworkPod | null,
-  destinationPods: NetworkPod[],
-  targetPort: number | string | null,
-): NetworkPolicyAnalysis | null {
-  if (destinationPods.length === 0) return null;
-  const policies = snapshot.networkPolicies
-    .filter((policy) => includesIngress(policy))
-    .filter((policy) => policySelectsAnyPod(policy, destinationPods))
-    .sort(compareByName);
-  if (policies.length === 0) {
-    return {
-      verdict: "allowed",
-      approximate: true,
-      reason: "No ingress NetworkPolicy selects the destination pods.",
-      policies,
-      allowingPolicies: [],
-    };
-  }
-  if (!sourcePod) {
-    return {
-      verdict: "unknown",
-      approximate: true,
-      reason: "Destination pods are isolated, but no source pod was selected.",
-      policies,
-      allowingPolicies: [],
-    };
-  }
-
-  const allowingPolicies: NetworkPolicyResource[] = [];
-  let sawUnknownPeer = false;
-  for (const policy of policies) {
-    for (const rule of policy.ingress ?? []) {
-      if (!rulePortMatches(rule.ports, targetPort)) continue;
-      const sourceMatch = ruleAllowsSource(
-        rule,
-        sourcePod,
-        snapshot.namespaces,
-        policy.namespace,
-      );
-      if (sourceMatch === true) {
-        allowingPolicies.push(policy);
-        break;
+function analyzeNetworkPolicies(snapshot: NetworkDebugSnapshot, source: NetworkPod | null, destinations: NetworkPod[], target: number | string | null, protocol = "TCP"): NetworkPolicyAnalysis | null {
+  const policies: NetworkPolicyResource[] = [], allowingPolicies: NetworkPolicyResource[] = [];
+  const result = (verdict: NetworkPolicyVerdict, reason: string): NetworkPolicyAnalysis => ({ verdict, reason, policies: [...new Set(policies)], allowingPolicies: [...new Set(allowingPolicies)], approximate: true });
+  if (!destinations.length || !source) return result("unknown", "Select an observed source pod and destination pods to evaluate both ingress and egress.");
+  const direction = (isolated: NetworkPod, peer: NetworkPod, destination: NetworkPod, kind: "Ingress" | "Egress"): NetworkPolicyVerdict => {
+    if (snapshot.unavailable?.[`${isolated.namespace}/networkPolicies`]) return "unknown";
+    const selected = snapshot.networkPolicies.filter(p => p.namespace === isolated.namespace && (p.unsupported || labelsMatchSelector(p.podSelector, isolated.labels)) &&
+      (p.policyTypes?.length ? p.policyTypes.includes(kind) : kind === "Ingress" || !!p.egress?.length));
+    policies.push(...selected);
+    if (!selected.length) return "allowed";
+    let unknown = false;
+    for (const policy of selected) {
+      if (policy.unsupported) { unknown = true; continue; }
+      const rules = kind === "Ingress" ? policy.ingress : policy.egress?.map(r => ({ from: r.to, ports: r.ports }));
+      for (const rule of rules ?? []) {
+        const port = portMatches(rule.ports, target, destination, protocol);
+        if (port === false) continue;
+        const matches = rule.from?.length ? rule.from.map(p => peerMatches(p, peer, snapshot, policy.namespace)) : [true];
+        if (port === true && matches.includes(true)) { allowingPolicies.push(policy); return "allowed"; }
+        if ((port === "unknown" && matches.some(m => m !== false)) || matches.includes("unknown")) unknown = true;
       }
-      if (sourceMatch === "unknown") sawUnknownPeer = true;
     }
-  }
-  if (allowingPolicies.length > 0) {
-    return {
-      verdict: "allowed",
-      approximate: true,
-      reason: "At least one selected ingress NetworkPolicy rule appears to allow this source and port.",
-      policies,
-      allowingPolicies,
-    };
-  }
-  if (sawUnknownPeer) {
-    return {
-      verdict: "unknown",
-      approximate: true,
-      reason: "A selected policy uses peers that cannot be fully evaluated locally.",
-      policies,
-      allowingPolicies,
-    };
-  }
-  return {
-    verdict: "blocked",
-    approximate: true,
-    reason: "Ingress NetworkPolicies select the destination pods, but no rule matched this source and port.",
-    policies,
-    allowingPolicies,
+    return unknown ? "unknown" : "blocked";
   };
+  const verdicts = destinations.map(destination => {
+    const ingress = direction(destination, source, destination, "Ingress");
+    const egress = direction(source, destination, destination, "Egress");
+    return ingress === "blocked" || egress === "blocked" ? "blocked" : ingress === "unknown" || egress === "unknown" ? "unknown" : "allowed";
+  });
+  const verdict = verdicts.every(v => v === "allowed") ? "allowed" : verdicts.every(v => v === "blocked") ? "blocked" : "unknown";
+  return result(verdict, verdict === "allowed" ? "Source egress and destination ingress permit every selected pod in this model. Connectivity remains unverified." : verdict === "blocked" ? "Source egress or destination ingress has no matching allow rule for each destination pod." : "Evidence is unavailable, semantics are unsupported, or destination pod outcomes differ.");
 }
 
 function addServiceFindings(
   findings: NetworkFinding[],
   service: NetworkServiceAnalysis,
 ): void {
+  if (!service.portMappings.length) findings.push({ severity: "error", title: "Service port not found", detail: "The requested port is not declared by this Service." });
   if (service.diagnosis === "selector-matches-no-pods") {
     findings.push({
       severity: "error",
@@ -589,7 +516,7 @@ function addNetworkPolicyFindings(
   if (analysis.verdict === "blocked") {
     findings.push({
       severity: "error",
-      title: "NetworkPolicy likely blocks ingress",
+      title: "NetworkPolicy model blocks the path",
       detail: analysis.reason,
     });
   } else if (analysis.verdict === "unknown") {
@@ -611,7 +538,7 @@ export function analyzeNetworkPath(
   snapshot: NetworkDebugSnapshot,
   request: NetworkAnalysisRequest,
 ): NetworkPathAnalysis {
-  const findings: NetworkFinding[] = [];
+  const findings: NetworkFinding[] = Object.entries(snapshot.unavailable ?? {}).map(([resource, error]) => ({ severity: "warning", title: `Evidence unavailable: ${resource}`, detail: error }));
   const sourcePod = resolveSourcePod(snapshot, request.source);
   let serviceAnalysis: NetworkServiceAnalysis | null = null;
   let ingressAnalysis: NetworkIngressAnalysis | null = null;
@@ -691,14 +618,31 @@ export function analyzeNetworkPath(
     }
   }
 
-  const policyAnalysis = analyzeNetworkPolicies(
+  const selectedServicePort = serviceAnalysis?.portMappings.length === 1 ? serviceAnalysis.portMappings[0] : null;
+  const policyAnalysis: NetworkPolicyAnalysis | null = serviceAnalysis && !selectedServicePort ? {
+    verdict: "unknown",
+    reason: serviceAnalysis.portMappings.length > 1
+      ? "Select a specific Service port to evaluate its target port and protocol; multiple mappings remain."
+      : "Select an observed Service port; the requested port mapping is unavailable.",
+    policies: [], allowingPolicies: [], approximate: true,
+  } : analyzeNetworkPolicies(
     snapshot,
     sourcePod,
     destinationPods,
-    destinationTargetPort(serviceAnalysis),
+    selectedServicePort?.targetPort ?? (request.destination.kind === "Pod" ? request.destination.port ?? null : null),
+    selectedServicePort?.protocol ?? "TCP",
   );
+  if (policyAnalysis && request.source?.kind === "Workload" && snapshot.pods.filter(p => p.namespace === request.source!.namespace && labelsMatchSelector(request.source!.kind === "Workload" ? request.source!.selector : {}, p.labels)).length > 1) {
+    policyAnalysis.verdict = "unknown";
+    policyAnalysis.reason = "The source selector matches multiple pods. Select a specific source pod to evaluate its egress and peer labels.";
+  }
+  if (policyAnalysis && request.destination.kind === "Ingress") {
+    policyAnalysis.verdict = "unknown";
+    policyAnalysis.reason = "Ingress controller pod identity and address translation are not modeled; the original source pod is not necessarily the backend peer.";
+  }
   addNetworkPolicyFindings(findings, policyAnalysis);
 
+  findings.push({ severity: "info", title: "Connectivity remains unknown", detail: "Configuration evidence does not probe DNS, CNI enforcement, load balancers, TLS, or external connectivity." });
   return {
     sourcePod,
     destinationPods,

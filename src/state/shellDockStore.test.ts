@@ -123,3 +123,12 @@ describe("useShellDockStore — MRU", () => {
     expect(m.map((e) => e.pod)).toEqual(["p1", "p2"]);
   });
 });
+
+it("preserves the captured debug pod UID when reopening from recent sessions", () => {
+  const store = useShellDockStore.getState();
+  store.openSession({ ...KEY, podUid: "captured-uid", container: "lumen-debug-one" });
+  const recent = useShellDockStore.getState().mru[0];
+  store.closeDock(); store.openSession(recent);
+  expect(useShellDockStore.getState().tabs[0].session.podUid).toBe("captured-uid");
+  store.closeDock();
+});

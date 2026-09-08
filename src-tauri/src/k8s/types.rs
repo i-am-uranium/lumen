@@ -333,6 +333,9 @@ pub struct CloudMap {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkDebugSnapshot {
+    pub loaded_namespaces: Vec<String>,
+    pub unavailable: BTreeMap<String, String>,
+    pub gateway_resources: Vec<serde_json::Value>,
     pub namespaces: Vec<NetworkNamespace>,
     pub pods: Vec<NetworkPod>,
     pub services: Vec<NetworkService>,
@@ -459,11 +462,19 @@ pub struct NetworkIngressBackend {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyResource {
+    pub unsupported: bool,
+    pub egress: Option<Vec<NetworkPolicyEgressRule>>,
     pub name: String,
     pub namespace: String,
     pub pod_selector: BTreeMap<String, String>,
     pub policy_types: Vec<String>,
     pub ingress: Vec<NetworkPolicyIngressRule>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkPolicyEgressRule {
+    pub to: Vec<NetworkPolicyPeer>,
+    pub ports: Vec<NetworkPolicyPort>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -475,6 +486,7 @@ pub struct NetworkPolicyIngressRule {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyPeer {
+    pub unsupported: bool,
     pub pod_selector: Option<BTreeMap<String, String>>,
     pub namespace_selector: Option<BTreeMap<String, String>>,
     pub ip_block: Option<NetworkPolicyIpBlock>,
@@ -487,7 +499,9 @@ pub struct NetworkPolicyIpBlock {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyPort {
+    pub end_port: Option<i32>,
     pub protocol: Option<String>,
     pub port: Option<IntOrStringValue>,
 }

@@ -33,7 +33,22 @@ through a hosted control plane.
 - Stream logs for pods and workload-owned pods with search, pause/resume, and
   bounded buffers.
 - Open pod shell sessions through Kubernetes attach.
+- Create unprivileged ephemeral debug containers for workloads without a shell,
+  with configurable image, command, and filesystem profile. Reopen running
+  diagnostic containers through the existing shell dock. Native protection and
+  pod identity checks apply to creation and terminal access.
 - Start and stop port forwards for pods and services from the local machine.
+
+## Network Diagnosis
+
+- Evaluate source egress and destination ingress together across selected
+  namespaces, including per-destination named ports and numeric port ranges.
+- Inspect Gateway listener, HTTPRoute parent, ReferenceGrant, Service, and
+  endpoint relationships with the supporting conditions and resource names.
+- Retain successful reads when other sources are denied. Missing data, stale
+  status, unsupported selectors, controller identity, and unloaded namespaces
+  remain explicit uncertainties. Configuration analysis does not prove traffic
+  reachability and does not run active probes.
 
 ## Change And Incident Workflows
 
@@ -44,9 +59,14 @@ through a hosted control plane.
 - Investigate a selected triage issue with its failing container's current or
   retained previous logs, related events, and owner/controller snapshots. Export
   the selected evidence with capture times and unavailable-source notes.
-- Investigation snapshots do not establish historical rollout causality. Event
-  matching uses namespace, kind, and name; UID correlation and log contents are
-  not included in the investigation report.
+- Match investigation events to resource UIDs; exclude name-only or mismatched
+  events from verified evidence. Explicitly capture a bounded current or retained
+  previous log excerpt, review and edit its redacted preview, and choose whether
+  to include it in the report.
+- Investigation snapshots do not establish historical rollout causality or
+  recover discarded logs. Capture identifies the pod and requested container;
+  unavailable evidence and limits on exact container-instance identity remain
+  visible.
 
 ## Kubernetes Operations
 
@@ -63,6 +83,8 @@ through a hosted control plane.
 
 See [protected contexts and kubeconfig sources](OPERATOR_SAFETY.md) for operation
 and configuration details.
+See [operator diagnostics](OPERATOR_DIAGNOSTICS.md) for diagnosis, debug-container,
+and incident-handoff workflows and their limitations.
 
 ## Security Defaults
 

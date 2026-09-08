@@ -245,11 +245,13 @@ export class LogStream {
 }
 
 /** Capture a bounded log sample, rejecting failed streams instead of exporting an empty file. */
-export async function captureLogSnapshot({ namespace, pod, context, previous = false }: {
+export async function captureLogSnapshot({ namespace, pod, context, container, previous = false, tailLines = 5000 }: {
   namespace: string;
   pod: string;
   context?: string;
+  container?: string;
   previous?: boolean;
+  tailLines?: number;
 }): Promise<string[]> {
   const streamId = `download-${crypto.randomUUID()}`;
   const channel = new Channel<LogStreamEvent>();
@@ -270,7 +272,7 @@ export async function captureLogSnapshot({ namespace, pod, context, previous = f
   };
   try {
     await invoke("stream_logs", {
-      selector: { namespace, pod_name: pod, label_selector: null, container: null, since_seconds: null, tail_lines: 5000, previous },
+      selector: { namespace, pod_name: pod, label_selector: null, container: container ?? null, since_seconds: null, tail_lines: tailLines, previous },
       streamId, channel, context: context || undefined,
     });
     await Promise.race([completed, new Promise<void>((resolve) => { timer = setTimeout(resolve, 2000); })]);

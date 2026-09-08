@@ -230,3 +230,13 @@ describe("ShellSession — restart", () => {
     expect(s.getScrollbackBytes()).toBe(before);
   });
 });
+
+it("keeps the captured pod UID on debug terminal start and restart", async () => {
+  const session = new ShellSession({ ...KEY, podUid: "captured-uid", container: "lumen-debug-one" });
+  await session.start(80, 24);
+  expect(k8s.startPodAttach).toHaveBeenLastCalledWith(expect.objectContaining({ pod_uid: "captured-uid", container: "lumen-debug-one" }), expect.anything(), "ctx1");
+  session.close();
+  await session.restart(80, 24);
+  expect(k8s.startPodAttach).toHaveBeenLastCalledWith(expect.objectContaining({ pod_uid: "captured-uid" }), expect.anything(), "ctx1");
+  session.close();
+});

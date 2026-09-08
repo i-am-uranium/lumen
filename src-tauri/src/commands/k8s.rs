@@ -6,11 +6,11 @@ use crate::k8s::{
         CloudMap, ContainerInfo, ContextInfo, FleetCard, IntOrStringValue, NetworkDebugSnapshot,
         NetworkEndpointAddress, NetworkEndpointPort, NetworkEndpointRef, NetworkEndpointSlice,
         NetworkEndpoints, NetworkIngress, NetworkIngressBackend, NetworkIngressRule,
-        NetworkNamespace, NetworkPod, NetworkPodPort, NetworkPolicyIngressRule,
-        NetworkPolicyIpBlock, NetworkPolicyPeer, NetworkPolicyPort, NetworkPolicyResource,
-        NetworkService, NetworkServicePort, NodeSummary, OwnerRefLite, PodCondition, PodDetails,
-        RbacDetail, ResourceDetail, ResourceInsights, SecurityReport, StorageDetail, WorkloadKind,
-        WorkloadSummary,
+        NetworkNamespace, NetworkPod, NetworkPodPort, NetworkPolicyEgressRule,
+        NetworkPolicyIngressRule, NetworkPolicyIpBlock, NetworkPolicyPeer, NetworkPolicyPort,
+        NetworkPolicyResource, NetworkService, NetworkServicePort, NodeSummary, OwnerRefLite,
+        PodCondition, PodDetails, RbacDetail, ResourceDetail, ResourceInsights, SecurityReport,
+        StorageDetail, WorkloadKind, WorkloadSummary,
     },
 };
 use crate::state::AppState;
@@ -405,6 +405,13 @@ pub async fn network_debug_snapshot(
     state: State<'_, AppState>,
 ) -> AppResult<NetworkDebugSnapshot> {
     let client = client_for(&state, context.as_deref()).await?;
+    network_debug_snapshot_for(client, namespace).await
+}
+
+async fn network_debug_snapshot_for(
+    client: kube::Client,
+    namespace: String,
+) -> AppResult<NetworkDebugSnapshot> {
     let lp = ListParams::default();
     let ns_api: Api<Namespace> = Api::all(client.clone());
     let pod_api: Api<Pod> = Api::namespaced(client.clone(), &namespace);
@@ -412,33 +419,69 @@ pub async fn network_debug_snapshot(
     let endpoints_api: Api<Endpoints> = Api::namespaced(client.clone(), &namespace);
     let endpoint_slice_api: Api<EndpointSlice> = Api::namespaced(client.clone(), &namespace);
     let ingress_api: Api<Ingress> = Api::namespaced(client.clone(), &namespace);
-    let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client, &namespace);
+    let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), &namespace);
 
-    let (namespaces, pods, services, endpoints, endpoint_slices, ingresses, network_policies) =
-        tokio::try_join!(
-            ns_api.list(&lp),
-            pod_api.list(&lp),
-            service_api.list(&lp),
-            endpoints_api.list(&lp),
-            endpoint_slice_api.list(&lp),
-            ingress_api.list(&lp),
-            network_policy_api.list(&lp),
-        )
-        .map_err(|e| AppError::K8s(e.to_string()))?;
-
+    let (namespaces, pods, services, endpoints, endpoint_slices, ingresses, network_policies) = tokio::join!(
+        ns_api.list(&lp),
+        pod_api.list(&lp),
+        service_api.list(&lp),
+        endpoints_api.list(&lp),
+        endpoint_slice_api.list(&lp),
+        ingress_api.list(&lp),
+        network_policy_api.list(&lp),
+    );
+    let mut unavailable = std::collections::BTreeMap::new();
+    macro_rules! evidence {
+        ($result:ident, $key:expr) => {
+            let $result = match $result {
+                Ok(list) => list.items,
+                Err(error) => {
+                    unavailable.insert(format!("{}/{}", namespace, $key), error.to_string());
+                    vec![]
+                }
+            };
+        };
+    }
+    evidence!(namespaces, "namespaces");
+    evidence!(pods, "pods");
+    evidence!(services, "services");
+    evidence!(endpoints, "endpoints");
+    evidence!(endpoint_slices, "endpointSlices");
+    evidence!(ingresses, "ingresses");
+    evidence!(network_policies, "networkPolicies");
+    let mut gateway_resources = vec![];
+    for (kind, plural, version) in [
+        ("Gateway", "gateways", "v1"),
+        ("HTTPRoute", "httproutes", "v1"),
+        ("ReferenceGrant", "referencegrants", "v1beta1"),
+    ] {
+        let ar = ApiResource::from_gvk_with_plural(
+            &GroupVersionKind::gvk("gateway.networking.k8s.io", version, kind),
+            plural,
+        );
+        let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), &namespace, &ar);
+        match api.list(&lp).await {
+            Ok(list) => gateway_resources.extend(
+                list.items
+                    .into_iter()
+                    .filter_map(|obj| serde_json::to_value(obj).ok()),
+            ),
+            Err(error) => {
+                unavailable.insert(format!("{}/{}", namespace, plural), error.to_string());
+            }
+        }
+    }
     Ok(NetworkDebugSnapshot {
-        namespaces: namespaces.items.iter().map(network_namespace).collect(),
-        pods: pods.items.iter().map(network_pod).collect(),
-        services: services.items.iter().map(network_service).collect(),
-        endpoints: endpoints.items.iter().map(network_endpoints).collect(),
-        endpoint_slices: endpoint_slices
-            .items
-            .iter()
-            .map(network_endpoint_slice)
-            .collect(),
-        ingresses: ingresses.items.iter().map(network_ingress).collect(),
+        loaded_namespaces: vec![namespace],
+        unavailable,
+        gateway_resources,
+        namespaces: namespaces.iter().map(network_namespace).collect(),
+        pods: pods.iter().map(network_pod).collect(),
+        services: services.iter().map(network_service).collect(),
+        endpoints: endpoints.iter().map(network_endpoints).collect(),
+        endpoint_slices: endpoint_slices.iter().map(network_endpoint_slice).collect(),
+        ingresses: ingresses.iter().map(network_ingress).collect(),
         network_policies: network_policies
-            .items
             .iter()
             .map(network_policy_resource)
             .collect(),
@@ -668,7 +711,7 @@ fn label_selector_match_labels(
 ) -> Option<std::collections::BTreeMap<String, String>> {
     selector
         .as_ref()
-        .and_then(|selector| selector.match_labels.clone())
+        .map(|selector| selector.match_labels.clone().unwrap_or_default())
         .map(|labels| labels.into_iter().collect())
 }
 
@@ -676,6 +719,13 @@ fn network_policy_peer(
     peer: k8s_openapi::api::networking::v1::NetworkPolicyPeer,
 ) -> NetworkPolicyPeer {
     NetworkPolicyPeer {
+        unsupported: [&peer.pod_selector, &peer.namespace_selector]
+            .iter()
+            .any(|selector| {
+                selector
+                    .as_ref()
+                    .is_some_and(|s| s.match_expressions.as_ref().is_some_and(|e| !e.is_empty()))
+            }),
         pod_selector: label_selector_match_labels(&peer.pod_selector),
         namespace_selector: label_selector_match_labels(&peer.namespace_selector),
         ip_block: peer.ip_block.map(|block| NetworkPolicyIpBlock {
@@ -689,6 +739,7 @@ fn network_policy_port(
     port: k8s_openapi::api::networking::v1::NetworkPolicyPort,
 ) -> NetworkPolicyPort {
     NetworkPolicyPort {
+        end_port: port.end_port,
         protocol: port.protocol,
         port: port.port.as_ref().map(int_or_string_value),
     }
@@ -697,6 +748,28 @@ fn network_policy_port(
 fn network_policy_resource(policy: &NetworkPolicy) -> NetworkPolicyResource {
     let spec = policy.spec.as_ref();
     NetworkPolicyResource {
+        unsupported: spec
+            .and_then(|s| s.pod_selector.as_ref())
+            .is_some_and(|s| s.match_expressions.as_ref().is_some_and(|e| !e.is_empty())),
+        egress: spec.and_then(|s| s.egress.clone()).map(|rules| {
+            rules
+                .into_iter()
+                .map(|rule| NetworkPolicyEgressRule {
+                    to: rule
+                        .to
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(network_policy_peer)
+                        .collect(),
+                    ports: rule
+                        .ports
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(network_policy_port)
+                        .collect(),
+                })
+                .collect()
+        }),
         name: policy.metadata.name.clone().unwrap_or_default(),
         namespace: policy.metadata.namespace.clone().unwrap_or_default(),
         pod_selector: spec
@@ -1714,6 +1787,23 @@ pub async fn stream_logs(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn capture_incident_logs(
+    selector: crate::k8s::logs::LogSelector,
+    context: String,
+    expected_uid: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::k8s::logs::BoundedLogCapture> {
+    crate::k8s::logs::capture_logs_with_deadline(
+        client_for(&state, Some(&context)),
+        selector,
+        20_000,
+        &expected_uid,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+}
+
 fn label_selector_from(labels: &std::collections::BTreeMap<String, String>) -> String {
     labels
         .iter()
@@ -2269,6 +2359,14 @@ pub async fn list_pod_containers(
             });
         }
     }
+    for c in spec.ephemeral_containers.as_deref().unwrap_or_default() {
+        out.push(PodContainerInfo {
+            name: c.name.clone(),
+            image: c.image.clone().unwrap_or_default(),
+            is_init: false,
+            is_default: false,
+        });
+    }
     Ok(out)
 }
 
@@ -2469,6 +2567,30 @@ pub async fn helm_show_values(chart: String, version: Option<String>) -> AppResu
 // ─── Pod attach (terminal) ────────────────────────────────────────────────
 
 use crate::k8s::exec as attach;
+
+#[tauri::command]
+pub async fn get_debug_target(
+    context: String,
+    namespace: String,
+    pod: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::k8s::debug::DebugTarget> {
+    let client = client_for(&state, Some(&context)).await?;
+    crate::k8s::debug::get_target(client, &context, &namespace, &pod).await
+}
+
+#[tauri::command]
+pub async fn create_debug_container(
+    request: crate::k8s::debug::DebugRequest,
+    state: State<'_, AppState>,
+) -> AppResult<crate::k8s::debug::DebugResult> {
+    let (context, client, identity, _) =
+        mutation_client(&state, Some(&request.context), false).await?;
+    crate::k8s::debug::create(client, request, || {
+        require_current_target(&state.protection, &context, &identity, false)
+    })
+    .await
+}
 
 #[tauri::command]
 pub async fn start_pod_attach(
@@ -2876,6 +2998,7 @@ mod protection_entrypoint_tests {
         "helm_rollback",
         "helm_uninstall",
         "start_pod_attach",
+        "create_debug_container",
         "sync_argocd_application",
         "refresh_argocd_application",
         "terminate_argocd_operation",
@@ -2904,6 +3027,7 @@ mod protection_entrypoint_tests {
     fn every_registered_kubernetes_ipc_has_an_explicit_policy_classification() {
         let read_or_local = &[
             "list_contexts",
+            "get_debug_target",
             "set_context",
             "delete_context",
             "list_deleted_contexts",
@@ -2929,6 +3053,7 @@ mod protection_entrypoint_tests {
             "watch_workloads",
             "stop_stream",
             "stream_logs",
+            "capture_incident_logs",
             "list_pods_for",
             "list_pods_on_node",
             "list_crds",
@@ -3079,5 +3204,46 @@ mod protection_entrypoint_tests {
         assert!(super::mutation_target(&state, Some(" "), false)
             .await
             .is_err());
+    }
+    #[test]
+    fn network_policy_adapter_preserves_egress_empty_selectors_ranges_and_unknown_expressions() {
+        let policy: super::NetworkPolicy = serde_json::from_value(serde_json::json!({
+            "metadata": { "name": "example", "namespace": "shop" },
+            "spec": {
+                "podSelector": { "matchExpressions": [{ "key": "app", "operator": "Exists" }] },
+                "policyTypes": ["Ingress", "Egress"],
+                "ingress": [],
+                "egress": [{ "to": [{ "namespaceSelector": {}, "podSelector": { "matchExpressions": [{ "key": "app", "operator": "Exists" }] } }], "ports": [{ "port": 8000, "endPort": 9000 }] }]
+            }
+        })).unwrap();
+        let output = super::network_policy_resource(&policy);
+        assert!(output.unsupported);
+        let rule = &output.egress.as_ref().unwrap()[0];
+        assert!(rule.to[0].namespace_selector.as_ref().unwrap().is_empty());
+        assert!(rule.to[0].unsupported);
+        assert_eq!(rule.ports[0].end_port, Some(9000));
+        let json = serde_json::to_value(output).unwrap();
+        assert_eq!(json["egress"][0]["ports"][0]["endPort"], 9000);
+    }
+    #[tokio::test]
+    async fn network_snapshot_preserves_partial_results_and_explicit_denials() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({"apiVersion":"v1", "kind":"Status", "status":"Failure", "message":"forbidden", "reason":"Forbidden", "code":403}))).with_priority(10).mount(&server).await;
+        Mock::given(method("GET")).and(path("/api/v1/namespaces/shop/pods")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"apiVersion":"v1", "kind":"PodList", "metadata":{}, "items":[{"metadata":{"name":"api", "namespace":"shop"}, "spec":{"containers":[]}}]}))).with_priority(1).mount(&server).await;
+        let config = kube::Config::new(server.uri().parse().unwrap());
+        let client = kube::Client::try_from(config).unwrap();
+        let result = super::network_debug_snapshot_for(client, "shop".into())
+            .await
+            .unwrap();
+        assert_eq!(result.pods.len(), 1);
+        assert_eq!(result.pods[0].name, "api");
+        assert!(result.network_policies.is_empty());
+        assert!(result.unavailable.contains_key("shop/networkPolicies"));
+        assert!(result.unavailable.contains_key("shop/gateways"));
+        assert!(!result.unavailable.contains_key("shop/pods"));
     }
 }

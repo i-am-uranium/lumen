@@ -44,6 +44,8 @@ import {
 } from "@/components/lumen/drawer";
 import { CopyableName } from "@/components/lumen/copyable-name";
 
+const PodDebugDialog = lazy(() => import("./PodDebugDialog").then((module) => ({ default: module.PodDebugDialog })));
+
 // ─── Lumen-distinct touches vs Lens ────────────────────────────────────
 //   • Side-docked panel (not floating modal); main view stays visible.
 //   • 3px severity strip at the top reflects pod health at a glance.
@@ -120,6 +122,7 @@ export function ResourceDetailDrawer({
   // Cross-cluster diff dialog — read-only view, no action lifecycle so
   // it doesn't go through pendingAction.
   const [compareOpen, setCompareOpen] = useState(false);
+  const [debugSelection, setDebugSelection] = useState<{ context: string; namespace: string; pod: string } | null>(null);
   const { openSession } = useShellDock();
   const qc = useQueryClient();
   const resourceKind = resource?.kind as WorkloadKind | undefined;
@@ -212,12 +215,13 @@ export function ResourceDetailDrawer({
 
   // Reset when drawer opens for a new resource.
   useEffect(() => {
+    setDebugSelection(null);
     if (resource) {
       setActiveTab("overview");
       setDeleteConfirmOpen(false);
       setPendingAction(null);
     }
-  }, [resource?.kind, resource?.namespace, resource?.name]);
+  }, [ctx, resource?.kind, resource?.namespace, resource?.name]);
 
   // Hotkeys (only when drawer is open). Registered through the shortcut
   // registry so users can rebind them from Settings — see shortcuts.ts
@@ -386,6 +390,7 @@ export function ResourceDetailDrawer({
 
   return (
     <>
+      {debugSelection && <Suspense fallback={null}><PodDebugDialog selection={debugSelection} onClose={() => setDebugSelection(null)} /></Suspense>}
       {/* Backdrop — softer than a full-screen modal so the table behind stays
           visible. Clickable to dismiss. */}
       <DrawerBackdrop onClick={onClose} />
@@ -410,6 +415,7 @@ export function ResourceDetailDrawer({
           onViewLogs={handleViewLogs}
           onDownloadLogs={handleDownloadLogs}
           onShellExec={openShell}
+          onDebug={() => setDebugSelection({ context: ctx, namespace: resource.namespace, pod: resource.name })}
           onEditYaml={() => setActiveTab("yaml")}
           restartable={restartable}
           scalable={scalable}
@@ -597,6 +603,7 @@ function Header({
   onViewLogs,
   onDownloadLogs,
   onShellExec,
+  onDebug,
   onEditYaml,
   restartable,
   scalable,
@@ -625,6 +632,7 @@ function Header({
   onViewLogs: () => void;
   onDownloadLogs: () => void;
   onShellExec: () => void;
+  onDebug: () => void;
   onEditYaml: () => void;
   restartable: boolean;
   scalable: boolean;
@@ -740,6 +748,7 @@ function Header({
           disabled={!isPod || downloading}
           onClick={onDownloadLogs}
         />
+        <ActionIcon icon={<Container className="size-3.5" />} label="debug container" disabled={!isPod} onClick={onDebug} />
         <ActionIcon
           icon={<TerminalSquare className="size-3.5" />}
           label="shell"
