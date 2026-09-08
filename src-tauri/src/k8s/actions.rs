@@ -31,6 +31,7 @@ pub struct EventSummary {
     pub message: String,
     pub involved_kind: String,
     pub involved_name: String,
+    pub involved_uid: Option<String>,
     pub count: Option<i32>,
 }
 
@@ -76,6 +77,7 @@ pub async fn list_events_for(
             message: e.message.clone().unwrap_or_default(),
             involved_kind: e.involved_object.kind.clone().unwrap_or_default(),
             involved_name: e.involved_object.name.clone().unwrap_or_default(),
+            involved_uid: e.involved_object.uid.clone(),
             count: e.count,
         })
         .collect();

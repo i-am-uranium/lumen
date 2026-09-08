@@ -1,6 +1,7 @@
 import type { EventLine, WorkloadKind } from "@/lib/k8s";
 import type { RolloutTimelineEntry } from "@/lib/rolloutTimeline";
 import type { TriageIssue, TriageSeverity } from "@/lib/triage";
+import type { LogEvidence } from "@/lib/logEvidence";
 
 const DEFAULT_NEXT_CHECKS = [
   "Correlate warnings with rollout and activity timeline timestamps",
@@ -33,11 +34,11 @@ export type IncidentReportInput = {
   warningEvents?: IncidentReportWarningEvent[];
   rolloutEntries?: RolloutTimelineEntry[];
   manualNotes?: string;
-  investigation?: { startedAt: string; sources: string[]; observations: string[] };
+  investigation?: { startedAt: string; sources: string[]; observations: string[]; logEvidence?: LogEvidence };
 };
 
 export type IncidentReportData = {
-  investigation?: { startedAt: string; sources: string[]; observations: string[] };
+  investigation?: { startedAt: string; sources: string[]; observations: string[]; logEvidence?: LogEvidence };
   generatedAtIso: string;
   scope: {
     clusterContext: string;
@@ -149,10 +150,10 @@ export function buildIncidentReportData(input: IncidentReportInput): IncidentRep
   );
 
   return {
-    investigation: input.investigation ? { startedAt: cleanLine(input.investigation.startedAt), sources: input.investigation.sources.map(cleanLine), observations: input.investigation.observations.map(cleanLine) } : undefined,
+    investigation: input.investigation ? { startedAt: cleanLine(input.investigation.startedAt), sources: input.investigation.sources.map(cleanLine), observations: input.investigation.observations.map(cleanLine), logEvidence: input.investigation.logEvidence ? { ...input.investigation.logEvidence, context: cleanLine(input.investigation.logEvidence.context), namespace: cleanLine(input.investigation.logEvidence.namespace), pod: cleanLine(input.investigation.logEvidence.pod), podUid: input.investigation.logEvidence.podUid ? cleanLine(input.investigation.logEvidence.podUid) : null, container: cleanLine(input.investigation.logEvidence.container), text: redactIncidentReportText(input.investigation.logEvidence.text), note: cleanLine(input.investigation.logEvidence.note) } : undefined } : undefined,
     generatedAtIso,
     scope: {
-      clusterContext: input.clusterContext || "current-context",
+      clusterContext: cleanLine(input.clusterContext || "current-context"),
       namespace,
       selectedResource: formatResource(input.selectedResource),
     },
@@ -206,6 +207,8 @@ export function renderIncidentReportMarkdown(report: IncidentReportData): string
 
   if (report.investigation) {
     lines.push("## Investigation capture", "", `Started: ${report.investigation.startedAt}`, "", ...renderList("Sources and freshness:", report.investigation.sources), ...renderList("Observed evidence and limitations:", report.investigation.observations));
+    const log = report.investigation.logEvidence;
+    if (log) lines.push("### Selected log evidence", "", `- **Status:** ${log.status}${log.included ? " · included" : " · excluded"}`, `- **Identity:** ${log.context} · ${log.namespace}/${log.pod} · UID ${log.podUid ?? "unavailable"} · ${log.container} · ${log.instance}`, `- **Captured:** ${log.capturedAt}; bounds ${log.lineLimit} lines / ${log.charLimit} characters; truncated ${log.truncated ? "yes" : "no"}`, `- **Note:** ${log.note}`, "", ...(log.included ? ["```text", log.text, "```", ""] : []));
   }
 
   if (report.triageIssues.length === 0) {

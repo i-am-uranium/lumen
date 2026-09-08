@@ -600,6 +600,7 @@ export type EventSummary = {
   message: string;
   involved_kind: string;
   involved_name: string;
+  involved_uid?: string | null;
   count: number | null;
 };
 

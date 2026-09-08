@@ -185,3 +185,11 @@ describe("incidentReportFilename", () => {
     ).toBe("incident-prod-main-checkout-payments-deployment-api-v2-20260509-150405.md");
   });
 });
+
+it("redacts included log evidence and omits excluded excerpts", () => {
+  const base = { status: "captured" as const, context: "prod", namespace: "payments", pod: "api", podUid: "uid-1", container: "worker", instance: "previous" as const, capturedAt: "2026-09-08T00:00:00Z", lineLimit: 200, charLimit: 20_000, truncated: false, text: "Authorization: Bearer secret-token", included: true, note: "retained previous slice" };
+  const included = renderIncidentReportMarkdown(buildIncidentReportData({ clusterContext: "prod", investigation: { startedAt: "now", sources: [], observations: [], logEvidence: base } }));
+  expect(included).toContain("Bearer [REDACTED]"); expect(included).not.toContain("secret-token");
+  const excluded = renderIncidentReportMarkdown(buildIncidentReportData({ clusterContext: "prod", investigation: { startedAt: "now", sources: [], observations: [], logEvidence: { ...base, included: false } } }));
+  expect(excluded).not.toContain("Authorization");
+});
