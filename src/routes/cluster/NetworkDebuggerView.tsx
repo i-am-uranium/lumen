@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { ResourceDetailDrawer } from "@/components/ResourceDetailDrawer";
 import { LumenPage, PageHeader, SectionPanel } from "@/components/lumen/page";
+import { analyzeGatewayRelationships } from "@/lib/networkGateway";
 import { k8s } from "@/lib/k8s";
 import {
   analyzeNetworkPath,
@@ -287,10 +288,10 @@ function NetworkPolicyPanel({
         <ShieldAlert className={cn("mt-1 size-5 shrink-0", tone)} />
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-text-muted">
-            ingress NetworkPolicy
+            ingress and egress NetworkPolicy
           </div>
           <h2 className={cn("mt-1 text-base font-semibold", tone)}>
-            likely {policy.verdict}
+            {policy.verdict === "allowed" ? "allowed-by-model" : policy.verdict}
           </h2>
           <p className="mt-1 text-[12px] text-text-secondary">
             {policy.reason} This is an approximation based on Kubernetes label selectors,
@@ -302,7 +303,7 @@ function NetworkPolicyPanel({
             ) : (
               policy.policies.map((item) => (
                 <ResourceButton
-                  key={item.name}
+                  key={`${item.namespace}/${item.name}`}
                   kind="networkpolicy"
                   namespace={item.namespace}
                   name={item.name}
@@ -341,6 +342,8 @@ export function NetworkDebuggerView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const namespace = searchParams.get("ns") || "default";
   const requestedService = searchParams.get("service") || "";
+  const [sourceNamespaceInput, setSourceNamespace] = useState("");
+  const sourceNamespace = sourceNamespaceInput || namespace;
   const [sourceMode, setSourceMode] = useState<SourceMode>("Pod");
   const [sourcePodName, setSourcePodName] = useState("");
   const [sourceSelector, setSourceSelector] = useState("app=");
@@ -349,6 +352,8 @@ export function NetworkDebuggerView() {
   const [destinationPort, setDestinationPort] = useState("");
   const [ingressHost, setIngressHost] = useState("");
   const [ingressPath, setIngressPath] = useState("/");
+  const [drawerContext, setDrawerContext] = useState(context);
+  const openResource = (resource: DrawerResource) => { setDrawerContext(context); setDrawerResource(resource); };
   const [drawerResource, setDrawerResource] = useState<DrawerResource | null>(null);
 
   const namespaces = useQuery({
@@ -364,6 +369,33 @@ export function NetworkDebuggerView() {
     staleTime: 15_000,
   });
 
+  const sourceSnapshot = useQuery({
+    queryKey: ["k8s", "network-debugger", context, sourceNamespace],
+    queryFn: () => k8s.networkDebugSnapshot(sourceNamespace, context || undefined),
+    enabled: !!context && !!sourceNamespace,
+    staleTime: 15_000,
+  });
+  const combined = useMemo(() => {
+    if (!snapshot.data) return undefined;
+    if (sourceNamespace === namespace) return snapshot.data;
+    const source = sourceSnapshot.data;
+    return {
+      ...snapshot.data,
+      loadedNamespaces: [...(snapshot.data.loadedNamespaces ?? [namespace]), ...(source?.loadedNamespaces ?? [])],
+      namespaces: [...snapshot.data.namespaces, ...(source?.namespaces ?? [])],
+      pods: [...snapshot.data.pods, ...(source?.pods ?? [])],
+      services: [...snapshot.data.services, ...(source?.services ?? [])],
+      endpoints: [...snapshot.data.endpoints, ...(source?.endpoints ?? [])],
+      endpointSlices: [...snapshot.data.endpointSlices, ...(source?.endpointSlices ?? [])],
+      networkPolicies: [...snapshot.data.networkPolicies, ...(source?.networkPolicies ?? [])],
+      gatewayResources: [...(snapshot.data.gatewayResources ?? []), ...(source?.gatewayResources ?? [])],
+      unavailable: { ...snapshot.data.unavailable, ...source?.unavailable, ...(!source || sourceSnapshot.error ? { [`${sourceNamespace}/networkPolicies`]: sourceSnapshot.error ? String(sourceSnapshot.error) : "Source namespace is loading or unavailable." } : {}) },
+    };
+  }, [snapshot.data, sourceSnapshot.data, sourceSnapshot.error, namespace, sourceNamespace]);
+  const sourcePods = useMemo(() => sortedPods(sourceSnapshot.data?.pods ?? []), [sourceSnapshot.data]);
+  const gatewayEvidence = useMemo(() => combined ? analyzeGatewayRelationships(combined) : [], [combined]);
+  useEffect(() => { setDrawerResource(null); setSourcePodName(""); }, [context, sourceNamespace]);
+
   const pods = useMemo(() => sortedPods(snapshot.data?.pods ?? []), [snapshot.data]);
   const services = useMemo(
     () => sortedServices(snapshot.data?.services ?? []),
@@ -376,7 +408,7 @@ export function NetworkDebuggerView() {
 
   useEffect(() => {
     if (!snapshot.data) return;
-    if (!sourcePodName && pods[0]) setSourcePodName(pods[0].name);
+    if (!sourcePodName && sourcePods[0]) setSourcePodName(sourcePods[0].name);
     if (
       requestedService &&
       !destinationName &&
@@ -405,10 +437,11 @@ export function NetworkDebuggerView() {
     services,
     snapshot.data,
     sourcePodName,
+    sourcePods,
   ]);
 
   const analysis = useMemo(() => {
-    if (!snapshot.data || !destinationName) return null;
+    if (!combined || !destinationName) return null;
     let destination: NetworkDestinationRef;
     if (destinationKind === "Service") {
       destination = {
@@ -436,18 +469,18 @@ export function NetworkDebuggerView() {
     const request: NetworkAnalysisRequest = {
       source:
         sourceMode === "Pod" && sourcePodName
-          ? { kind: "Pod", namespace, name: sourcePodName }
+          ? { kind: "Pod", namespace: sourceNamespace, name: sourcePodName }
           : sourceMode === "Selector"
             ? {
                 kind: "Workload",
-                namespace,
+                namespace: sourceNamespace,
                 name: sourceSelector,
                 selector: parseLabelSelector(sourceSelector),
               }
             : null,
       destination,
     };
-    return analyzeNetworkPath(snapshot.data, request);
+    return analyzeNetworkPath(combined, request);
   }, [
     destinationKind,
     destinationName,
@@ -459,6 +492,8 @@ export function NetworkDebuggerView() {
     sourceMode,
     sourcePodName,
     sourceSelector,
+    sourceNamespace,
+    combined,
   ]);
 
   const destinationOptions =
@@ -491,6 +526,7 @@ export function NetworkDebuggerView() {
         }
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <input list="network-namespaces" aria-label="target namespace" value={namespace} onChange={event => setNamespace(event.target.value)} className={selectClassName("w-40")} />
             <select
               value={namespace}
               onChange={(event) => setNamespace(event.target.value)}
@@ -505,7 +541,7 @@ export function NetworkDebuggerView() {
             </select>
             <button
               type="button"
-              onClick={() => snapshot.refetch()}
+              onClick={() => { void snapshot.refetch(); void sourceSnapshot.refetch(); }}
               disabled={snapshot.isFetching}
               className="term-btn !min-h-[32px] !py-1.5 !px-3 !text-[12px]"
             >
@@ -518,6 +554,12 @@ export function NetworkDebuggerView() {
 
       <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
         <SectionPanel className="h-fit space-y-4">
+          <div>
+            <label className="text-[12px] text-text-secondary" htmlFor="network-source-namespace">source namespace</label>
+            <input id="network-source-namespace" list="network-namespaces" value={sourceNamespace} onChange={event => { setSourceNamespace(event.target.value); setSourcePodName(""); }} className={selectClassName("w-full")} />
+            <datalist id="network-namespaces">{(namespaces.data ?? [namespace]).map(ns => <option key={ns} value={ns} />)}</datalist>
+            <p className="text-[11px] text-text-muted">Target namespace is selected above. Type an accessible namespace if namespace listing is restricted.</p>
+          </div>
           <div>
             <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.12em] text-text-muted">
               source type
@@ -548,7 +590,7 @@ export function NetworkDebuggerView() {
                 className={selectClassName("w-full")}
               >
                 <option value="">no source selected</option>
-                {pods.map((pod) => (
+                {sourcePods.map((pod) => (
                   <option key={pod.name} value={pod.name}>
                     {pod.name}
                   </option>
@@ -563,7 +605,7 @@ export function NetworkDebuggerView() {
               />
             ) : (
               <div className="h-8 rounded-control border border-border-default bg-app px-2 py-1.5 font-mono text-[12px] text-text-secondary">
-                namespace/{namespace}
+                namespace/{sourceNamespace}
               </div>
             )}
           </div>
@@ -672,14 +714,25 @@ export function NetworkDebuggerView() {
                 loading Services, pods, endpoints, ingresses, and NetworkPolicies...
               </div>
             </SectionPanel>
-          ) : !snapshot.data || (services.length === 0 && pods.length === 0) ? (
+          ) : !snapshot.data ? (
             <EmptyPanel message="no pods or Services were found in this namespace." />
           ) : (
             <>
+              {!analysis && Object.entries(combined?.unavailable ?? {}).map(([resource, error]) => <SectionPanel key={resource}>
+                <p className="text-[12px] text-warning">Evidence unavailable: {resource} · {error}</p>
+              </SectionPanel>)}
               <FindingsPanel analysis={analysis} />
-              <IngressPanel analysis={analysis} onOpen={setDrawerResource} />
-              <ServicePanel analysis={analysis} onOpen={setDrawerResource} />
-              <NetworkPolicyPanel analysis={analysis} onOpen={setDrawerResource} />
+              {gatewayEvidence.length > 0 && <SectionPanel className="space-y-3">
+                <h2 className="text-base font-semibold">Gateway request-path evidence</h2>
+                {gatewayEvidence.map((item, index) => <div key={index} className="rounded-control border border-border-default p-3 text-[12px]">
+                  <div className="font-medium">{item.title} · {item.outcome}</div>
+                  <p className="mt-1 text-text-secondary">{item.detail}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">{item.objects.map((obj, i) => <span key={i} className="font-mono text-text-muted">{obj.kind}/{obj.namespace}/{obj.name}</span>)}</div>
+                </div>)}
+              </SectionPanel>}
+              <IngressPanel analysis={analysis} onOpen={openResource} />
+              <ServicePanel analysis={analysis} onOpen={openResource} />
+              <NetworkPolicyPanel analysis={analysis} onOpen={openResource} />
             </>
           )}
         </div>
@@ -687,7 +740,7 @@ export function NetworkDebuggerView() {
 
       <ResourceDetailDrawer
         ctx={context}
-        resource={drawerResource}
+        resource={drawerContext === context ? drawerResource : null}
         onClose={() => setDrawerResource(null)}
       />
     </LumenPage>
