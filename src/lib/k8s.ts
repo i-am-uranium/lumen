@@ -1006,8 +1006,8 @@ export const k8s = {
       name,
       context,
     }),
-  captureIncidentLogs: (context: string, namespace: string, pod: string, container: string, previous: boolean) =>
-    invoke<BoundedLogCapture>("capture_incident_logs", { context, selector: { namespace, pod_name: pod, container, previous, tail_lines: 201, label_selector: null, since_seconds: null } }),
+  captureIncidentLogs: (context: string, namespace: string, pod: string, expectedUid: string, container: string, previous: boolean) =>
+    invoke<BoundedLogCapture>("capture_incident_logs", { context, expectedUid, selector: { namespace, pod_name: pod, container, previous, tail_lines: 201, label_selector: null, since_seconds: null } }),
   restartWorkload: (
     namespace: string,
     kind: WorkloadKind,

@@ -11,18 +11,14 @@ export function resourceUid(detail?: ResourceDetail): string | null {
   return null;
 }
 type Request = { context: string; namespace: string; pod: string; podUid: string | null; container: string; previous: boolean };
-type Deps = { getResource: typeof k8s.getResource; capture: typeof k8s.captureIncidentLogs; now: () => Date };
+type Deps = { capture: typeof k8s.captureIncidentLogs; now: () => Date };
 export function boundLogEvidenceText(value: string) { return value.split(/\r?\n/).slice(0, LOG_EVIDENCE_MAX_LINES).join("\n").slice(0, LOG_EVIDENCE_MAX_CHARS); }
-export async function captureIncidentLogEvidence(request: Request, deps: Deps = { getResource: k8s.getResource, capture: k8s.captureIncidentLogs, now: () => new Date() }): Promise<LogEvidence> {
+export async function captureIncidentLogEvidence(request: Request, deps: Deps = { capture: k8s.captureIncidentLogs, now: () => new Date() }): Promise<LogEvidence> {
   const base = { context: request.context, namespace: request.namespace, pod: request.pod, podUid: request.podUid, container: request.container, instance: request.previous ? "previous" as const : "current" as const, capturedAt: deps.now().toISOString(), lineLimit: LOG_EVIDENCE_MAX_LINES, charLimit: LOG_EVIDENCE_MAX_CHARS, truncated: false, text: "", included: false };
   if (!request.podUid) return { ...base, status: "unavailable", note: "Pod UID unavailable; name-only logs were not captured." };
   try {
-    const before = resourceUid(await deps.getResource(request.namespace, "pod", request.pod, request.context));
-    if (before !== request.podUid) return { ...base, status: "replaced", note: "Pod identity changed before capture; logs were excluded." };
-    const capture = await deps.capture(request.context, request.namespace, request.pod, request.container, request.previous);
-    const after = resourceUid(await deps.getResource(request.namespace, "pod", request.pod, request.context));
-    if (after !== before) return { ...base, status: "replaced", note: "Pod identity changed during capture; logs were excluded." };
+    const capture = await deps.capture(request.context, request.namespace, request.pod, request.podUid, request.container, request.previous);
     const text = boundLogEvidenceText(redactIncidentReportText(capture.text));
     return { ...base, status: "captured", included: true, text, truncated: capture.truncated || capture.text !== text, note: request.previous ? "Retained previous logs; exact terminated container instance identity is unavailable." : "Current log selection captured; exact container instance identity is unavailable." };
-  } catch { return { ...base, status: "error", note: "Log capture failed or retained logs were unavailable." }; }
+  } catch (error) { const identityChanged = String(error).toLowerCase().includes("identity changed"); return { ...base, status: identityChanged ? "replaced" : "error", note: identityChanged ? "Pod identity changed during bounded capture; logs were excluded." : "Log capture failed, timed out, or retained logs were unavailable." }; }
 }

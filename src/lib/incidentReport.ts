@@ -99,6 +99,7 @@ function uniqueNonEmpty(values: string[]): string[] {
 function cleanLine(value: string | null | undefined): string {
   return redactIncidentReportText(value ?? "").replace(/\s+/g, " ").trim();
 }
+function finalLogExcerpt(value: string): { text: string; truncated: boolean } { const redacted = redactIncidentReportText(value); const text = redacted.split(/\r?\n/).slice(0, 200).join("\n").slice(0, 20_000); return { text, truncated: text !== redacted }; }
 
 export function buildIncidentReportData(input: IncidentReportInput): IncidentReportData {
   const generatedAtIso = safeIso(input.generatedAt);
@@ -150,7 +151,7 @@ export function buildIncidentReportData(input: IncidentReportInput): IncidentRep
   );
 
   return {
-    investigation: input.investigation ? { startedAt: cleanLine(input.investigation.startedAt), sources: input.investigation.sources.map(cleanLine), observations: input.investigation.observations.map(cleanLine), logEvidence: input.investigation.logEvidence ? { ...input.investigation.logEvidence, context: cleanLine(input.investigation.logEvidence.context), namespace: cleanLine(input.investigation.logEvidence.namespace), pod: cleanLine(input.investigation.logEvidence.pod), podUid: input.investigation.logEvidence.podUid ? cleanLine(input.investigation.logEvidence.podUid) : null, container: cleanLine(input.investigation.logEvidence.container), text: redactIncidentReportText(input.investigation.logEvidence.text), note: cleanLine(input.investigation.logEvidence.note) } : undefined } : undefined,
+    investigation: input.investigation ? { startedAt: cleanLine(input.investigation.startedAt), sources: input.investigation.sources.map(cleanLine), observations: input.investigation.observations.map(cleanLine), logEvidence: input.investigation.logEvidence ? (() => { const bounded = finalLogExcerpt(input.investigation!.logEvidence!.text); return { ...input.investigation!.logEvidence!, context: cleanLine(input.investigation!.logEvidence!.context), namespace: cleanLine(input.investigation!.logEvidence!.namespace), pod: cleanLine(input.investigation!.logEvidence!.pod), podUid: input.investigation!.logEvidence!.podUid ? cleanLine(input.investigation!.logEvidence!.podUid) : null, container: cleanLine(input.investigation!.logEvidence!.container), text: bounded.text, truncated: input.investigation!.logEvidence!.truncated || bounded.truncated, note: cleanLine(input.investigation!.logEvidence!.note) }; })() : undefined } : undefined,
     generatedAtIso,
     scope: {
       clusterContext: cleanLine(input.clusterContext || "current-context"),

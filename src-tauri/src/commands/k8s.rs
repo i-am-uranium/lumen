@@ -1791,11 +1791,12 @@ pub async fn stream_logs(
 pub async fn capture_incident_logs(
     selector: crate::k8s::logs::LogSelector,
     context: String,
+    expected_uid: String,
     state: State<'_, AppState>,
 ) -> AppResult<crate::k8s::logs::BoundedLogCapture> {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let client = client_for(&state, Some(&context)).await?;
-        crate::k8s::logs::capture_logs(client, selector, 20_000).await
+        crate::k8s::logs::capture_logs(client, selector, 20_000, &expected_uid).await
     })
     .await
     .map_err(|_| AppError::K8s("bounded log capture timed out".into()))?

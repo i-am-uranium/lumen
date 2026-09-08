@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use futures::AsyncReadExt as FuturesAsyncReadExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
     api::{Api, ListParams, LogParams},
@@ -73,6 +74,7 @@ pub async fn capture_logs(
     client: Client,
     selector: LogSelector,
     limit_bytes: i64,
+    expected_uid: &str,
 ) -> AppResult<BoundedLogCapture> {
     let pod = selector
         .pod_name
@@ -81,22 +83,49 @@ pub async fn capture_logs(
         .container
         .ok_or_else(|| AppError::K8s("container required".into()))?;
     let api: Api<Pod> = Api::namespaced(client, &selector.namespace);
+    let before_uid = api
+        .get(&pod)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?
+        .metadata
+        .uid;
+    if before_uid.as_deref() != Some(expected_uid) {
+        return Err(AppError::K8s("pod identity changed before capture".into()));
+    }
     let params = capture_params(
         container,
         selector.previous,
         selector.tail_lines,
         limit_bytes,
     );
-    let text = api
-        .logs(&pod, &params)
+    let stream = api
+        .log_stream(&pod, &params)
         .await
         .map_err(|e| AppError::K8s(e.to_string()))?;
     let cap = limit_bytes.max(1) as usize;
-    let (text, truncated) = cap_capture_text(text, cap);
+    let mut bytes = Vec::with_capacity(cap + 1);
+    stream
+        .take((cap + 1) as u64)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?;
+    let transport_truncated = bytes.len() > cap;
+    bytes.truncate(cap);
+    let (text, utf8_truncated) =
+        cap_capture_text(String::from_utf8_lossy(&bytes).into_owned(), cap);
+    let after_uid = api
+        .get(&pod)
+        .await
+        .map_err(|e| AppError::K8s(e.to_string()))?
+        .metadata
+        .uid;
+    if after_uid.as_deref() != Some(expected_uid) {
+        return Err(AppError::K8s("pod identity changed during capture".into()));
+    }
     Ok(BoundedLogCapture {
         bytes: text.len(),
         text,
-        truncated,
+        truncated: transport_truncated || utf8_truncated,
     })
 }
 
