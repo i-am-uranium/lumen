@@ -48,6 +48,20 @@ async fn fixture(client: &Client, plural: &str, value: Value) {
     .expect("could not create synthetic fixture; Kubernetes must serve resource.k8s.io/v1");
 }
 
+fn fixture_item<'a>(items: &'a [Value], name: &str, namespace: &str) -> &'a Value {
+    let mut matches = items.iter().filter(|item| {
+        item["metadata"]["name"] == name && item["metadata"]["namespace"] == namespace
+    });
+    let item = matches
+        .next()
+        .unwrap_or_else(|| panic!("missing fixture {namespace}/{name}"));
+    assert!(
+        matches.next().is_none(),
+        "duplicate fixture {namespace}/{name}"
+    );
+    item
+}
+
 #[tokio::test]
 #[ignore = "requires the disposable fixture created by scripts/test-kind.sh"]
 async fn inventory_obeys_real_api_schema_rbac_and_namespace_scope() {
@@ -94,6 +108,24 @@ async fn inventory_obeys_real_api_schema_rbac_and_namespace_scope() {
             "containers":[{"name":"app","image":"registry.k8s.io/pause:3.10", "env":[{"name":"FIXTURE_SECRET","value":"must-not-cross-ipc"}],
                 "resources":{"claims":[{"name":"gpu"}]}}]}
     })).await;
+    // Other integration suites share these namespaces. Include both an
+    // unrelated name and a same-name pod in another namespace so this test
+    // cannot accidentally depend on list ordering or name-only selection.
+    for (name, namespace) in [
+        ("a-unrelated-device-fixture", "lumen-e2e-a"),
+        ("device-fixture", "lumen-e2e-b"),
+    ] {
+        fixture(
+            &admin,
+            "pods",
+            json!({
+                "apiVersion":"v1","kind":"Pod","metadata":{"name":name,"namespace":namespace},
+                "spec":{"schedulerName":"lumen-fixture-disabled",
+                    "containers":[{"name":"unrelated","image":"registry.k8s.io/pause:3.10"}]}
+            }),
+        )
+        .await;
+    }
     fixture(&admin, "roles", json!({
         "apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role",
         "metadata":{"name":"device-fixture-reader","namespace":"lumen-e2e-a"},
@@ -125,20 +157,35 @@ async fn inventory_obeys_real_api_schema_rbac_and_namespace_scope() {
     }
     assert_eq!(scoped.claims.items.len(), 1);
     assert_eq!(scoped.templates.items.len(), 1);
+    fixture_item(&scoped.claims.items, "device-fixture", "lumen-e2e-a");
+    fixture_item(&scoped.templates.items, "device-fixture", "lumen-e2e-a");
+    assert!(scoped
+        .pods
+        .items
+        .iter()
+        .all(|pod| pod["metadata"]["namespace"] == "lumen-e2e-a"));
+    let pod = fixture_item(&scoped.pods.items, "device-fixture", "lumen-e2e-a");
     assert_eq!(
-        scoped.claims.items[0]["metadata"]["namespace"],
-        "lumen-e2e-a"
-    );
-    assert_eq!(
-        scoped.pods.items[0]["spec"]["resourceClaims"][0]["resourceClaimName"],
+        pod["spec"]["resourceClaims"][0]["resourceClaimName"],
         "device-fixture"
     );
+    let unrelated = fixture_item(
+        &scoped.pods.items,
+        "a-unrelated-device-fixture",
+        "lumen-e2e-a",
+    );
+    assert!(unrelated["spec"]["resourceClaims"].is_null());
     assert!(!serde_json::to_string(&scoped)
         .unwrap()
         .contains("must-not-cross-ipc"));
     let all = snapshot(&admin, "").await;
     assert_eq!(all.claims.items.len(), 2);
     assert_eq!(all.templates.items.len(), 2);
+    for namespace in ["lumen-e2e-a", "lumen-e2e-b"] {
+        fixture_item(&all.claims.items, "device-fixture", namespace);
+        fixture_item(&all.templates.items, "device-fixture", namespace);
+        fixture_item(&all.pods.items, "device-fixture", namespace);
+    }
 
     let mut restricted_config = config;
     restricted_config.auth_info.impersonate =
