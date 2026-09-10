@@ -246,6 +246,7 @@ const SECTIONS: Item[] = [
   { kind: "leaf", to: "access", label: "access control", icon: UserPlus },
   { kind: "leaf", to: "helm", label: "helm", icon: Package },
   { kind: "leaf", to: "crds", label: "custom resources", icon: Boxes },
+  { kind: "leaf", to: "device-resources", label: "device resources", icon: Cpu },
   { kind: "leaf", to: "security", label: "security", icon: ShieldAlert },
 
   { kind: "divider" },

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   Box,
   Cpu,
@@ -20,7 +21,7 @@ import { k8s, type NodeSummary, type WorkloadSummary } from "@/lib/k8s";
 import { useShortcut } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
-// ─── Lumen distinct touches vs Lens ────────────────────────────────────
+// ─── Node drawer layout ───────────────────────────────────────────────
 //   • Reuses the side-docked drawer chrome from ResourceDetailDrawer so
 //     the table behind stays in view.
 //   • Compact property grid with ASCII dividers and lowercase headings,
@@ -270,6 +271,12 @@ export function NodeDetailDrawer({
         <div className="flex-1 min-h-0 overflow-y-auto">
           {/* ─── Properties ─────────────────────────────────────────── */}
           <section className="px-4 py-3">
+            <Link
+              to={`/cluster/${encodeURIComponent(ctx)}/device-resources?${new URLSearchParams({ ns: "", node: node.name })}`}
+              className="term-btn mb-3 inline-flex"
+            >
+              Inspect device inventory
+            </Link>
             <h3 className="mb-2 text-[10px] uppercase tracking-wider text-text-muted">
               properties
             </h3>

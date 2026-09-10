@@ -76,6 +76,7 @@ function renderWorkspace(
             <Route path="workloads/pods" element={<LocationProbe />} />
             <Route path="workloads" element={<LocationProbe />} />
             <Route path="metrics" element={<LocationProbe />} />
+            <Route path="device-resources" element={<LocationProbe />} />
             <Route path="alerts" element={<LocationProbe />} />
           </Route>
         </Routes>
@@ -141,6 +142,14 @@ describe("cluster switch routing", () => {
     expect(
       screen.queryByRole("link", { name: /AI assistant/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("makes device resources discoverable without integration or admin access", async () => {
+    renderWorkspace([context({ name: "dev-stage" })], "/cluster/dev-stage/device-resources?ns=payments");
+    expect(await screen.findByRole("link", { name: /device resources/i })).toHaveAttribute(
+      "href", "/cluster/dev-stage/device-resources",
+    );
+    expect(screen.getByTestId("location")).toHaveTextContent("/device-resources?ns=payments");
   });
 
   it("shows active alert count on the alert inbox rail item", async () => {

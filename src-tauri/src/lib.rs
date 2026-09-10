@@ -34,6 +34,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::connection::diagnose_connection,
+            commands::devices::device_resources_snapshot,
             commands::k8s::get_context_protection,
             commands::k8s::set_context_protection,
             commands::k8s::unlock_context,

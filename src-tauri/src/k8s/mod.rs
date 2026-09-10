@@ -4,6 +4,7 @@ pub mod client;
 pub mod cloudmap;
 pub mod crd;
 pub mod debug;
+pub mod devices;
 pub mod events;
 pub mod exec;
 pub mod fleet;

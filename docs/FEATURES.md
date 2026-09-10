@@ -28,6 +28,20 @@ through a hosted control plane.
   namespace when discovery is denied. Workloads and triage retain successful
   results while explaining unavailable sources.
 
+## Device Resources
+
+- Browse ResourceClaims, ResourceClaimTemplates, DeviceClasses, and ResourceSlices
+  through the stable Kubernetes DRA API, without installing an in-cluster agent.
+- Follow pod claim references to allocations and their published device slices;
+  inspect node inventory and driver-reported container health.
+- Distinguish unsupported APIs, denied access, failed reads, and empty inventories.
+  Missing health and unresolved node selectors remain unknown; inventory is not
+  a measurement of free capacity.
+- Inspect sanitized resource data in a read-only view. Opaque configuration,
+  arbitrary driver data, and annotations are redacted.
+
+See [device resources](DEVICE_RESOURCES.md) for API requirements and observation limits.
+
 ## Logs, Shell, And Port Forwarding
 
 - Stream logs for pods and workload-owned pods with search, pause/resume, and
@@ -76,6 +90,10 @@ through a hosted control plane.
 - Apply YAML only after successful server-side dry-run of the same draft,
   PATCH permission preflight, and confirmation. Both YAML entry points share
   these gates and respect the global read-only setting.
+- Review original and draft YAML side by side, with added and removed lines,
+  and explicitly revert unsubmitted edits. A refreshed resource preserves the
+  draft and requires loading the latest version before applying. Reverting a
+  draft does not undo a previously applied cluster change.
 - Delete resources with confirmation and RBAC preflight checks.
 - Manage Helm releases, including install, upgrade, rollback, and uninstall.
 - Browse Argo CD applications, resource trees, history, and sync status.
