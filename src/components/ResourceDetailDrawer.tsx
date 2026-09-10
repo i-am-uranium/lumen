@@ -43,10 +43,11 @@ import {
   DrawerTabs,
 } from "@/components/lumen/drawer";
 import { CopyableName } from "@/components/lumen/copyable-name";
+import { Link } from "react-router-dom";
 
 const PodDebugDialog = lazy(() => import("./PodDebugDialog").then((module) => ({ default: module.PodDebugDialog })));
 
-// ─── Lumen-distinct touches vs Lens ────────────────────────────────────
+// ─── Resource drawer layout ───────────────────────────────────────────
 //   • Side-docked panel (not floating modal); main view stays visible.
 //   • 3px severity strip at the top reflects pod health at a glance.
 //   • Container chiclets: thin colored pills with restart-count badges.
@@ -969,6 +970,12 @@ function PropertiesTab({
   return (
     <div className="p-4 space-y-5">
       <PodEvidenceSummary data={data} />
+      <Link
+        to={`/cluster/${encodeURIComponent(ctx)}/device-resources?${new URLSearchParams({ ns: resource.namespace, pod: resource.name })}`}
+        className="term-btn inline-flex"
+      >
+        Inspect device claims and health
+      </Link>
       <RecentEventsSection ctx={ctx} resource={resource} />
       {(data.cpu_usage_milli !== null || data.mem_usage_bytes !== null) && (
         <Section title="metrics">

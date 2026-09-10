@@ -37,6 +37,9 @@ const SecurityView = lazy(() =>
 const NetworkDebuggerView = lazy(() =>
   import("@/routes/cluster/NetworkDebuggerView").then(named("NetworkDebuggerView")),
 );
+const DeviceResourcesView = lazy(() =>
+  import("@/routes/cluster/DeviceResourcesView").then(named("DeviceResourcesView")),
+);
 const MetricsExplorerView = lazy(() =>
   import("@/routes/cluster/MetricsExplorerView").then(named("MetricsExplorerView")),
 );
@@ -168,6 +171,7 @@ function PaneRoutes() {
           <Route path="metrics" element={<MetricsExplorerView />} />
           <Route path="security" element={<SecurityView />} />
           <Route path="network-debugger" element={<NetworkDebuggerView />} />
+          <Route path="device-resources" element={<DeviceResourcesView />} />
           <Route path="crds" element={<CrdBrowser />} />
           <Route path="helm" element={<HelmBrowser />} />
           <Route path="access" element={<TeamAccess />} />
